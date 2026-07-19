@@ -1,0 +1,9 @@
+{
+    "id":"lain-brain",
+    "name":"Lain Brain",
+    "Version": "0.1.0",
+    "minAppVersion":"1.0.0",
+    "description":"An AI-assisted personal knowledge modeling plugin.",
+    "author":"ReiriLain",
+    "isDesktopOnly":false
+}

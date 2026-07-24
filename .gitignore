@@ -1,0 +1,16 @@
+# Development tools
+.vscode/
+.idea/
+
+# Installed npm packages
+node_modules/
+
+# Generated plugin files
+main.js
+*.map
+
+# Obsidian local settings
+data.json
+
+# macOS system file
+.DS_Store

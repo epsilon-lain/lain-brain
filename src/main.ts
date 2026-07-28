@@ -3,12 +3,28 @@ import {
   LainBrainView,
   VIEW_TYPE_LAIN_BRAIN
 } from "./LainBrainView";
+import { LainBrainSettingTab } from "./LainBrainSettingTab";
+import {
+  DEFAULT_SETTINGS,
+  LainBrainSettings
+} from "./settings";
 
 export default class LainBrainPlugin extends Plugin {
-  onload(): void {
+  settings: LainBrainSettings = { ...DEFAULT_SETTINGS };
+
+  async onload(): Promise<void> {
+    await this.loadSettings();
+
     this.registerView(
       VIEW_TYPE_LAIN_BRAIN,
-      (leaf) => new LainBrainView(leaf)
+      (leaf) => new LainBrainView(
+        leaf,
+        () => this.settings.deepSeekApiKey
+      )
+    );
+
+    this.addSettingTab(
+      new LainBrainSettingTab(this.app, this)
     );
 
     this.addCommand({
@@ -18,6 +34,18 @@ export default class LainBrainPlugin extends Plugin {
         await this.openLainBrain();
       }
     });
+  }
+
+  async loadSettings(): Promise<void> {
+    this.settings = Object.assign(
+      {},
+      DEFAULT_SETTINGS,
+      await this.loadData()
+    );
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
   }
 
   private async openLainBrain(): Promise<void> {

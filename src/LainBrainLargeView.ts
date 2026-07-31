@@ -1,5 +1,6 @@
 import {
   ItemView,
+  setIcon,
   WorkspaceLeaf
 } from "obsidian";
 import { LainBrainChatPanel } from "./LainBrainChatPanel";
@@ -50,16 +51,15 @@ export class LainBrainLargeView extends ItemView {
     title.style.margin = "0";
     title.style.fontFamily = "var(--font-monospace)";
 
-    const collapseButton = header.createEl("button", {
-      text: "−"
-    });
+    const collapseButton = header.createEl("button");
+    setIcon(collapseButton, "minus");
     collapseButton.setAttr(
       "aria-label",
       "Close large Lain Brain chat"
     );
     collapseButton.style.width = "14px";
     collapseButton.style.height = "14px";
-    collapseButton.style.display = "flex";
+    collapseButton.style.display = "inline-flex";
     collapseButton.style.alignItems = "center";
     collapseButton.style.justifyContent = "center";
     collapseButton.style.padding = "0";
@@ -69,7 +69,15 @@ export class LainBrainLargeView extends ItemView {
     collapseButton.style.color = "#ffffff";
     collapseButton.style.fontSize = "12px";
     collapseButton.style.lineHeight = "1";
+    collapseButton.style.boxSizing = "border-box";
     collapseButton.style.cursor = "pointer";
+
+    const collapseIcon = collapseButton.querySelector("svg");
+
+    if (collapseIcon !== null) {
+      collapseIcon.style.width = "12px";
+      collapseIcon.style.height = "12px";
+    }
 
     collapseButton.addEventListener("click", () => {
       void this.closeLargeView();

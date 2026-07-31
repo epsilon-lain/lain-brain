@@ -1,5 +1,6 @@
 import {
   ItemView,
+  setIcon,
   TFile,
   TFolder,
   WorkspaceLeaf
@@ -102,13 +103,12 @@ export class LainBrainView extends ItemView {
     });
     title.style.margin = "0";
 
-    const expandButton = header.createEl("button", {
-      text: "+"
-    });
+    const expandButton = header.createEl("button");
+    setIcon(expandButton, "plus");
     expandButton.setAttr("aria-label", "Open large Lain Brain chat");
     expandButton.style.width = "13px";
     expandButton.style.height = "13px";
-    expandButton.style.display = "flex";
+    expandButton.style.display = "inline-flex";
     expandButton.style.alignItems = "center";
     expandButton.style.justifyContent = "center";
     expandButton.style.padding = "0";
@@ -118,7 +118,15 @@ export class LainBrainView extends ItemView {
     expandButton.style.color = "#ffffff";
     expandButton.style.fontSize = "11px";
     expandButton.style.lineHeight = "1";
+    expandButton.style.boxSizing = "border-box";
     expandButton.style.cursor = "pointer";
+
+    const expandIcon = expandButton.querySelector("svg");
+
+    if (expandIcon !== null) {
+      expandIcon.style.width = "11px";
+      expandIcon.style.height = "11px";
+    }
 
     expandButton.addEventListener("click", () => {
       void this.openLargeView();

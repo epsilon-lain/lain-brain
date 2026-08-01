@@ -35,6 +35,7 @@ interface StoredMessage extends LainBrainTranscriptMessage {
 type SessionListener = () => void;
 export type LainBrainLoadingMode = "chat" | null;
 export type LainBrainLargeViewMode = "chat" | "candidate";
+export type LainBrainCandidateViewMode = "edit" | "preview";
 
 export class LainBrainSession {
   private readonly messages: StoredMessage[] = [];
@@ -43,11 +44,14 @@ export class LainBrainSession {
   private activeNoteContext?: DeepSeekNoteContext;
   private noteRevision = 0;
 
+  private candidateMarkdown = "";
+  private candidateUserEdited = false;
+
   draft = "";
   loadingMode: LainBrainLoadingMode = null;
-  candidateNoteMarkdown = "";
   candidateLoading = false;
   candidateError: string | null = null;
+  candidateViewMode: LainBrainCandidateViewMode = "preview";
   largeViewMode: LainBrainLargeViewMode = "chat";
 
   constructor(
@@ -69,8 +73,17 @@ export class LainBrainSession {
     return this.activeFile?.path ?? "";
   }
 
+  get candidateNoteMarkdown(): string {
+    return this.candidateMarkdown;
+  }
+
+  get hasUserEditedCandidate(): boolean {
+    return this.candidateUserEdited;
+  }
+
   get hasCandidateNote(): boolean {
-    return this.candidateNoteMarkdown !== "";
+    return this.candidateMarkdown !== "" ||
+      this.candidateUserEdited;
   }
 
   subscribe(listener: SessionListener): () => void {
@@ -111,6 +124,27 @@ export class LainBrainSession {
     }
 
     this.draft = value;
+    this.notify();
+  }
+
+  setCandidateNoteMarkdown(value: string): void {
+    if (this.candidateMarkdown === value) {
+      return;
+    }
+
+    this.candidateMarkdown = value;
+    this.candidateUserEdited = true;
+    this.notify();
+  }
+
+  setCandidateViewMode(
+    mode: LainBrainCandidateViewMode
+  ): void {
+    if (this.candidateViewMode === mode) {
+      return;
+    }
+
+    this.candidateViewMode = mode;
     this.notify();
   }
 
@@ -264,8 +298,20 @@ export class LainBrainSession {
     }
   }
 
-  async generateOrUpdateCandidateNote(): Promise<boolean> {
+  async generateOrUpdateCandidateNote(
+    allowOverwriteUserEdits = false
+  ): Promise<boolean> {
     if (this.loading || !this.hasCompletedExchange()) {
+      return false;
+    }
+
+    if (
+      this.candidateUserEdited &&
+      !allowOverwriteUserEdits
+    ) {
+      this.candidateError =
+        "候选笔记已被手动修改；生成新候选前必须确认覆盖。";
+      this.notify();
       return false;
     }
 
@@ -330,7 +376,9 @@ export class LainBrainSession {
         verifiedRelations
       );
 
-      this.candidateNoteMarkdown = candidate;
+      this.candidateMarkdown = candidate;
+      this.candidateUserEdited = false;
+      this.candidateViewMode = "preview";
       this.largeViewMode = "candidate";
       return true;
     } catch {

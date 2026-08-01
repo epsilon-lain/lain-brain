@@ -1,8 +1,10 @@
 import {
   ItemView,
+  Modal,
   setIcon,
   WorkspaceLeaf
 } from "obsidian";
+import type { App } from "obsidian";
 import { LainBrainChatPanel } from "./LainBrainChatPanel";
 import type { LainBrainSession } from "./LainBrainSession";
 
@@ -130,7 +132,7 @@ export class LainBrainView extends ItemView {
     updateCandidateControls();
 
     generateButton.addEventListener("click", () => {
-      void this.session.generateOrUpdateCandidateNote();
+      void this.generateCandidateWithConfirmation();
     });
 
     previewButton.addEventListener("click", () => {
@@ -140,10 +142,85 @@ export class LainBrainView extends ItemView {
     this.chatPanel.focus();
   }
 
+  private async generateCandidateWithConfirmation(): Promise<void> {
+    let allowOverwriteUserEdits = false;
+
+    if (this.session.hasUserEditedCandidate) {
+      allowOverwriteUserEdits =
+        await confirmCandidateOverwrite(this.app);
+
+      if (!allowOverwriteUserEdits) {
+        return;
+      }
+    }
+
+    await this.session.generateOrUpdateCandidateNote(
+      allowOverwriteUserEdits
+    );
+  }
+
   async onClose(): Promise<void> {
     this.chatPanel?.destroy();
     this.chatPanel = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
   }
+}
+
+function confirmCandidateOverwrite(app: App): Promise<boolean> {
+  return new Promise((resolve) => {
+    const modal = new Modal(app);
+    let settled = false;
+
+    const settle = (value: boolean): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      resolve(value);
+      modal.close();
+    };
+
+    modal.onOpen = (): void => {
+      modal.titleEl.setText("覆盖已修改的候选笔记？");
+      modal.contentEl.createEl("p", {
+        text:
+          "当前候选笔记包含你的手动修改。重新整理会用新的候选稿" +
+          "覆盖这些修改。是否继续？"
+      });
+
+      const actions = modal.contentEl.createDiv();
+      actions.style.display = "flex";
+      actions.style.justifyContent = "flex-end";
+      actions.style.gap = "0.5rem";
+      actions.style.marginTop = "1rem";
+
+      const cancelButton = actions.createEl("button", {
+        text: "取消"
+      });
+      const overwriteButton = actions.createEl("button", {
+        text: "确认覆盖"
+      });
+      overwriteButton.addClass("mod-warning");
+
+      cancelButton.addEventListener("click", () => {
+        settle(false);
+      });
+      overwriteButton.addEventListener("click", () => {
+        settle(true);
+      });
+    };
+
+    modal.onClose = (): void => {
+      modal.contentEl.empty();
+
+      if (!settled) {
+        settled = true;
+        resolve(false);
+      }
+    };
+
+    modal.open();
+  });
 }

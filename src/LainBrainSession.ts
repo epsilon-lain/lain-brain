@@ -1,7 +1,9 @@
 import type { App, TFile } from "obsidian";
 import {
   askDeepSeek,
+  discussCandidateSelection,
   generateCandidateNote,
+  generateSelectionReplacement,
   identifyCandidateTopics,
   repairLatexFormatting
 } from "./DeepSeekClient";
@@ -9,7 +11,8 @@ import type {
   CandidateSourceMessage,
   CandidateTopicSelection,
   DeepSeekConversationMessage,
-  DeepSeekNoteContext
+  DeepSeekNoteContext,
+  SelectionEditRequestContext
 } from "./DeepSeekClient";
 import {
   buildCandidateNoteMarkdown,
@@ -43,6 +46,21 @@ export interface CandidateNote {
   sourceMessageIds: string[];
   viewMode: LainBrainCandidateViewMode;
   userEdited: boolean;
+  revision: number;
+}
+
+export interface SelectionEditContext {
+  candidateId: string;
+  startOffset: number;
+  endOffset: number;
+  originalText: string;
+  candidateRevision: number;
+  beforeContext: string;
+  afterContext: string;
+  discussionMessages: LainBrainTranscriptMessage[];
+  draft: string;
+  pendingReplacement?: string;
+  replacementError?: string;
 }
 
 interface PendingCandidateExtraction {
@@ -71,9 +89,11 @@ export class LainBrainSession {
   private overwriteConflictIds: string[] = [];
 
   activeCandidateId: string | null = null;
-  draft = "";
+  private generalDraft = "";
+  private selectionEditContext?: SelectionEditContext;
   loadingMode: LainBrainLoadingMode = null;
   candidateLoading = false;
+  selectionReplacementLoading = false;
   candidateError: string | null = null;
   largeViewMode: LainBrainLargeViewMode = "chat";
 
@@ -83,7 +103,13 @@ export class LainBrainSession {
   ) {}
 
   get loading(): boolean {
-    return this.loadingMode !== null || this.candidateLoading;
+    return this.loadingMode !== null ||
+      this.candidateLoading ||
+      this.selectionReplacementLoading;
+  }
+
+  get draft(): string {
+    return this.selectionEditContext?.draft ?? this.generalDraft;
   }
 
   get activeNoteLabel(): string {
@@ -164,7 +190,8 @@ export class LainBrainSession {
       sourceMessageIds: this.getCandidateSourceMessages()
         .map((message) => message.id),
       viewMode,
-      userEdited
+      userEdited,
+      revision: 0
     };
 
     this.candidates.push(candidate);
@@ -182,6 +209,17 @@ export class LainBrainSession {
 
   getTranscriptMessages(): readonly LainBrainTranscriptMessage[] {
     return this.messages;
+  }
+
+  getChatTranscriptMessages():
+    readonly LainBrainTranscriptMessage[] {
+    return this.selectionEditContext?.discussionMessages ??
+      this.messages;
+  }
+
+  getSelectionEditContext():
+    Readonly<SelectionEditContext> | undefined {
+    return this.selectionEditContext;
   }
 
   getConversationHistory(): DeepSeekConversationMessage[] {
@@ -205,11 +243,20 @@ export class LainBrainSession {
   }
 
   setDraft(value: string): void {
-    if (this.draft === value) {
-      return;
+    if (this.selectionEditContext !== undefined) {
+      if (this.selectionEditContext.draft === value) {
+        return;
+      }
+
+      this.selectionEditContext.draft = value;
+    } else {
+      if (this.generalDraft === value) {
+        return;
+      }
+
+      this.generalDraft = value;
     }
 
-    this.draft = value;
     this.notify();
   }
 
@@ -227,6 +274,7 @@ export class LainBrainSession {
 
     candidate.markdown = value;
     candidate.userEdited = true;
+    candidate.revision += 1;
     this.notify();
   }
 
@@ -257,13 +305,206 @@ export class LainBrainSession {
     this.notify();
   }
 
+  startSelectionDiscussion(
+    candidateId: string,
+    startOffset: number,
+    endOffset: number
+  ): boolean {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+
+    if (
+      candidate === undefined ||
+      candidate.id !== this.activeCandidateId ||
+      candidate.viewMode !== "edit" ||
+      startOffset < 0 ||
+      endOffset > candidate.markdown.length ||
+      startOffset >= endOffset
+    ) {
+      return false;
+    }
+
+    const originalText = candidate.markdown.slice(
+      startOffset,
+      endOffset
+    );
+
+    if (originalText.trim() === "") {
+      return false;
+    }
+
+    const contextRadius = 400;
+
+    this.selectionEditContext = {
+      candidateId,
+      startOffset,
+      endOffset,
+      originalText,
+      candidateRevision: candidate.revision,
+      beforeContext: candidate.markdown.slice(
+        Math.max(0, startOffset - contextRadius),
+        startOffset
+      ),
+      afterContext: candidate.markdown.slice(
+        endOffset,
+        Math.min(
+          candidate.markdown.length,
+          endOffset + contextRadius
+        )
+      ),
+      discussionMessages: [],
+      draft: ""
+    };
+    this.notify();
+    return true;
+  }
+
+  cancelSelectionDiscussion(): void {
+    if (this.selectionEditContext === undefined) {
+      return;
+    }
+
+    this.selectionEditContext = undefined;
+    this.selectionReplacementLoading = false;
+    this.notify();
+  }
+
+  discardSelectionReplacement(): void {
+    const context = this.selectionEditContext;
+
+    if (
+      context === undefined ||
+      (
+        context.pendingReplacement === undefined &&
+        context.replacementError === undefined
+      )
+    ) {
+      return;
+    }
+
+    context.pendingReplacement = undefined;
+    context.replacementError = undefined;
+    this.notify();
+  }
+
+  async generateSelectionEditReplacement(): Promise<boolean> {
+    const context = this.selectionEditContext;
+
+    if (
+      context === undefined ||
+      this.loading ||
+      !context.discussionMessages.some(
+        (message) => message.role === "user"
+      )
+    ) {
+      return false;
+    }
+
+    const apiKey = this.getApiKey().trim();
+
+    if (apiKey === "") {
+      context.replacementError =
+        "Please add your DeepSeek API key in Lain Brain settings.";
+      this.notify();
+      return false;
+    }
+
+    const candidate = this.candidates.find(
+      (item) => item.id === context.candidateId
+    );
+
+    if (candidate === undefined) {
+      context.replacementError =
+        "选区已变化，请重新选择";
+      this.notify();
+      return false;
+    }
+
+    this.selectionReplacementLoading = true;
+    context.replacementError = undefined;
+    this.notify();
+
+    try {
+      const rawReplacement = await generateSelectionReplacement(
+        apiKey,
+        this.createSelectionRequestContext(candidate, context),
+        context.discussionMessages
+      );
+      const replacement =
+        await this.reviewSelectionReplacementLatex(
+          apiKey,
+          rawReplacement
+        );
+
+      if (this.selectionEditContext !== context) {
+        return false;
+      }
+
+      context.pendingReplacement = replacement;
+      return true;
+    } catch (error) {
+      if (this.selectionEditContext === context) {
+        context.replacementError =
+          error instanceof Error &&
+          error.message === "selection-latex-invalid"
+            ? "选区修改中的 LaTeX 格式审查失败，未应用任何修改。"
+            : "无法生成选区修改建议，请重试。";
+      }
+
+      return false;
+    } finally {
+      this.selectionReplacementLoading = false;
+      this.notify();
+    }
+  }
+
+  applySelectionReplacement(): boolean {
+    const context = this.selectionEditContext;
+    const candidate = context === undefined
+      ? undefined
+      : this.candidates.find(
+          (item) => item.id === context.candidateId
+        );
+
+    if (
+      context === undefined ||
+      candidate === undefined ||
+      context.pendingReplacement === undefined ||
+      this.activeCandidateId !== context.candidateId ||
+      candidate.revision !== context.candidateRevision ||
+      candidate.markdown.slice(
+        context.startOffset,
+        context.endOffset
+      ) !== context.originalText
+    ) {
+      if (context !== undefined) {
+        context.replacementError =
+          "选区已变化，请重新选择";
+        this.notify();
+      }
+
+      return false;
+    }
+
+    candidate.markdown =
+      candidate.markdown.slice(0, context.startOffset) +
+      context.pendingReplacement +
+      candidate.markdown.slice(context.endOffset);
+    candidate.userEdited = true;
+    candidate.revision += 1;
+    this.selectionEditContext = undefined;
+    this.notify();
+    return true;
+  }
+
   clearChat(): void {
     if (this.loading) {
       return;
     }
 
     this.messages.length = 0;
-    this.draft = "";
+    this.generalDraft = "";
     this.candidateError = null;
     this.notify();
   }
@@ -353,11 +594,16 @@ export class LainBrainSession {
   }
 
   async send(): Promise<void> {
+    if (this.selectionEditContext !== undefined) {
+      await this.sendSelectionDiscussion();
+      return;
+    }
+
     if (this.loading) {
       return;
     }
 
-    const message = this.draft.trim();
+    const message = this.generalDraft.trim();
 
     if (message === "") {
       this.addAssistantNotice("Please write something first.");
@@ -379,7 +625,7 @@ export class LainBrainSession {
       content: message,
       includeInHistory: true
     });
-    this.draft = "";
+    this.generalDraft = "";
     this.loadingMode = "chat";
     this.notify();
 
@@ -410,6 +656,81 @@ export class LainBrainSession {
           "Unable to get an answer from DeepSeek. Please try again.",
         includeInHistory: false
       });
+    } finally {
+      this.loadingMode = null;
+      this.notify();
+    }
+  }
+
+  private async sendSelectionDiscussion(): Promise<void> {
+    const context = this.selectionEditContext;
+
+    if (context === undefined || this.loading) {
+      return;
+    }
+
+    const message = context.draft.trim();
+
+    if (message === "") {
+      return;
+    }
+
+    const apiKey = this.getApiKey().trim();
+
+    if (apiKey === "") {
+      context.replacementError =
+        "Please add your DeepSeek API key in Lain Brain settings.";
+      this.notify();
+      return;
+    }
+
+    const candidate = this.candidates.find(
+      (item) => item.id === context.candidateId
+    );
+
+    if (candidate === undefined) {
+      context.replacementError =
+        "选区已变化，请重新选择";
+      this.notify();
+      return;
+    }
+
+    context.discussionMessages.push({
+      role: "user",
+      content: message
+    });
+    context.draft = "";
+    context.pendingReplacement = undefined;
+    context.replacementError = undefined;
+    this.loadingMode = "chat";
+    this.notify();
+
+    try {
+      const rawResponse = await discussCandidateSelection(
+        apiKey,
+        this.createSelectionRequestContext(candidate, context),
+        context.discussionMessages
+      );
+      const response = await this.reviewAndRepairLatex(
+        apiKey,
+        rawResponse
+      );
+
+      if (this.selectionEditContext !== context) {
+        return;
+      }
+
+      context.discussionMessages.push({
+        role: "assistant",
+        content: response
+      });
+    } catch {
+      if (this.selectionEditContext === context) {
+        context.discussionMessages.push({
+          role: "assistant",
+          content: "无法讨论此选区，请重试。"
+        });
+      }
     } finally {
       this.loadingMode = null;
       this.notify();
@@ -562,7 +883,8 @@ export class LainBrainSession {
           markdown,
           sourceMessageIds: [...item.topic.sourceMessageIds],
           viewMode: item.existing?.viewMode ?? "preview",
-          userEdited: false
+          userEdited: false,
+          revision: (item.existing?.revision ?? -1) + 1
         };
 
         if (item.existing === undefined) {
@@ -621,6 +943,49 @@ export class LainBrainSession {
         allowOverwriteUserEdits
       )
     ) === "success";
+  }
+
+  private createSelectionRequestContext(
+    candidate: CandidateNote,
+    context: SelectionEditContext
+  ): SelectionEditRequestContext {
+    return {
+      title: candidate.title,
+      primaryConcept: candidate.primaryConcept.name,
+      originalText: context.originalText,
+      beforeContext: context.beforeContext,
+      afterContext: context.afterContext
+    };
+  }
+
+  private async reviewSelectionReplacementLatex(
+    apiKey: string,
+    markdown: string
+  ): Promise<string> {
+    const issues = reviewLatexFormatting(markdown);
+
+    if (issues.length === 0) {
+      return markdown;
+    }
+
+    try {
+      const repaired = await repairLatexFormatting(
+        apiKey,
+        markdown,
+        issues.map((issue) => issue.message)
+      );
+
+      if (
+        repaired.trim() !== "" &&
+        reviewLatexFormatting(repaired).length === 0
+      ) {
+        return repaired;
+      }
+    } catch {
+      // The invalid replacement remains unapplied.
+    }
+
+    throw new Error("selection-latex-invalid");
   }
 
   private async reviewAndRepairLatex(

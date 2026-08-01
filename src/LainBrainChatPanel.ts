@@ -8,9 +8,10 @@ export class LainBrainChatPanel {
   private readonly input: HTMLTextAreaElement;
   private readonly noteLabel: HTMLElement;
   private readonly clearButton: HTMLButtonElement;
+  private readonly selectionContextEl: HTMLDivElement;
   private readonly unsubscribe: () => void;
   private readonly markdownRenderer: LainBrainMarkdownRenderBatch;
-  private renderedMessageCount = -1;
+  private renderedTranscriptKey = "";
   private renderedLoadingMode: string | null = null;
   private renderedCandidateLoading = false;
 
@@ -50,6 +51,9 @@ export class LainBrainChatPanel {
       this.session.clearChat();
       this.input.focus();
     });
+
+    this.selectionContextEl = this.containerEl.createDiv();
+    this.selectionContextEl.style.display = "none";
 
     this.transcriptEl = this.containerEl.createDiv();
     this.transcriptEl.style.overflowY = "auto";
@@ -147,15 +151,29 @@ export class LainBrainChatPanel {
   }
 
   private render(): void {
-    const messages = this.session.getTranscriptMessages();
+    const messages = this.session.getChatTranscriptMessages();
+    const selectionContext =
+      this.session.getSelectionEditContext();
     const loadingMode = this.session.loadingMode;
     const candidateLoading = this.session.candidateLoading;
+    const transcriptKey =
+      (selectionContext?.candidateId ?? "general") +
+      ":" +
+      messages
+        .map(
+          (message) =>
+            `${message.role}:${message.content}`
+        )
+        .join("\u0000");
 
     this.noteLabel.setText(this.session.activeNoteLabel);
     this.clearButton.disabled = this.session.loading;
+    this.clearButton.style.display =
+      selectionContext === undefined ? "" : "none";
+    this.renderSelectionContext();
 
     if (
-      this.renderedMessageCount !== messages.length ||
+      this.renderedTranscriptKey !== transcriptKey ||
       this.renderedLoadingMode !== loadingMode ||
       this.renderedCandidateLoading !== candidateLoading
     ) {
@@ -177,7 +195,7 @@ export class LainBrainChatPanel {
         );
       }
 
-      this.renderedMessageCount = messages.length;
+      this.renderedTranscriptKey = transcriptKey;
       this.renderedLoadingMode = loadingMode;
       this.renderedCandidateLoading = candidateLoading;
       this.scrollToNewestMessage();
@@ -189,6 +207,156 @@ export class LainBrainChatPanel {
     }
 
     this.input.readOnly = this.session.loading;
+  }
+
+  private renderSelectionContext(): void {
+    const context = this.session.getSelectionEditContext();
+
+    this.selectionContextEl.empty();
+
+    if (context === undefined) {
+      this.selectionContextEl.style.display = "none";
+      return;
+    }
+
+    this.selectionContextEl.style.display = "block";
+    this.selectionContextEl.style.padding = "0.6rem";
+    this.selectionContextEl.style.marginBottom = "0.5rem";
+    this.selectionContextEl.style.border =
+      "1px solid var(--interactive-accent)";
+    this.selectionContextEl.style.borderRadius = "4px";
+    this.selectionContextEl.style.backgroundColor =
+      "var(--background-secondary)";
+
+    const candidate = this.session.getCandidateNotes().find(
+      (item) => item.id === context.candidateId
+    );
+    const title = this.selectionContextEl.createEl("strong", {
+      text:
+        "正在讨论候选笔记：" +
+        (candidate?.title ?? "未知候选笔记")
+    });
+    title.style.display = "block";
+
+    const selection = this.selectionContextEl.createEl("div");
+    selection.style.marginTop = "0.35rem";
+    selection.style.whiteSpace = "pre-wrap";
+    selection.style.overflowWrap = "anywhere";
+    selection.setText(
+      "选区：" + truncateSelection(context.originalText)
+    );
+
+    const actions = this.selectionContextEl.createDiv();
+    actions.style.display = "flex";
+    actions.style.flexWrap = "wrap";
+    actions.style.gap = "0.4rem";
+    actions.style.marginTop = "0.5rem";
+
+    const cancelButton = actions.createEl("button", {
+      text: "取消选区讨论"
+    });
+    cancelButton.style.padding = "2px 6px";
+    cancelButton.addEventListener("click", () => {
+      this.session.cancelSelectionDiscussion();
+      this.input.focus();
+    });
+
+    const hasRequest = context.discussionMessages.some(
+      (message) => message.role === "user"
+    );
+
+    if (hasRequest && context.pendingReplacement === undefined) {
+      const generateButton = actions.createEl("button", {
+        text: "生成选区修改候选"
+      });
+      generateButton.style.padding = "2px 6px";
+      generateButton.disabled = this.session.loading;
+      generateButton.addEventListener("click", () => {
+        void this.session.generateSelectionEditReplacement();
+      });
+    }
+
+    if (this.session.selectionReplacementLoading) {
+      this.selectionContextEl.createEl("p", {
+        text: "brain> 正在生成选区修改候选..."
+      });
+    }
+
+    if (context.replacementError !== undefined) {
+      const errorEl = this.selectionContextEl.createEl("p", {
+        text: context.replacementError
+      });
+      errorEl.style.color = "var(--text-error)";
+    }
+
+    if (context.pendingReplacement === undefined) {
+      return;
+    }
+
+    const diff = this.selectionContextEl.createDiv();
+    diff.style.display = "grid";
+    diff.style.gridTemplateColumns =
+      "repeat(auto-fit, minmax(180px, 1fr))";
+    diff.style.gap = "0.5rem";
+    diff.style.marginTop = "0.6rem";
+
+    this.createDiffBlock(
+      diff,
+      "原选区",
+      context.originalText,
+      "var(--background-modifier-error)"
+    );
+    this.createDiffBlock(
+      diff,
+      "建议替换文本",
+      context.pendingReplacement,
+      "var(--background-modifier-success)"
+    );
+
+    const decisionActions = this.selectionContextEl.createDiv();
+    decisionActions.style.display = "flex";
+    decisionActions.style.gap = "0.5rem";
+    decisionActions.style.marginTop = "0.6rem";
+
+    const applyButton = decisionActions.createEl("button", {
+      text: "应用修改"
+    });
+    applyButton.addClass("mod-cta");
+    applyButton.addEventListener("click", () => {
+      this.session.applySelectionReplacement();
+    });
+
+    const discardButton = decisionActions.createEl("button", {
+      text: "放弃"
+    });
+    discardButton.addEventListener("click", () => {
+      this.session.discardSelectionReplacement();
+    });
+  }
+
+  private createDiffBlock(
+    container: HTMLElement,
+    label: string,
+    value: string,
+    backgroundColor: string
+  ): void {
+    const block = container.createDiv();
+    block.style.minWidth = "0";
+
+    const heading = block.createEl("strong", { text: label });
+    heading.style.display = "block";
+    heading.style.marginBottom = "0.25rem";
+
+    const content = block.createDiv();
+    content.style.padding = "0.5rem";
+    content.style.border =
+      "1px solid var(--background-modifier-border)";
+    content.style.borderRadius = "4px";
+    content.style.backgroundColor = backgroundColor;
+    content.style.whiteSpace = "pre-wrap";
+    content.style.overflowWrap = "anywhere";
+    content.style.fontFamily = "var(--font-monospace)";
+    content.setText(value);
   }
 
   private addTranscriptLine(
@@ -238,4 +406,14 @@ export class LainBrainChatPanel {
   private scrollToNewestMessage(): void {
     this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
   }
+}
+
+function truncateSelection(value: string): string {
+  const normalized = value
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalized.length <= 160
+    ? normalized
+    : normalized.slice(0, 157) + "...";
 }

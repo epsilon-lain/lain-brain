@@ -60,7 +60,8 @@ export default class LainBrainPlugin extends Plugin {
       (leaf) => new LainBrainLargeView(
         leaf,
         this.session,
-        () => this.closeLargeLainBrain(leaf)
+        () => this.closeLargeLainBrain(leaf),
+        () => this.openLainBrain()
       )
     );
 

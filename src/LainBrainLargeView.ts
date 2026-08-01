@@ -1,5 +1,6 @@
 import {
   ItemView,
+  Menu,
   setIcon,
   WorkspaceLeaf
 } from "obsidian";
@@ -32,7 +33,8 @@ export class LainBrainLargeView extends ItemView {
   constructor(
     leaf: WorkspaceLeaf,
     private session: LainBrainSession,
-    private closeLargeView: () => Promise<void>
+    private closeLargeView: () => Promise<void>,
+    private openSidebarChat: () => Promise<void>
   ) {
     super(leaf);
     this.candidateMarkdownRenderer =
@@ -345,6 +347,48 @@ export class LainBrainLargeView extends ItemView {
     editor.addEventListener("input", () => {
       this.renderedCandidateMarkdown = editor.value;
       this.session.setCandidateNoteMarkdown(editor.value);
+    });
+
+    editor.addEventListener("contextmenu", (event) => {
+      const startOffset = editor.selectionStart;
+      const endOffset = editor.selectionEnd;
+      const selectedText = editor.value.slice(
+        startOffset,
+        endOffset
+      );
+      const candidate = this.session.getActiveCandidate();
+
+      if (
+        candidate === undefined ||
+        candidate.viewMode !== "edit" ||
+        startOffset === endOffset ||
+        selectedText.trim() === ""
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+
+      const menu = new Menu();
+
+      menu.addItem((item) => {
+        item
+          .setTitle("在 Lain Brain Chat 中讨论此选区")
+          .setIcon("message-circle")
+          .onClick(() => {
+            const started =
+              this.session.startSelectionDiscussion(
+                candidate.id,
+                startOffset,
+                endOffset
+              );
+
+            if (started) {
+              void this.openSidebarChat();
+            }
+          });
+      });
+      menu.showAtMouseEvent(event);
     });
 
     editor.focus();

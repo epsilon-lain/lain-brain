@@ -1,10 +1,10 @@
 import {
   ItemView,
-  MarkdownRenderer,
   setIcon,
   WorkspaceLeaf
 } from "obsidian";
 import { LainBrainChatPanel } from "./LainBrainChatPanel";
+import { LainBrainMarkdownRenderBatch } from "./LainBrainMarkdownRenderer";
 import type {
   LainBrainLargeViewMode,
   LainBrainSession
@@ -20,6 +20,8 @@ export class LainBrainLargeView extends ItemView {
   private renderedCandidateMarkdown = "";
   private renderedCandidateLoading = false;
   private renderedCandidateError: string | null = null;
+  private readonly candidateMarkdownRenderer:
+    LainBrainMarkdownRenderBatch;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -27,6 +29,8 @@ export class LainBrainLargeView extends ItemView {
     private closeLargeView: () => Promise<void>
   ) {
     super(leaf);
+    this.candidateMarkdownRenderer =
+      new LainBrainMarkdownRenderBatch(this.app);
   }
 
   getViewType(): string {
@@ -53,6 +57,7 @@ export class LainBrainLargeView extends ItemView {
     this.chatPanel = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.candidateMarkdownRenderer.destroy();
   }
 
   private renderIfNeeded(force = false): void {
@@ -82,6 +87,7 @@ export class LainBrainLargeView extends ItemView {
   private prepareContent(titleText: string): HTMLDivElement {
     this.chatPanel?.destroy();
     this.chatPanel = undefined;
+    this.candidateMarkdownRenderer.destroy();
     this.contentEl.empty();
     this.contentEl.style.display = "flex";
     this.contentEl.style.flexDirection = "column";
@@ -144,6 +150,7 @@ export class LainBrainLargeView extends ItemView {
 
     this.renderedMode = "chat";
     this.chatPanel = new LainBrainChatPanel(
+      this.app,
       chatContainer,
       this.session,
       true
@@ -191,12 +198,11 @@ export class LainBrainLargeView extends ItemView {
       return;
     }
 
-    void MarkdownRenderer.render(
-      this.app,
+    this.candidateMarkdownRenderer.reset();
+    this.candidateMarkdownRenderer.render(
       this.session.candidateNoteMarkdown,
       previewEl,
-      this.session.activeNoteSourcePath,
-      this
+      this.session.activeNoteSourcePath
     );
   }
 }

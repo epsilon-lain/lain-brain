@@ -1,3 +1,5 @@
+import type { App } from "obsidian";
+import { LainBrainMarkdownRenderBatch } from "./LainBrainMarkdownRenderer";
 import type { LainBrainSession } from "./LainBrainSession";
 
 export class LainBrainChatPanel {
@@ -7,15 +9,18 @@ export class LainBrainChatPanel {
   private readonly noteLabel: HTMLElement;
   private readonly clearButton: HTMLButtonElement;
   private readonly unsubscribe: () => void;
+  private readonly markdownRenderer: LainBrainMarkdownRenderBatch;
   private renderedMessageCount = -1;
   private renderedLoadingMode: string | null = null;
   private renderedCandidateLoading = false;
 
   constructor(
+    app: App,
     private containerEl: HTMLElement,
     private session: LainBrainSession,
     large: boolean
   ) {
+    this.markdownRenderer = new LainBrainMarkdownRenderBatch(app);
     this.containerEl.empty();
 
     if (large) {
@@ -134,6 +139,7 @@ export class LainBrainChatPanel {
 
   destroy(): void {
     this.unsubscribe();
+    this.markdownRenderer.destroy();
   }
 
   focus(): void {
@@ -154,6 +160,7 @@ export class LainBrainChatPanel {
       this.renderedCandidateLoading !== candidateLoading
     ) {
       this.messagesEl.empty();
+      this.markdownRenderer.reset();
 
       for (const message of messages) {
         this.addTranscriptLine(message.role, message.content);
@@ -191,8 +198,35 @@ export class LainBrainChatPanel {
     const prefix = role === "user" ? "lain" : "brain";
     const line = this.messagesEl.createDiv();
 
+    line.style.display = "flex";
+    line.style.alignItems = "flex-start";
     line.style.marginBottom = "0.5rem";
-    line.setText(`${prefix}> ${content}`);
+
+    const prefixEl = line.createSpan({
+      text: `${prefix}> `
+    });
+    prefixEl.style.flexShrink = "0";
+
+    if (role === "user") {
+      const userContent = line.createSpan();
+      userContent.style.minWidth = "0";
+      userContent.style.whiteSpace = "pre-wrap";
+      userContent.style.overflowWrap = "anywhere";
+      userContent.setText(content);
+      return;
+    }
+
+    const assistantContent = line.createDiv();
+    assistantContent.addClass("markdown-rendered");
+    assistantContent.style.flex = "1";
+    assistantContent.style.minWidth = "0";
+    assistantContent.style.whiteSpace = "normal";
+
+    this.markdownRenderer.render(
+      content,
+      assistantContent,
+      this.session.activeNoteSourcePath
+    );
   }
 
   private resizeInput(): void {

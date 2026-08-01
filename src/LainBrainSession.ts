@@ -2,7 +2,8 @@ import type { App, TFile } from "obsidian";
 import {
   askDeepSeek,
   generateCandidateNote,
-  identifyPrimaryConcept
+  identifyPrimaryConcept,
+  repairLatexFormatting
 } from "./DeepSeekClient";
 import type {
   DeepSeekConversationMessage,
@@ -17,6 +18,10 @@ import type {
   CandidatePrimaryConcept,
   VerifiedCandidateRelation
 } from "./CandidateNoteRelations";
+import {
+  appendLatexFormatWarning,
+  reviewLatexFormatting
+} from "./LatexFormatReview";
 
 export interface LainBrainTranscriptMessage {
   role: "user" | "assistant";
@@ -231,10 +236,14 @@ export class LainBrainSession {
     try {
       await this.refreshActiveNoteContext();
 
-      const response = await askDeepSeek(
+      const rawResponse = await askDeepSeek(
         apiKey,
         this.getConversationHistory(),
         this.activeNoteContext
+      );
+      const response = await this.reviewAndRepairLatex(
+        apiKey,
+        rawResponse
       );
 
       this.messages.push({
@@ -304,12 +313,16 @@ export class LainBrainSession {
 
       const verifiedRelations =
         await this.findVerifiedConceptNotes(primaryConcept);
-      const candidateBody = await generateCandidateNote(
+      const rawCandidateBody = await generateCandidateNote(
         apiKey,
         history,
         primaryConcept,
         this.activeNoteContext,
         previousCandidate
+      );
+      const candidateBody = await this.reviewAndRepairLatex(
+        apiKey,
+        rawCandidateBody
       );
       const candidate = buildCandidateNoteMarkdown(
         candidateBody,
@@ -327,6 +340,42 @@ export class LainBrainSession {
     } finally {
       this.candidateLoading = false;
       this.notify();
+    }
+  }
+
+  private async reviewAndRepairLatex(
+    apiKey: string,
+    markdown: string
+  ): Promise<string> {
+    const issues = reviewLatexFormatting(markdown);
+
+    if (issues.length === 0) {
+      return markdown;
+    }
+
+    try {
+      const repaired = await repairLatexFormatting(
+        apiKey,
+        markdown,
+        issues.map((issue) => issue.message)
+      );
+      const repairedIssues = reviewLatexFormatting(repaired);
+
+      if (
+        repaired.trim() !== "" &&
+        repairedIssues.length === 0
+      ) {
+        return repaired;
+      }
+
+      return appendLatexFormatWarning(
+        markdown,
+        repairedIssues.length === 0
+          ? issues
+          : repairedIssues
+      );
+    } catch {
+      return appendLatexFormatWarning(markdown, issues);
     }
   }
 

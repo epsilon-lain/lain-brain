@@ -5,9 +5,11 @@ export class LainBrainChatPanel {
   private readonly messagesEl: HTMLDivElement;
   private readonly input: HTMLTextAreaElement;
   private readonly noteLabel: HTMLElement;
+  private readonly clearButton: HTMLButtonElement;
   private readonly unsubscribe: () => void;
   private renderedMessageCount = -1;
   private renderedLoadingMode: string | null = null;
+  private renderedCandidateLoading = false;
 
   constructor(
     private containerEl: HTMLElement,
@@ -23,9 +25,26 @@ export class LainBrainChatPanel {
       this.containerEl.style.minHeight = "0";
     }
 
-    this.noteLabel = this.containerEl.createEl("small");
-    this.noteLabel.style.display = "block";
-    this.noteLabel.style.marginBottom = "0.5rem";
+    const toolbar = this.containerEl.createDiv();
+    toolbar.style.display = "flex";
+    toolbar.style.alignItems = "center";
+    toolbar.style.justifyContent = "space-between";
+    toolbar.style.gap = "0.5rem";
+    toolbar.style.marginBottom = "0.5rem";
+
+    this.noteLabel = toolbar.createEl("small");
+
+    this.clearButton = toolbar.createEl("button", {
+      text: "清除当前聊天"
+    });
+    this.clearButton.style.padding = "2px 6px";
+    this.clearButton.style.fontSize = "0.75rem";
+    this.clearButton.style.lineHeight = "1.2";
+
+    this.clearButton.addEventListener("click", () => {
+      this.session.clearChat();
+      this.input.focus();
+    });
 
     this.transcriptEl = this.containerEl.createDiv();
     this.transcriptEl.style.overflowY = "auto";
@@ -124,12 +143,15 @@ export class LainBrainChatPanel {
   private render(): void {
     const messages = this.session.getTranscriptMessages();
     const loadingMode = this.session.loadingMode;
+    const candidateLoading = this.session.candidateLoading;
 
     this.noteLabel.setText(this.session.activeNoteLabel);
+    this.clearButton.disabled = this.session.loading;
 
     if (
       this.renderedMessageCount !== messages.length ||
-      this.renderedLoadingMode !== loadingMode
+      this.renderedLoadingMode !== loadingMode ||
+      this.renderedCandidateLoading !== candidateLoading
     ) {
       this.messagesEl.empty();
 
@@ -141,8 +163,16 @@ export class LainBrainChatPanel {
         this.addTranscriptLine("assistant", "Thinking...");
       }
 
+      if (candidateLoading) {
+        this.addTranscriptLine(
+          "assistant",
+          "正在整理候选笔记..."
+        );
+      }
+
       this.renderedMessageCount = messages.length;
       this.renderedLoadingMode = loadingMode;
+      this.renderedCandidateLoading = candidateLoading;
       this.scrollToNewestMessage();
     }
 

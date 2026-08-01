@@ -1,12 +1,9 @@
 import {
   ItemView,
   setIcon,
-  TFile,
-  TFolder,
   WorkspaceLeaf
 } from "obsidian";
 import { LainBrainChatPanel } from "./LainBrainChatPanel";
-import type { DeepSeekNoteContext } from "./DeepSeekClient";
 import type { LainBrainSession } from "./LainBrainSession";
 
 export const VIEW_TYPE_LAIN_BRAIN = "lain-brain-view";
@@ -18,7 +15,8 @@ export class LainBrainView extends ItemView {
   constructor(
     leaf: WorkspaceLeaf,
     private session: LainBrainSession,
-    private openLargeView: () => Promise<void>
+    private openLargeChat: () => Promise<void>,
+    private openCandidateView: () => Promise<void>
   ) {
     super(leaf);
   }
@@ -33,61 +31,6 @@ export class LainBrainView extends ItemView {
 
   getIcon(): string {
     return "brain";
-  }
-
-  private async ensureFolder(path: string): Promise<void> {
-    const existing = this.app.vault.getAbstractFileByPath(path);
-
-    if (existing === null) {
-      await this.app.vault.createFolder(path);
-      return;
-    }
-
-    if (!(existing instanceof TFolder)) {
-      throw new Error(`A file already exists at ${path}.`);
-    }
-  }
-
-  private getAvailableDraftPath(created: Date): string {
-    const filename = created
-      .toISOString()
-      .replace(/[:.]/g, "-");
-    let suffix = 0;
-
-    while (true) {
-      const suffixText = suffix === 0 ? "" : `-${suffix}`;
-      const path =
-        `Lain Brain/Drafts/${filename}${suffixText}.md`;
-
-      if (this.app.vault.getAbstractFileByPath(path) === null) {
-        return path;
-      }
-
-      suffix += 1;
-    }
-  }
-
-  private async createDraftNote(
-    body: string,
-    noteContext?: DeepSeekNoteContext
-  ): Promise<TFile> {
-    await this.ensureFolder("Lain Brain");
-    await this.ensureFolder("Lain Brain/Drafts");
-
-    const created = new Date();
-    const path = this.getAvailableDraftPath(created);
-    const sourceNote = noteContext === undefined
-      ? ""
-      : `[[${noteContext.title}]]`;
-    const content =
-      "---\n" +
-      "lain_brain_status: draft\n" +
-      `source_note: ${JSON.stringify(sourceNote)}\n` +
-      `created: ${created.toISOString()}\n` +
-      "---\n\n" +
-      `${body.trim()}\n`;
-
-    return this.app.vault.create(path, content);
   }
 
   async onOpen(): Promise<void> {
@@ -129,7 +72,7 @@ export class LainBrainView extends ItemView {
     }
 
     expandButton.addEventListener("click", () => {
-      void this.openLargeView();
+      void this.openLargeChat();
     });
 
     this.contentEl.createEl("p", {
@@ -143,49 +86,54 @@ export class LainBrainView extends ItemView {
       false
     );
 
-    const organizeButton = this.contentEl.createEl("button", {
-      text: "整理为候选节点"
-    });
-    const organizeStatus = this.contentEl.createEl("p");
+    const candidateActions = this.contentEl.createDiv();
+    candidateActions.style.display = "flex";
+    candidateActions.style.flexWrap = "wrap";
+    candidateActions.style.gap = "0.5rem";
+    candidateActions.style.marginTop = "0.75rem";
 
-    const updateOrganizeButton = (): void => {
-      organizeButton.style.display =
-        this.session.canCreateKnowledgeNode()
+    const generateButton = candidateActions.createEl("button", {
+      text: "整理为候选笔记"
+    });
+    const previewButton = candidateActions.createEl("button", {
+      text: "查看候选笔记"
+    });
+    const candidateStatus = this.contentEl.createEl("p");
+
+    const updateCandidateControls = (): void => {
+      generateButton.style.display =
+        this.session.hasCompletedExchange()
           ? "inline-block"
           : "none";
-      organizeButton.disabled = this.session.loading;
+      generateButton.disabled = this.session.loading;
+
+      previewButton.style.display = this.session.hasCandidateNote
+        ? "inline-block"
+        : "none";
+      previewButton.disabled = this.session.candidateLoading;
+
+      if (this.session.candidateLoading) {
+        candidateStatus.setText(
+          "brain> 正在整理候选笔记..."
+        );
+      } else if (this.session.candidateError !== null) {
+        candidateStatus.setText(this.session.candidateError);
+      } else {
+        candidateStatus.empty();
+      }
     };
 
-    this.unsubscribe = this.session.subscribe(updateOrganizeButton);
-    updateOrganizeButton();
+    this.unsubscribe = this.session.subscribe(
+      updateCandidateControls
+    );
+    updateCandidateControls();
 
-    organizeButton.addEventListener("click", async () => {
-      if (!this.session.hasApiKey()) {
-        organizeStatus.setText(
-          "Please add your DeepSeek API key in Lain Brain settings."
-        );
-        return;
-      }
+    generateButton.addEventListener("click", () => {
+      void this.session.generateOrUpdateCandidateNote();
+    });
 
-      const noteContext = this.session.getActiveNoteContext();
-      organizeStatus.setText("Organizing draft...");
-
-      try {
-        const body = await this.session.generateKnowledgeNode();
-        const draftFile = await this.createDraftNote(
-          body,
-          noteContext
-        );
-
-        organizeStatus.setText("Draft created.");
-        await this.app.workspace
-          .getLeaf("tab")
-          .openFile(draftFile);
-      } catch {
-        organizeStatus.setText(
-          "Unable to create a draft node. Please try again."
-        );
-      }
+    previewButton.addEventListener("click", () => {
+      void this.openCandidateView();
     });
 
     this.chatPanel.focus();

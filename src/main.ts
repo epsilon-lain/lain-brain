@@ -10,7 +10,12 @@ import {
   LainBrainLargeView,
   VIEW_TYPE_LAIN_BRAIN_LARGE
 } from "./LainBrainLargeView";
-import { LainBrainSession } from "./LainBrainSession";
+import {
+  LainBrainSession
+} from "./LainBrainSession";
+import type {
+  LainBrainLargeViewMode
+} from "./LainBrainSession";
 import { LainBrainSettingTab } from "./LainBrainSettingTab";
 import {
   DEFAULT_SETTINGS,
@@ -45,7 +50,8 @@ export default class LainBrainPlugin extends Plugin {
       (leaf) => new LainBrainView(
         leaf,
         this.session,
-        () => this.openLargeLainBrain()
+        () => this.openLargeLainBrain("chat"),
+        () => this.openLargeLainBrain("candidate")
       )
     );
 
@@ -108,8 +114,17 @@ export default class LainBrainPlugin extends Plugin {
     await this.app.workspace.revealLeaf(leaf);
   }
 
-  private async openLargeLainBrain(): Promise<void> {
-    await this.session.refreshActiveNoteContext();
+  private async openLargeLainBrain(
+    mode: LainBrainLargeViewMode
+  ): Promise<void> {
+    if (mode === "candidate") {
+      if (!this.session.showCandidateNote()) {
+        return;
+      }
+    } else {
+      this.session.showLargeChat();
+      await this.session.refreshActiveNoteContext();
+    }
 
     const existingLeaves =
       this.app.workspace.getLeavesOfType(

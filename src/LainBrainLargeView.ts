@@ -1,16 +1,25 @@
 import {
   ItemView,
+  MarkdownRenderer,
   setIcon,
   WorkspaceLeaf
 } from "obsidian";
 import { LainBrainChatPanel } from "./LainBrainChatPanel";
-import type { LainBrainSession } from "./LainBrainSession";
+import type {
+  LainBrainLargeViewMode,
+  LainBrainSession
+} from "./LainBrainSession";
 
 export const VIEW_TYPE_LAIN_BRAIN_LARGE =
   "lain-brain-large-view";
 
 export class LainBrainLargeView extends ItemView {
   private chatPanel?: LainBrainChatPanel;
+  private unsubscribe?: () => void;
+  private renderedMode?: LainBrainLargeViewMode;
+  private renderedCandidateMarkdown = "";
+  private renderedCandidateLoading = false;
+  private renderedCandidateError: string | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -33,6 +42,46 @@ export class LainBrainLargeView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.unsubscribe = this.session.subscribe(() => {
+      this.renderIfNeeded();
+    });
+    this.renderIfNeeded(true);
+  }
+
+  async onClose(): Promise<void> {
+    this.chatPanel?.destroy();
+    this.chatPanel = undefined;
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+  }
+
+  private renderIfNeeded(force = false): void {
+    const mode = this.session.largeViewMode;
+
+    if (mode === "chat") {
+      if (force || this.renderedMode !== "chat") {
+        this.renderChat();
+      }
+      return;
+    }
+
+    if (
+      force ||
+      this.renderedMode !== "candidate" ||
+      this.renderedCandidateMarkdown !==
+        this.session.candidateNoteMarkdown ||
+      this.renderedCandidateLoading !==
+        this.session.candidateLoading ||
+      this.renderedCandidateError !==
+        this.session.candidateError
+    ) {
+      this.renderCandidate();
+    }
+  }
+
+  private prepareContent(titleText: string): HTMLDivElement {
+    this.chatPanel?.destroy();
+    this.chatPanel = undefined;
     this.contentEl.empty();
     this.contentEl.style.display = "flex";
     this.contentEl.style.flexDirection = "column";
@@ -46,7 +95,7 @@ export class LainBrainLargeView extends ItemView {
     header.style.marginBottom = "0.75rem";
 
     const title = header.createEl("h2", {
-      text: "Lain Brain"
+      text: titleText
     });
     title.style.margin = "0";
     title.style.fontFamily = "var(--font-monospace)";
@@ -55,7 +104,7 @@ export class LainBrainLargeView extends ItemView {
     setIcon(collapseButton, "minus");
     collapseButton.setAttr(
       "aria-label",
-      "Close large Lain Brain chat"
+      "Close large Lain Brain view"
     );
     collapseButton.style.width = "14px";
     collapseButton.style.height = "14px";
@@ -83,10 +132,17 @@ export class LainBrainLargeView extends ItemView {
       void this.closeLargeView();
     });
 
-    const chatContainer = this.contentEl.createDiv();
-    chatContainer.style.flex = "1";
-    chatContainer.style.minHeight = "0";
+    const body = this.contentEl.createDiv();
+    body.style.flex = "1";
+    body.style.minHeight = "0";
 
+    return body;
+  }
+
+  private renderChat(): void {
+    const chatContainer = this.prepareContent("Lain Brain");
+
+    this.renderedMode = "chat";
     this.chatPanel = new LainBrainChatPanel(
       chatContainer,
       this.session,
@@ -95,8 +151,52 @@ export class LainBrainLargeView extends ItemView {
     this.chatPanel.focus();
   }
 
-  async onClose(): Promise<void> {
-    this.chatPanel?.destroy();
-    this.chatPanel = undefined;
+  private renderCandidate(): void {
+    const candidateContainer =
+      this.prepareContent("候选笔记");
+
+    this.renderedMode = "candidate";
+    this.renderedCandidateMarkdown =
+      this.session.candidateNoteMarkdown;
+    this.renderedCandidateLoading =
+      this.session.candidateLoading;
+    this.renderedCandidateError =
+      this.session.candidateError;
+
+    candidateContainer.style.display = "flex";
+    candidateContainer.style.flexDirection = "column";
+    candidateContainer.style.minHeight = "0";
+
+    if (this.session.candidateLoading) {
+      candidateContainer.createEl("p", {
+        text: "brain> 正在整理候选笔记..."
+      });
+    }
+
+    if (this.session.candidateError !== null) {
+      candidateContainer.createEl("p", {
+        text: this.session.candidateError
+      });
+    }
+
+    const previewEl = candidateContainer.createDiv();
+    previewEl.addClass("markdown-rendered");
+    previewEl.style.flex = "1";
+    previewEl.style.minHeight = "0";
+    previewEl.style.overflowY = "auto";
+    previewEl.style.padding = "1rem";
+
+    if (!this.session.hasCandidateNote) {
+      previewEl.setText("尚无候选笔记。");
+      return;
+    }
+
+    void MarkdownRenderer.render(
+      this.app,
+      this.session.candidateNoteMarkdown,
+      previewEl,
+      this.session.activeNoteSourcePath,
+      this
+    );
   }
 }

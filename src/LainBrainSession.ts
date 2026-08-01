@@ -1,7 +1,7 @@
 import type { App, TFile } from "obsidian";
 import {
   askDeepSeek,
-  createKnowledgeNode
+  generateCandidateNote
 } from "./DeepSeekClient";
 import type {
   DeepSeekConversationMessage,
@@ -18,7 +18,8 @@ interface StoredMessage extends LainBrainTranscriptMessage {
 }
 
 type SessionListener = () => void;
-export type LainBrainLoadingMode = "chat" | "organize" | null;
+export type LainBrainLoadingMode = "chat" | null;
+export type LainBrainLargeViewMode = "chat" | "candidate";
 
 export class LainBrainSession {
   private readonly messages: StoredMessage[] = [];
@@ -29,6 +30,10 @@ export class LainBrainSession {
 
   draft = "";
   loadingMode: LainBrainLoadingMode = null;
+  candidateNoteMarkdown = "";
+  candidateLoading = false;
+  candidateError: string | null = null;
+  largeViewMode: LainBrainLargeViewMode = "chat";
 
   constructor(
     private app: App,
@@ -36,13 +41,21 @@ export class LainBrainSession {
   ) {}
 
   get loading(): boolean {
-    return this.loadingMode !== null;
+    return this.loadingMode !== null || this.candidateLoading;
   }
 
   get activeNoteLabel(): string {
     return this.activeFile === null
       ? "No active note"
       : `Using note: ${this.activeFile.basename}`;
+  }
+
+  get activeNoteSourcePath(): string {
+    return this.activeFile?.path ?? "";
+  }
+
+  get hasCandidateNote(): boolean {
+    return this.candidateNoteMarkdown !== "";
   }
 
   subscribe(listener: SessionListener): () => void {
@@ -66,23 +79,11 @@ export class LainBrainSession {
       }));
   }
 
-  getActiveNoteContext(): DeepSeekNoteContext | undefined {
-    if (this.activeNoteContext === undefined) {
-      return undefined;
-    }
-
-    return { ...this.activeNoteContext };
-  }
-
   hasApiKey(): boolean {
     return this.getApiKey().trim() !== "";
   }
 
-  canCreateKnowledgeNode(): boolean {
-    if (this.loading) {
-      return false;
-    }
-
+  hasCompletedExchange(): boolean {
     const history = this.getConversationHistory();
     const latest = history[history.length - 1];
 
@@ -96,6 +97,39 @@ export class LainBrainSession {
 
     this.draft = value;
     this.notify();
+  }
+
+  clearChat(): void {
+    if (this.loading) {
+      return;
+    }
+
+    this.messages.length = 0;
+    this.draft = "";
+    this.candidateError = null;
+    this.notify();
+  }
+
+  showLargeChat(): void {
+    if (this.largeViewMode === "chat") {
+      return;
+    }
+
+    this.largeViewMode = "chat";
+    this.notify();
+  }
+
+  showCandidateNote(): boolean {
+    if (!this.hasCandidateNote) {
+      return false;
+    }
+
+    if (this.largeViewMode !== "candidate") {
+      this.largeViewMode = "candidate";
+      this.notify();
+    }
+
+    return true;
   }
 
   async setActiveFile(file: TFile | null): Promise<void> {
@@ -211,28 +245,47 @@ export class LainBrainSession {
     }
   }
 
-  async generateKnowledgeNode(): Promise<string> {
-    if (this.loading) {
-      throw new Error("Lain Brain is busy.");
+  async generateOrUpdateCandidateNote(): Promise<boolean> {
+    if (this.loading || !this.hasCompletedExchange()) {
+      return false;
     }
 
     const apiKey = this.getApiKey().trim();
 
     if (apiKey === "") {
-      throw new Error("Missing DeepSeek API key.");
+      this.candidateError =
+        "Please add your DeepSeek API key in Lain Brain settings.";
+      this.notify();
+      return false;
     }
 
-    this.loadingMode = "organize";
+    const previousCandidate = this.hasCandidateNote
+      ? this.candidateNoteMarkdown
+      : undefined;
+
+    this.candidateLoading = true;
+    this.candidateError = null;
     this.notify();
 
     try {
-      return await createKnowledgeNode(
+      await this.refreshActiveNoteContext();
+
+      const candidate = await generateCandidateNote(
         apiKey,
         this.getConversationHistory(),
-        this.activeNoteContext
+        this.activeNoteContext,
+        previousCandidate
       );
+
+      this.candidateNoteMarkdown = candidate;
+      this.largeViewMode = "candidate";
+      return true;
+    } catch {
+      this.candidateError =
+        "Unable to create a candidate note. Please try again.";
+      return false;
     } finally {
-      this.loadingMode = null;
+      this.candidateLoading = false;
       this.notify();
     }
   }

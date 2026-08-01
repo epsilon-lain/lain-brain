@@ -6,7 +6,10 @@ import {
 } from "obsidian";
 import type { App } from "obsidian";
 import { LainBrainChatPanel } from "./LainBrainChatPanel";
-import type { LainBrainSession } from "./LainBrainSession";
+import type {
+  CandidateNote,
+  LainBrainSession
+} from "./LainBrainSession";
 
 export const VIEW_TYPE_LAIN_BRAIN = "lain-brain-view";
 
@@ -113,6 +116,9 @@ export class LainBrainView extends ItemView {
       previewButton.style.display = this.session.hasCandidateNote
         ? "inline-block"
         : "none";
+      previewButton.setText(
+        `查看候选笔记（${this.session.candidateCount}）`
+      );
       previewButton.disabled = this.session.candidateLoading;
 
       if (this.session.candidateLoading) {
@@ -143,20 +149,25 @@ export class LainBrainView extends ItemView {
   }
 
   private async generateCandidateWithConfirmation(): Promise<void> {
-    let allowOverwriteUserEdits = false;
+    const result =
+      await this.session.generateOrUpdateCandidateNotes(false);
 
-    if (this.session.hasUserEditedCandidate) {
-      allowOverwriteUserEdits =
-        await confirmCandidateOverwrite(this.app);
-
-      if (!allowOverwriteUserEdits) {
-        return;
-      }
+    if (result !== "needs-confirmation") {
+      return;
     }
 
-    await this.session.generateOrUpdateCandidateNote(
-      allowOverwriteUserEdits
+    const conflicts =
+      this.session.getCandidateOverwriteConflicts();
+    const confirmed = await confirmCandidateOverwrite(
+      this.app,
+      conflicts
     );
+
+    if (!confirmed) {
+      return;
+    }
+
+    await this.session.generateOrUpdateCandidateNotes(true);
   }
 
   async onClose(): Promise<void> {
@@ -167,7 +178,10 @@ export class LainBrainView extends ItemView {
   }
 }
 
-function confirmCandidateOverwrite(app: App): Promise<boolean> {
+function confirmCandidateOverwrite(
+  app: App,
+  candidates: readonly CandidateNote[]
+): Promise<boolean> {
   return new Promise((resolve) => {
     const modal = new Modal(app);
     let settled = false;
@@ -186,9 +200,20 @@ function confirmCandidateOverwrite(app: App): Promise<boolean> {
       modal.titleEl.setText("覆盖已修改的候选笔记？");
       modal.contentEl.createEl("p", {
         text:
-          "当前候选笔记包含你的手动修改。重新整理会用新的候选稿" +
-          "覆盖这些修改。是否继续？"
+          "以下候选笔记包含你的手动修改。重新整理会覆盖这些" +
+          "修改，是否继续？"
       });
+
+      const list = modal.contentEl.createEl("ul");
+
+      for (const candidate of candidates) {
+        list.createEl("li", {
+          text:
+            `${candidate.title}（` +
+            candidate.primaryConcept.name +
+            "）"
+        });
+      }
 
       const actions = modal.contentEl.createDiv();
       actions.style.display = "flex";

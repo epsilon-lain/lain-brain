@@ -21,6 +21,8 @@ export class LainBrainLargeView extends ItemView {
   private unsubscribe?: () => void;
   private renderedMode?: LainBrainLargeViewMode;
   private renderedCandidateViewMode?: LainBrainCandidateViewMode;
+  private renderedActiveCandidateId: string | null = null;
+  private renderedCandidateListKey = "";
   private renderedCandidateMarkdown = "";
   private renderedCandidateLoading = false;
   private renderedCandidateError: string | null = null;
@@ -79,6 +81,10 @@ export class LainBrainLargeView extends ItemView {
     if (
       force ||
       this.renderedMode !== "candidate" ||
+      this.renderedActiveCandidateId !==
+        this.session.activeCandidateId ||
+      this.renderedCandidateListKey !==
+        this.getCandidateListKey() ||
       this.renderedCandidateViewMode !==
         this.session.candidateViewMode ||
       this.renderedCandidateLoading !==
@@ -176,6 +182,10 @@ export class LainBrainLargeView extends ItemView {
     this.renderedMode = "candidate";
     this.renderedCandidateViewMode =
       this.session.candidateViewMode;
+    this.renderedActiveCandidateId =
+      this.session.activeCandidateId;
+    this.renderedCandidateListKey =
+      this.getCandidateListKey();
     this.renderedCandidateMarkdown =
       this.session.candidateNoteMarkdown;
     this.renderedCandidateLoading =
@@ -187,6 +197,54 @@ export class LainBrainLargeView extends ItemView {
     candidateContainer.style.flexDirection = "column";
     candidateContainer.style.height = "100%";
     candidateContainer.style.minHeight = "0";
+
+    const candidates = this.session.getCandidateNotes();
+    const activeCandidate = this.session.getActiveCandidate();
+    const switcher = candidateContainer.createDiv();
+
+    switcher.style.display = "flex";
+    switcher.style.alignItems = "center";
+    switcher.style.gap = "0.5rem";
+    switcher.style.marginBottom = "0.6rem";
+
+    switcher.createEl("label", {
+      text: `候选笔记（${candidates.length}）`
+    });
+
+    const candidateSelect = switcher.createEl("select");
+    candidateSelect.setAttr("aria-label", "选择候选笔记");
+    candidateSelect.style.flex = "1";
+    candidateSelect.style.minWidth = "0";
+    candidateSelect.style.padding = "4px 8px";
+    candidateSelect.style.backgroundColor =
+      "var(--background-secondary)";
+    candidateSelect.style.color = "var(--text-normal)";
+    candidateSelect.style.border =
+      "1px solid var(--background-modifier-border)";
+    candidateSelect.style.borderRadius = "4px";
+    candidateSelect.disabled = this.session.candidateLoading;
+
+    for (const candidate of candidates) {
+      const option = candidateSelect.createEl("option", {
+        text:
+          `${candidate.title} — ` +
+          candidate.primaryConcept.name,
+        value: candidate.id
+      });
+      option.selected =
+        candidate.id === this.session.activeCandidateId;
+    }
+
+    candidateSelect.addEventListener("change", () => {
+      this.session.setActiveCandidate(candidateSelect.value);
+    });
+
+    if (activeCandidate === undefined) {
+      candidateContainer.createEl("p", {
+        text: "暂无候选笔记。"
+      });
+      return;
+    }
 
     const modeTabs = candidateContainer.createDiv();
     modeTabs.style.display = "flex";
@@ -319,6 +377,16 @@ export class LainBrainLargeView extends ItemView {
       previewEl,
       this.session.activeNoteSourcePath
     );
+  }
+
+  private getCandidateListKey(): string {
+    return this.session.getCandidateNotes()
+      .map(
+        (candidate) =>
+          `${candidate.id}:${candidate.title}:` +
+          candidate.primaryConcept.name
+      )
+      .join("|");
   }
 
   private syncCandidateContent(): void {

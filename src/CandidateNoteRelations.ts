@@ -50,9 +50,15 @@ export function normalizeCandidatePrimaryConcept(
     throw new Error("No primary concept was identified.");
   }
 
+  const aliases = [
+    ...new Map(
+      terms.map((term) => [normalizeSearchText(term), term])
+    ).values()
+  ];
+
   return {
     name,
-    aliases: [name]
+    aliases
   };
 }
 
@@ -87,6 +93,21 @@ export function findConceptEvidence(
   }
 
   return null;
+}
+
+export function haveSameCandidateConcept(
+  left: CandidatePrimaryConcept,
+  right: CandidatePrimaryConcept
+): boolean {
+  const leftTerms = new Set(
+    [left.name, ...left.aliases]
+      .map(normalizeSearchText)
+      .filter((term) => term !== "")
+  );
+
+  return [right.name, ...right.aliases]
+    .map(normalizeSearchText)
+    .some((term) => term !== "" && leftTerms.has(term));
 }
 
 export function buildCandidateNoteMarkdown(

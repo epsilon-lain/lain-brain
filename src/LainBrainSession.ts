@@ -1,12 +1,22 @@
 import type { App, TFile } from "obsidian";
 import {
   askDeepSeek,
-  generateCandidateNote
+  generateCandidateNote,
+  identifyPrimaryConcept
 } from "./DeepSeekClient";
 import type {
   DeepSeekConversationMessage,
   DeepSeekNoteContext
 } from "./DeepSeekClient";
+import {
+  buildCandidateNoteMarkdown,
+  findConceptEvidence,
+  findConfirmedPrimaryConcept
+} from "./CandidateNoteRelations";
+import type {
+  CandidatePrimaryConcept,
+  VerifiedCandidateRelation
+} from "./CandidateNoteRelations";
 
 export interface LainBrainTranscriptMessage {
   role: "user" | "assistant";
@@ -270,11 +280,41 @@ export class LainBrainSession {
     try {
       await this.refreshActiveNoteContext();
 
-      const candidate = await generateCandidateNote(
+      const history = this.getConversationHistory();
+      const sourceEvidence = this.createCandidateSourceEvidence(
+        history,
+        previousCandidate
+      );
+      const primaryConcept =
+        findConfirmedPrimaryConcept(sourceEvidence) ??
+        await identifyPrimaryConcept(
+          apiKey,
+          history,
+          this.activeNoteContext,
+          previousCandidate
+        );
+
+      if (
+        findConceptEvidence(sourceEvidence, primaryConcept) === null
+      ) {
+        throw new Error(
+          "The primary concept is not present in the candidate sources."
+        );
+      }
+
+      const verifiedRelations =
+        await this.findVerifiedConceptNotes(primaryConcept);
+      const candidateBody = await generateCandidateNote(
         apiKey,
-        this.getConversationHistory(),
+        history,
+        primaryConcept,
         this.activeNoteContext,
         previousCandidate
+      );
+      const candidate = buildCandidateNoteMarkdown(
+        candidateBody,
+        primaryConcept,
+        verifiedRelations
       );
 
       this.candidateNoteMarkdown = candidate;
@@ -288,6 +328,57 @@ export class LainBrainSession {
       this.candidateLoading = false;
       this.notify();
     }
+  }
+
+  private createCandidateSourceEvidence(
+    history: DeepSeekConversationMessage[],
+    previousCandidate?: string
+  ): string {
+    const conversation = history
+      .map(
+        (message) =>
+          `${message.role === "user" ? "lain" : "brain"}> ` +
+          message.content
+      )
+      .join("\n\n");
+    const activeNote = this.activeNoteContext === undefined
+      ? ""
+      : (
+          `Active note: ${this.activeNoteContext.title}\n` +
+          this.activeNoteContext.content
+        );
+
+    return [conversation, activeNote, previousCandidate ?? ""]
+      .filter((section) => section !== "")
+      .join("\n\n");
+  }
+
+  private async findVerifiedConceptNotes(
+    concept: CandidatePrimaryConcept
+  ): Promise<VerifiedCandidateRelation[]> {
+    const verified: VerifiedCandidateRelation[] = [];
+
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      try {
+        const content = await this.app.vault.cachedRead(file);
+        const matchedAlias = findConceptEvidence(content, concept);
+
+        if (matchedAlias === null) {
+          continue;
+        }
+
+        verified.push({
+          linkTarget: file.path.replace(/\.md$/i, ""),
+          matchedAlias
+        });
+      } catch {
+        // A temporarily unreadable note is not link evidence.
+      }
+    }
+
+    return verified.sort((left, right) =>
+      left.linkTarget.localeCompare(right.linkTarget)
+    );
   }
 
   private addAssistantNotice(content: string): void {

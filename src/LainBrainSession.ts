@@ -1,5 +1,15 @@
 import type { App, TFile } from "obsidian";
 import {
+  validateVisionImage,
+  VisionProviderRouter
+} from "./OpenAIVisionClient";
+import type {
+  VisionImageFile,
+  VisionProviderClient
+} from "./OpenAIVisionClient";
+import { canAnalyzeImages } from "./ProviderProfiles";
+import type { ProviderProfile } from "./ProviderProfiles";
+import {
   askDeepSeek,
   discussCandidateSelection,
   generateCandidateNote,
@@ -52,10 +62,35 @@ import {
   createVaultParentGroupId,
   discoverCandidateParents
 } from "./CandidateParentDiscovery";
+import {
+  DEFAULT_BRAIN_DISPLAY_NAME,
+  DEFAULT_USER_DISPLAY_NAME,
+  getPersonalizedWorkspaceTitle,
+  resolveDisplayName
+} from "./PersonalNaming";
+import type { PersonalNamingSettings } from "./PersonalNaming";
+
+export interface LainBrainImageAttachmentMetadata {
+  filename: string;
+  mimeType: string;
+  byteSize: number;
+  providerId: string;
+  providerDisplayName: string;
+}
 
 export interface LainBrainTranscriptMessage {
   role: "user" | "assistant";
   content: string;
+  providerId?: string;
+  providerDisplayName?: string;
+  attachment?: LainBrainImageAttachmentMetadata;
+}
+
+export interface PendingVisionImage {
+  file: VisionImageFile;
+  filename: string;
+  mimeType: string;
+  byteSize: number;
 }
 
 interface StoredMessage extends LainBrainTranscriptMessage {
@@ -166,6 +201,8 @@ type SessionListener = () => void;
 export type LainBrainLoadingMode = "chat" | null;
 export type LainBrainLargeViewMode = "chat" | "candidate";
 export type LainBrainCandidateViewMode = "edit" | "preview";
+export type LainBrainSendResult =
+  "sent" | "blocked" | "needs-vision-confirmation";
 
 export class LainBrainSession {
   private readonly messages: StoredMessage[] = [];
@@ -181,10 +218,17 @@ export class LainBrainSession {
   private candidateVaultActionMessages = new Map<string, string>();
   private pendingCandidateExtraction?: PendingCandidateExtraction;
   private overwriteConflictIds: string[] = [];
+  private getPersonalNaming: () => PersonalNamingSettings = () => ({
+    userDisplayName: DEFAULT_USER_DISPLAY_NAME,
+    brainDisplayName: DEFAULT_BRAIN_DISPLAY_NAME,
+    hasCompletedNamingOnboarding: false
+  });
 
   activeCandidateId: string | null = null;
   private generalDraft = "";
   private selectionEditContext?: SelectionEditContext;
+  private pendingVisionImage?: PendingVisionImage;
+  private readonly confirmedVisionProviderIds = new Set<string>();
   loadingMode: LainBrainLoadingMode = null;
   candidateLoading = false;
   selectionReplacementLoading = false;
@@ -193,13 +237,54 @@ export class LainBrainSession {
 
   constructor(
     private app: App,
-    private getApiKey: () => string
+    private getApiKey: () => string,
+    private getActiveImageProvider:
+      () => ProviderProfile | null = () => null,
+    private visionClient: VisionProviderClient =
+      new VisionProviderRouter(),
+    private askText: typeof askDeepSeek = askDeepSeek
   ) {}
 
   get loading(): boolean {
     return this.loadingMode !== null ||
       this.candidateLoading ||
       this.selectionReplacementLoading;
+  }
+
+  get userDisplayName(): string {
+    return resolveDisplayName(
+      this.getPersonalNaming().userDisplayName,
+      DEFAULT_USER_DISPLAY_NAME
+    );
+  }
+
+  get brainDisplayName(): string {
+    return resolveDisplayName(
+      this.getPersonalNaming().brainDisplayName,
+      DEFAULT_BRAIN_DISPLAY_NAME
+    );
+  }
+
+  get workspaceTitle(): string {
+    const naming = this.getPersonalNaming();
+
+    return getPersonalizedWorkspaceTitle({
+      userDisplayName: this.userDisplayName,
+      brainDisplayName: this.brainDisplayName,
+      hasCompletedNamingOnboarding:
+        naming.hasCompletedNamingOnboarding === true
+    });
+  }
+
+  setPersonalNamingProvider(
+    provider: () => PersonalNamingSettings
+  ): void {
+    this.getPersonalNaming = provider;
+    this.notify();
+  }
+
+  notifyPersonalNamingChanged(): void {
+    this.notify();
   }
 
   get draft(): string {
@@ -1200,7 +1285,7 @@ export class LainBrainSession {
       .filter((message) => message.includeInHistory)
       .map((message) => ({
         role: message.role,
-        content: message.content
+        content: getMessageContentForModel(message)
       }));
   }
 
@@ -1213,6 +1298,57 @@ export class LainBrainSession {
     const latest = history[history.length - 1];
 
     return latest?.role === "assistant";
+  }
+
+  getVisionProviderConfirmation(): {
+    id: string;
+    displayName: string;
+  } | null {
+    const profile = this.getActiveImageProvider();
+
+    if (profile === null || !canAnalyzeImages(profile)) {
+      return null;
+    }
+
+    return {
+      id: profile.id,
+      displayName: profile.displayName
+    };
+  }
+  getPendingVisionImage(): Readonly<PendingVisionImage> | undefined {
+    return this.pendingVisionImage;
+  }
+
+  setPendingVisionImage(file: VisionImageFile): boolean {
+    if (this.loading || this.selectionEditContext !== undefined) {
+      return false;
+    }
+
+    const validationError = validateVisionImage(file);
+
+    if (validationError !== null) {
+      this.pendingVisionImage = undefined;
+      this.addAssistantNotice(validationError);
+      return false;
+    }
+
+    this.pendingVisionImage = {
+      file,
+      filename: file.name,
+      mimeType: file.type.toLowerCase(),
+      byteSize: file.size
+    };
+    this.notify();
+    return true;
+  }
+
+  removePendingVisionImage(): void {
+    if (this.pendingVisionImage === undefined) {
+      return;
+    }
+
+    this.pendingVisionImage = undefined;
+    this.notify();
   }
 
   setDraft(value: string): void {
@@ -1478,6 +1614,7 @@ export class LainBrainSession {
 
     this.messages.length = 0;
     this.generalDraft = "";
+    this.pendingVisionImage = undefined;
     this.candidateError = null;
     this.notify();
   }
@@ -1566,21 +1703,107 @@ export class LainBrainSession {
     this.notify();
   }
 
-  async send(): Promise<void> {
+  async send(
+    confirmedProviderId?: string
+  ): Promise<LainBrainSendResult> {
     if (this.selectionEditContext !== undefined) {
       await this.sendSelectionDiscussion();
-      return;
+      return "sent";
     }
 
     if (this.loading) {
-      return;
+      return "blocked";
     }
 
     const message = this.generalDraft.trim();
 
     if (message === "") {
       this.addAssistantNotice("Please write something first.");
-      return;
+      return "blocked";
+    }
+
+    const attachment = this.pendingVisionImage;
+
+    if (attachment !== undefined) {
+      const profile = this.getActiveImageProvider();
+
+      if (profile === null || !canAnalyzeImages(profile)) {
+        this.addAssistantNotice(
+          "The selected AI provider cannot analyze images. Choose a Vision-capable provider in Lain Brain settings."
+        );
+        return "blocked";
+      }
+
+      const validationError = validateVisionImage(attachment.file);
+
+      if (validationError !== null) {
+        this.addAssistantNotice(validationError);
+        return "blocked";
+      }
+
+      if (
+        !this.confirmedVisionProviderIds.has(profile.id) &&
+        confirmedProviderId !== profile.id
+      ) {
+        return "needs-vision-confirmation";
+      }
+
+      if (confirmedProviderId === profile.id) {
+        this.confirmedVisionProviderIds.add(profile.id);
+      }
+
+      const attachmentMetadata: LainBrainImageAttachmentMetadata = {
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        byteSize: attachment.byteSize,
+        providerId: profile.id,
+        providerDisplayName: profile.displayName
+      };
+      this.messages.push({
+        id: this.createMessageId(),
+        role: "user",
+        content: message,
+        providerId: profile.id,
+        providerDisplayName: profile.displayName,
+        attachment: attachmentMetadata,
+        includeInHistory: true
+      });
+      this.generalDraft = "";
+      this.pendingVisionImage = undefined;
+      this.loadingMode = "chat";
+      this.notify();
+
+      try {
+        const response = await this.visionClient.analyzeImage(
+          profile,
+          message,
+          attachment.file
+        );
+
+        this.messages.push({
+          id: this.createMessageId(),
+          role: "assistant",
+          content: response.text,
+          providerId: response.providerId,
+          providerDisplayName: response.providerDisplayName,
+          includeInHistory: true
+        });
+      } catch {
+        this.messages.push({
+          id: this.createMessageId(),
+          role: "assistant",
+          content:
+            "Unable to analyze the image with the selected AI provider. Please try again.",
+          providerId: profile.id,
+          providerDisplayName: profile.displayName,
+          includeInHistory: false
+        });
+      } finally {
+        this.loadingMode = null;
+        this.notify();
+      }
+
+      return "sent";
     }
 
     const apiKey = this.getApiKey().trim();
@@ -1589,13 +1812,15 @@ export class LainBrainSession {
       this.addAssistantNotice(
         "Please add your DeepSeek API key in Lain Brain settings."
       );
-      return;
+      return "blocked";
     }
 
     this.messages.push({
       id: this.createMessageId(),
       role: "user",
       content: message,
+      providerId: "deepseek",
+      providerDisplayName: "DeepSeek",
       includeInHistory: true
     });
     this.generalDraft = "";
@@ -1605,7 +1830,7 @@ export class LainBrainSession {
     try {
       await this.refreshActiveNoteContext();
 
-      const rawResponse = await askDeepSeek(
+      const rawResponse = await this.askText(
         apiKey,
         this.getConversationHistory(),
         this.activeNoteContext
@@ -1619,6 +1844,8 @@ export class LainBrainSession {
         id: this.createMessageId(),
         role: "assistant",
         content: response,
+        providerId: "deepseek",
+        providerDisplayName: "DeepSeek",
         includeInHistory: true
       });
     } catch {
@@ -1633,8 +1860,9 @@ export class LainBrainSession {
       this.loadingMode = null;
       this.notify();
     }
-  }
 
+    return "sent";
+  }
   private async sendSelectionDiscussion(): Promise<void> {
     const context = this.selectionEditContext;
 
@@ -2061,7 +2289,7 @@ export class LainBrainSession {
       .map((message) => ({
         id: message.id,
         role: message.role,
-        content: message.content
+        content: getMessageContentForModel(message)
       }));
   }
 
@@ -2380,6 +2608,17 @@ export class LainBrainSession {
       listener();
     }
   }
+}
+
+function getMessageContentForModel(message: StoredMessage): string {
+  const attachment = message.attachment;
+
+  if (attachment === undefined) {
+    return message.content;
+  }
+
+  return message.content + "\n\n" +
+    `Source attachment: ${attachment.filename} (analyzed with ${attachment.providerDisplayName})`;
 }
 
 

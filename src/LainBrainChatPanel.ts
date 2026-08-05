@@ -1,11 +1,20 @@
 import type { App } from "obsidian";
+import { Modal, setIcon } from "obsidian";
 import { LainBrainMarkdownRenderBatch } from "./LainBrainMarkdownRenderer";
-import type { LainBrainSession } from "./LainBrainSession";
+import type {
+  LainBrainImageAttachmentMetadata,
+  LainBrainSession,
+  PendingVisionImage
+} from "./LainBrainSession";
 
 export class LainBrainChatPanel {
   private readonly transcriptEl: HTMLDivElement;
   private readonly messagesEl: HTMLDivElement;
   private readonly input: HTMLTextAreaElement;
+  private readonly inputPrefix: HTMLSpanElement;
+  private readonly attachmentPreviewEl: HTMLDivElement;
+  private readonly attachmentButton: HTMLButtonElement;
+  private readonly fileInput: HTMLInputElement;
   private readonly noteLabel: HTMLElement;
   private readonly clearButton: HTMLButtonElement;
   private readonly selectionContextEl: HTMLDivElement;
@@ -14,14 +23,16 @@ export class LainBrainChatPanel {
   private renderedTranscriptKey = "";
   private renderedLoadingMode: string | null = null;
   private renderedCandidateLoading = false;
+  private renderedAttachmentFile?: PendingVisionImage["file"];
+  private attachmentObjectUrl?: string;
 
   constructor(
-    app: App,
+    private app: App,
     private containerEl: HTMLElement,
     private session: LainBrainSession,
     large: boolean
   ) {
-    this.markdownRenderer = new LainBrainMarkdownRenderBatch(app);
+    this.markdownRenderer = new LainBrainMarkdownRenderBatch(this.app);
     this.containerEl.empty();
 
     if (large) {
@@ -80,6 +91,9 @@ export class LainBrainChatPanel {
 
     this.messagesEl = this.transcriptEl.createDiv();
 
+    this.attachmentPreviewEl = this.transcriptEl.createDiv();
+    this.attachmentPreviewEl.style.display = "none";
+
     const inputLine = this.transcriptEl.createDiv();
     inputLine.style.display = "flex";
     inputLine.style.alignItems = "flex-start";
@@ -88,11 +102,11 @@ export class LainBrainChatPanel {
       ? "#0c0c0c"
       : "var(--background-secondary)";
 
-    const inputPrefix = inputLine.createSpan({
-      text: "lain> "
+    this.inputPrefix = inputLine.createSpan({
+      text: this.session.userDisplayName + "> "
     });
-    inputPrefix.style.flexShrink = "0";
-    inputPrefix.style.color = large ? "#c586c0" : "inherit";
+    this.inputPrefix.style.flexShrink = "0";
+    this.inputPrefix.style.color = large ? "#c586c0" : "inherit";
 
     this.input = inputLine.createEl("textarea");
     this.input.rows = 1;
@@ -116,6 +130,39 @@ export class LainBrainChatPanel {
     this.input.style.whiteSpace = "pre-wrap";
     this.input.style.overflowWrap = "anywhere";
 
+    this.attachmentButton = inputLine.createEl("button");
+    this.attachmentButton.type = "button";
+    this.attachmentButton.setAttr("aria-label", "Attach image");
+    this.attachmentButton.setAttr("title", "Attach image");
+    setIcon(this.attachmentButton, "paperclip");
+    this.attachmentButton.style.flexShrink = "0";
+    this.attachmentButton.style.width = "24px";
+    this.attachmentButton.style.height = "24px";
+    this.attachmentButton.style.display = "inline-flex";
+    this.attachmentButton.style.alignItems = "center";
+    this.attachmentButton.style.justifyContent = "center";
+    this.attachmentButton.style.padding = "0";
+    this.attachmentButton.style.marginLeft = "0.35rem";
+
+    this.fileInput = inputLine.createEl("input");
+    this.fileInput.type = "file";
+    this.fileInput.accept = "image/png,image/jpeg,image/webp,image/gif";
+    this.fileInput.style.display = "none";
+
+    this.attachmentButton.addEventListener("click", () => {
+      this.fileInput.click();
+    });
+
+    this.fileInput.addEventListener("change", () => {
+      const file = this.fileInput.files?.[0];
+      this.fileInput.value = "";
+
+      if (file !== undefined) {
+        this.session.setPendingVisionImage(file);
+        this.input.focus();
+      }
+    });
+
     this.input.addEventListener("input", () => {
       this.session.setDraft(this.input.value);
       this.resizeInput();
@@ -128,9 +175,7 @@ export class LainBrainChatPanel {
         !event.isComposing
       ) {
         event.preventDefault();
-        void this.session.send().finally(() => {
-          this.input.focus();
-        });
+        void this.sendFromInput();
       }
     });
 
@@ -143,6 +188,7 @@ export class LainBrainChatPanel {
 
   destroy(): void {
     this.unsubscribe();
+    this.revokeAttachmentPreview();
     this.markdownRenderer.destroy();
   }
 
@@ -157,20 +203,28 @@ export class LainBrainChatPanel {
     const loadingMode = this.session.loadingMode;
     const candidateLoading = this.session.candidateLoading;
     const transcriptKey =
+      this.session.userDisplayName + ":" +
+      this.session.brainDisplayName + ":" +
       (selectionContext?.candidateId ?? "general") +
       ":" +
       messages
         .map(
           (message) =>
-            `${message.role}:${message.content}`
+            `${message.role}:${message.content}:` +
+            `${message.attachment?.filename ?? ""}:` +
+            `${message.attachment?.byteSize ?? ""}`
         )
         .join("\u0000");
 
     this.noteLabel.setText(this.session.activeNoteLabel);
+    this.inputPrefix.setText(
+      this.session.userDisplayName + "> "
+    );
     this.clearButton.disabled = this.session.loading;
     this.clearButton.style.display =
       selectionContext === undefined ? "" : "none";
     this.renderSelectionContext();
+    this.renderAttachment();
 
     if (
       this.renderedTranscriptKey !== transcriptKey ||
@@ -181,7 +235,11 @@ export class LainBrainChatPanel {
       this.markdownRenderer.reset();
 
       for (const message of messages) {
-        this.addTranscriptLine(message.role, message.content);
+        this.addTranscriptLine(
+          message.role,
+          message.content,
+          message.attachment
+        );
       }
 
       if (loadingMode === "chat") {
@@ -207,8 +265,102 @@ export class LainBrainChatPanel {
     }
 
     this.input.readOnly = this.session.loading;
+    this.attachmentButton.disabled = this.session.loading;
+    this.attachmentButton.style.display =
+      selectionContext === undefined ? "inline-flex" : "none";
   }
 
+  private async sendFromInput(): Promise<void> {
+    try {
+      const result = await this.session.send();
+
+      if (result === "needs-vision-confirmation") {
+        const provider =
+          this.session.getVisionProviderConfirmation();
+
+        if (provider === null) {
+          return;
+        }
+
+        const confirmed = await confirmVisionProviderSend(
+          this.app,
+          provider.displayName
+        );
+
+        if (confirmed) {
+          await this.session.send(provider.id);
+        } else {
+          this.session.removePendingVisionImage();
+        }
+      }
+    } finally {
+      this.input.focus();
+    }
+  }
+
+  private renderAttachment(): void {
+    const attachment = this.session.getSelectionEditContext() === undefined
+      ? this.session.getPendingVisionImage()
+      : undefined;
+
+    if (attachment?.file === this.renderedAttachmentFile) {
+      return;
+    }
+
+    this.revokeAttachmentPreview();
+    this.attachmentPreviewEl.empty();
+    this.renderedAttachmentFile = attachment?.file;
+
+    if (attachment === undefined) {
+      this.attachmentPreviewEl.style.display = "none";
+      return;
+    }
+
+    this.attachmentPreviewEl.style.display = "flex";
+    this.attachmentPreviewEl.style.alignItems = "center";
+    this.attachmentPreviewEl.style.gap = "0.5rem";
+    this.attachmentPreviewEl.style.padding = "0.45rem";
+    this.attachmentPreviewEl.style.margin = "0.35rem 0";
+    this.attachmentPreviewEl.style.border =
+      "1px solid var(--background-modifier-border)";
+    this.attachmentPreviewEl.style.borderRadius = "4px";
+
+    this.attachmentObjectUrl = URL.createObjectURL(
+      attachment.file as Blob
+    );
+    const preview = this.attachmentPreviewEl.createEl("img");
+    preview.src = this.attachmentObjectUrl;
+    preview.alt = "Pending image preview";
+    preview.style.width = "48px";
+    preview.style.height = "48px";
+    preview.style.objectFit = "cover";
+    preview.style.borderRadius = "3px";
+
+    const details = this.attachmentPreviewEl.createDiv();
+    details.style.flex = "1";
+    details.style.minWidth = "0";
+    details.createDiv({ text: attachment.filename });
+    details.createEl("small", {
+      text: `${attachment.mimeType} · ${formatByteSize(attachment.byteSize)}`
+    });
+
+    const removeButton = this.attachmentPreviewEl.createEl("button", {
+      text: "Remove image"
+    });
+    removeButton.type = "button";
+    removeButton.style.padding = "2px 6px";
+    removeButton.addEventListener("click", () => {
+      this.session.removePendingVisionImage();
+      this.input.focus();
+    });
+  }
+
+  private revokeAttachmentPreview(): void {
+    if (this.attachmentObjectUrl !== undefined) {
+      URL.revokeObjectURL(this.attachmentObjectUrl);
+      this.attachmentObjectUrl = undefined;
+    }
+  }
   private renderSelectionContext(): void {
     const context = this.session.getSelectionEditContext();
 
@@ -278,7 +430,9 @@ export class LainBrainChatPanel {
 
     if (this.session.selectionReplacementLoading) {
       this.selectionContextEl.createEl("p", {
-        text: "brain> Generating replacement..."
+        text:
+          this.session.brainDisplayName +
+          "> Generating replacement..."
       });
     }
 
@@ -361,9 +515,12 @@ export class LainBrainChatPanel {
 
   private addTranscriptLine(
     role: "user" | "assistant",
-    content: string
+    content: string,
+    attachment?: LainBrainImageAttachmentMetadata
   ): void {
-    const prefix = role === "user" ? "lain" : "brain";
+    const prefix = role === "user"
+      ? this.session.userDisplayName
+      : this.session.brainDisplayName;
     const line = this.messagesEl.createDiv();
 
     line.style.display = "flex";
@@ -376,11 +533,22 @@ export class LainBrainChatPanel {
     prefixEl.style.flexShrink = "0";
 
     if (role === "user") {
-      const userContent = line.createSpan();
-      userContent.style.minWidth = "0";
-      userContent.style.whiteSpace = "pre-wrap";
-      userContent.style.overflowWrap = "anywhere";
-      userContent.setText(content);
+      const userContainer = line.createDiv();
+      userContainer.style.minWidth = "0";
+      userContainer.style.whiteSpace = "pre-wrap";
+      userContainer.style.overflowWrap = "anywhere";
+      userContainer.createSpan({ text: content });
+
+      if (attachment !== undefined) {
+        const attachmentLabel = userContainer.createEl("small", {
+          text:
+            `Image: ${attachment.filename} (` +
+            `${formatByteSize(attachment.byteSize)})`
+        });
+        attachmentLabel.style.display = "block";
+        attachmentLabel.style.color = "var(--text-muted)";
+      }
+
       return;
     }
 
@@ -406,6 +574,73 @@ export class LainBrainChatPanel {
   private scrollToNewestMessage(): void {
     this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
   }
+}
+
+function confirmVisionProviderSend(
+  app: App,
+  providerDisplayName: string
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const modal = new Modal(app);
+    let settled = false;
+
+    const settle = (value: boolean): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      resolve(value);
+      modal.close();
+    };
+
+    modal.onOpen = (): void => {
+      modal.titleEl.setText("Send image?");
+      modal.contentEl.createEl("p", {
+        text:
+          `This image will be sent to ${providerDisplayName} for analysis.`
+      });
+
+      const actions = modal.contentEl.createDiv();
+      actions.style.display = "flex";
+      actions.style.justifyContent = "flex-end";
+      actions.style.gap = "0.5rem";
+
+      const cancelButton = actions.createEl("button", {
+        text: "Cancel"
+      });
+      const sendButton = actions.createEl("button", {
+        text: "Send"
+      });
+      sendButton.addClass("mod-cta");
+
+      cancelButton.addEventListener("click", () => settle(false));
+      sendButton.addEventListener("click", () => settle(true));
+    };
+
+    modal.onClose = (): void => {
+      modal.contentEl.empty();
+
+      if (!settled) {
+        settled = true;
+        resolve(false);
+      }
+    };
+
+    modal.open();
+  });
+}
+
+function formatByteSize(byteSize: number): string {
+  if (byteSize < 1024) {
+    return `${byteSize} B`;
+  }
+
+  if (byteSize < 1024 * 1024) {
+    return `${(byteSize / 1024).toFixed(1)} KiB`;
+  }
+
+  return `${(byteSize / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function truncateSelection(value: string): string {

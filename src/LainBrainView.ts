@@ -23,7 +23,8 @@ export class LainBrainView extends ItemView {
     leaf: WorkspaceLeaf,
     private session: LainBrainSession,
     private openLargeChat: () => Promise<void>,
-    private openCandidateView: () => Promise<void>
+    private openCandidateView: () => Promise<void>,
+    private requestNamingOnboarding: () => void
   ) {
     super(leaf);
   }
@@ -33,7 +34,7 @@ export class LainBrainView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Lain Brain";
+    return this.session.workspaceTitle;
   }
 
   getIcon(): string {
@@ -49,7 +50,7 @@ export class LainBrainView extends ItemView {
     header.style.justifyContent = "space-between";
 
     const title = header.createEl("h2", {
-      text: "Lain Brain"
+      text: this.session.workspaceTitle
     });
     title.style.margin = "0";
 
@@ -115,6 +116,7 @@ export class LainBrainView extends ItemView {
     const candidateStatus = this.contentEl.createEl("p");
 
     const updateCandidateControls = (): void => {
+      title.setText(this.session.workspaceTitle);
       generateButton.style.display =
         this.session.hasCompletedExchange()
           ? "inline-block"
@@ -131,7 +133,7 @@ export class LainBrainView extends ItemView {
 
       if (this.session.candidateLoading) {
         candidateStatus.setText(
-          "brain> Organizing candidate notes..."
+          this.session.brainDisplayName + "> Organizing candidate notes..."
         );
       } else if (this.session.candidateError !== null) {
         candidateStatus.setText(this.session.candidateError);
@@ -162,6 +164,7 @@ export class LainBrainView extends ItemView {
     });
 
     this.chatPanel.focus();
+    this.requestNamingOnboarding();
   }
 
   private async generateCandidateWithConfirmation(): Promise<void> {

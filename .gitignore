@@ -1,16 +1,67 @@
-# Development tools
-.vscode/
-.idea/
-
-# Installed npm packages
+# Dependencies
 node_modules/
 
-# Generated plugin files
-main.js
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Obsidian Vault configuration and workspace state
+.obsidian/
+**/.obsidian/
+workspace.json
+workspace-mobile.json
+
+# Test Vaults and local fixtures
+test-vault/
+test-vaults/
+test-vault-*/
+vault-test/
+vault-tests/
+tests/vault/
+tests/vaults/
+
+# Local plugin settings and credentials
+data.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+secrets.*
+api-keys.json
+api-keys.*
+api-key.txt
+apikey.*
+*.secret
+credentials.json
+credentials.*
+
+# Temporary files and transient images
+tmp/
+temp/
+.tmp/
+.temp/
+*.tmp
+*.temp
+*.tmp.png
+*.tmp.jpg
+*.tmp.jpeg
+*.tmp.webp
+*.tmp.gif
+*.temp.png
+*.temp.jpg
+*.temp.jpeg
+*.temp.webp
+*.temp.gif
+
+# Test and tooling output
+coverage/
+*.log
 *.map
 
-# Obsidian local settings
-data.json
-
-# macOS system file
-.DS_Store
+# Manual-installation artifacts are intentionally public:
+# main.js
+# manifest.json

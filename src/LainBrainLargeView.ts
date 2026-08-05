@@ -30,6 +30,7 @@ export class LainBrainLargeView extends ItemView {
   private candidateGroupErrorEl?: HTMLElement;
   private unsubscribe?: () => void;
   private renderedMode?: LainBrainLargeViewMode;
+  private renderedWorkspaceTitle = "";
   private renderedCandidateViewMode?: LainBrainCandidateViewMode;
   private renderedActiveCandidateId: string | null = null;
   private renderedCandidateListKey = "";
@@ -45,7 +46,8 @@ export class LainBrainLargeView extends ItemView {
     leaf: WorkspaceLeaf,
     private session: LainBrainSession,
     private closeLargeView: () => Promise<void>,
-    private openSidebarChat: () => Promise<void>
+    private openSidebarChat: () => Promise<void>,
+    private requestNamingOnboarding: () => void
   ) {
     super(leaf);
     this.candidateMarkdownRenderer =
@@ -57,7 +59,7 @@ export class LainBrainLargeView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Lain Brain Chat";
+    return this.session.workspaceTitle;
   }
 
   getIcon(): string {
@@ -69,6 +71,7 @@ export class LainBrainLargeView extends ItemView {
       this.renderIfNeeded();
     });
     this.renderIfNeeded(true);
+    this.requestNamingOnboarding();
   }
 
   async onClose(): Promise<void> {
@@ -90,7 +93,11 @@ export class LainBrainLargeView extends ItemView {
     const mode = this.session.largeViewMode;
 
     if (mode === "chat") {
-      if (force || this.renderedMode !== "chat") {
+      if (
+        force ||
+        this.renderedMode !== "chat" ||
+        this.renderedWorkspaceTitle !== this.session.workspaceTitle
+      ) {
         this.renderChat();
       }
       return;
@@ -190,9 +197,12 @@ export class LainBrainLargeView extends ItemView {
   }
 
   private renderChat(): void {
-    const chatContainer = this.prepareContent("Lain Brain");
+    const chatContainer = this.prepareContent(
+      this.session.workspaceTitle
+    );
 
     this.renderedMode = "chat";
+    this.renderedWorkspaceTitle = this.session.workspaceTitle;
     this.chatPanel = new LainBrainChatPanel(
       this.app,
       chatContainer,
@@ -288,7 +298,9 @@ export class LainBrainLargeView extends ItemView {
 
     if (this.session.candidateLoading) {
       candidateContainer.createEl("p", {
-        text: "brain> Organizing candidate notes..."
+        text:
+          this.session.brainDisplayName +
+          "> Organizing candidate notes..."
       });
     }
 

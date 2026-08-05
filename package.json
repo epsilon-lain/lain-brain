@@ -2,6 +2,7 @@
   "name": "lain-brain",
   "version": "0.1.0",
   "description": "An AI-assisted personal knowledge modeling plugin.",
+  "license": "MIT",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -9,7 +10,9 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "test:parent-selector": "node tests/create-candidate-note-modal.test.mjs",
     "test:parent-persistence": "node tests/candidate-parent-persistence.test.mjs",
-    "test": "npm run test:parent-selector && npm run test:parent-persistence && npm run test:name-cleanup && npm run test:broken-links",
+    "test": "npm run test:parent-selector && npm run test:parent-persistence && npm run test:name-cleanup && npm run test:broken-links && npm run test:vision && npm run test:naming",
+    "test:vision": "node tests/openai-vision.test.mjs",
+    "test:naming": "node tests/personal-naming.test.mjs",
     "test:name-cleanup": "node tests/note-name-cleanup.test.mjs",
     "test:broken-links": "node tests/broken-link-cleanup.test.mjs"
   },

@@ -18,21 +18,35 @@ import type {
 } from "./LainBrainSession";
 import { LainBrainSettingTab } from "./LainBrainSettingTab";
 import {
-  DEFAULT_SETTINGS,
-  LainBrainSettings
+  LainBrainSettings,
+  migrateLainBrainSettings
 } from "./settings";
+import { getActiveImageProvider } from "./ProviderProfiles";
+import { LainBrainNamingModal } from "./LainBrainNamingModal";
+import {
+  applyPersonalNames,
+  NamingOnboardingSession,
+  resetPersonalNames
+} from "./PersonalNaming";
 
 export default class LainBrainPlugin extends Plugin {
-  settings: LainBrainSettings = { ...DEFAULT_SETTINGS };
+  settings: LainBrainSettings = migrateLainBrainSettings(undefined);
   session!: LainBrainSession;
+  private readonly namingOnboarding =
+    new NamingOnboardingSession();
 
   async onload(): Promise<void> {
     await this.loadSettings();
 
     this.session = new LainBrainSession(
       this.app,
-      () => this.settings.deepSeekApiKey
+      () => this.settings.deepSeekApiKey,
+      () => getActiveImageProvider(
+        this.settings.imageProviderProfiles,
+        this.settings.activeImageProviderId
+      )
     );
+    this.session.setPersonalNamingProvider(() => this.settings);
     await this.session.setActiveFile(
       this.app.workspace.getActiveFile()
     );
@@ -51,7 +65,8 @@ export default class LainBrainPlugin extends Plugin {
         leaf,
         this.session,
         () => this.openLargeLainBrain("chat"),
-        () => this.openLargeLainBrain("candidate")
+        () => this.openLargeLainBrain("candidate"),
+        () => this.requestNamingOnboarding()
       )
     );
 
@@ -61,7 +76,8 @@ export default class LainBrainPlugin extends Plugin {
         leaf,
         this.session,
         () => this.closeLargeLainBrain(leaf),
-        () => this.openLainBrain()
+        () => this.openLainBrain(),
+        () => this.requestNamingOnboarding()
       )
     );
 
@@ -79,15 +95,81 @@ export default class LainBrainPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign(
-      {},
-      DEFAULT_SETTINGS,
+    this.settings = migrateLainBrainSettings(
       await this.loadData()
     );
+    await this.saveData(this.settings);
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  requestNamingOnboarding(): void {
+    if (
+      !this.namingOnboarding.begin(
+        this.settings.hasCompletedNamingOnboarding
+      )
+    ) {
+      return;
+    }
+
+    this.openNamingModal(true);
+  }
+
+  openNamingPersonalization(): void {
+    this.openNamingModal(false);
+  }
+
+  async updatePersonalNames(
+    userName: string,
+    brainName: string
+  ): Promise<string | null> {
+    const error = applyPersonalNames(
+      this.settings,
+      userName,
+      brainName
+    );
+
+    if (error !== null) {
+      return error;
+    }
+
+    await this.saveSettings();
+    this.session.notifyPersonalNamingChanged();
+    return null;
+  }
+
+  async resetNames(): Promise<void> {
+    resetPersonalNames(this.settings);
+    this.namingOnboarding.reset();
+    await this.saveSettings();
+    this.session.notifyPersonalNamingChanged();
+  }
+
+  private openNamingModal(onboarding: boolean): void {
+    new LainBrainNamingModal(
+      this.app,
+      this.settings.userDisplayName,
+      this.settings.brainDisplayName,
+      async (userName, brainName) => {
+        const error = await this.updatePersonalNames(
+          userName,
+          brainName
+        );
+
+        if (error === null && onboarding) {
+          this.namingOnboarding.finish();
+        }
+
+        return error;
+      },
+      () => {
+        if (onboarding) {
+          this.namingOnboarding.skip();
+        }
+      }
+    ).open();
   }
 
   private async openLainBrain(): Promise<void> {

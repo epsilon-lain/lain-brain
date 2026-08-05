@@ -6,6 +6,8 @@ import {
 } from "obsidian";
 import type { App } from "obsidian";
 import { LainBrainChatPanel } from "./LainBrainChatPanel";
+import { NoteNameCleanupModal } from "./NoteNameCleanupModal";
+import { BrokenLinkCleanupModal } from "./BrokenLinkCleanupModal";
 import type {
   CandidateNote,
   LainBrainSession
@@ -99,10 +101,16 @@ export class LainBrainView extends ItemView {
     candidateActions.style.marginTop = "0.75rem";
 
     const generateButton = candidateActions.createEl("button", {
-      text: "整理为候选笔记"
+      text: "Organize into Candidate Notes"
     });
     const previewButton = candidateActions.createEl("button", {
-      text: "查看候选笔记"
+      text: "View Candidate Notes"
+    });
+    const cleanupButton = candidateActions.createEl("button", {
+      text: "Clean Up Names"
+    });
+    const brokenLinksButton = candidateActions.createEl("button", {
+      text: "Clean Up Broken Links"
     });
     const candidateStatus = this.contentEl.createEl("p");
 
@@ -117,13 +125,13 @@ export class LainBrainView extends ItemView {
         ? "inline-block"
         : "none";
       previewButton.setText(
-        `查看候选笔记（${this.session.candidateCount}）`
+        `View Candidate Notes (${this.session.candidateCount})`
       );
       previewButton.disabled = this.session.candidateLoading;
 
       if (this.session.candidateLoading) {
         candidateStatus.setText(
-          "brain> 正在整理候选笔记..."
+          "brain> Organizing candidate notes..."
         );
       } else if (this.session.candidateError !== null) {
         candidateStatus.setText(this.session.candidateError);
@@ -143,6 +151,14 @@ export class LainBrainView extends ItemView {
 
     previewButton.addEventListener("click", () => {
       void this.openCandidateView();
+    });
+
+    cleanupButton.addEventListener("click", () => {
+      new NoteNameCleanupModal(this.app, this.session).open();
+    });
+
+    brokenLinksButton.addEventListener("click", () => {
+      new BrokenLinkCleanupModal(this.app, this.session).open();
     });
 
     this.chatPanel.focus();
@@ -197,11 +213,11 @@ function confirmCandidateOverwrite(
     };
 
     modal.onOpen = (): void => {
-      modal.titleEl.setText("覆盖已修改的候选笔记？");
+      modal.titleEl.setText("Overwrite edited candidate notes?");
       modal.contentEl.createEl("p", {
         text:
-          "以下候选笔记包含你的手动修改。重新整理会覆盖这些" +
-          "修改，是否继续？"
+          "The following candidate notes contain manual edits. Organizing again will overwrite these " +
+          "changes. Continue?"
       });
 
       const list = modal.contentEl.createEl("ul");
@@ -209,9 +225,9 @@ function confirmCandidateOverwrite(
       for (const candidate of candidates) {
         list.createEl("li", {
           text:
-            `${candidate.title}（` +
+            `${candidate.title} (` +
             candidate.primaryConcept.name +
-            "）"
+            ")"
         });
       }
 
@@ -222,10 +238,10 @@ function confirmCandidateOverwrite(
       actions.style.marginTop = "1rem";
 
       const cancelButton = actions.createEl("button", {
-        text: "取消"
+        text: "Cancel"
       });
       const overwriteButton = actions.createEl("button", {
-        text: "确认覆盖"
+        text: "Confirm"
       });
       overwriteButton.addClass("mod-warning");
 

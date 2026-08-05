@@ -5,8 +5,12 @@ import {
   WorkspaceLeaf
 } from "obsidian";
 import { LainBrainChatPanel } from "./LainBrainChatPanel";
+import { CreateCandidateNoteModal } from "./CreateCandidateNoteModal";
+import { CreateCandidateGroupModal } from "./CreateCandidateGroupModal";
+import { DeleteCandidateNoteModal } from "./DeleteCandidateNoteModal";
 import { LainBrainMarkdownRenderBatch } from "./LainBrainMarkdownRenderer";
 import type {
+  CandidateNote,
   LainBrainCandidateViewMode,
   LainBrainLargeViewMode,
   LainBrainSession
@@ -19,6 +23,11 @@ export class LainBrainLargeView extends ItemView {
   private chatPanel?: LainBrainChatPanel;
   private candidateEditor?: HTMLTextAreaElement;
   private candidatePreviewEl?: HTMLDivElement;
+  private candidateCreationStatusEl?: HTMLElement;
+  private candidateCreationErrorEl?: HTMLElement;
+  private candidateParentStatusEl?: HTMLElement;
+  private candidateGroupStatusEl?: HTMLElement;
+  private candidateGroupErrorEl?: HTMLElement;
   private unsubscribe?: () => void;
   private renderedMode?: LainBrainLargeViewMode;
   private renderedCandidateViewMode?: LainBrainCandidateViewMode;
@@ -27,6 +36,8 @@ export class LainBrainLargeView extends ItemView {
   private renderedCandidateMarkdown = "";
   private renderedCandidateLoading = false;
   private renderedCandidateError: string | null = null;
+  private renderedCreatedVaultPath?: string;
+  private renderedCandidateGroupKey = "";
   private readonly candidateMarkdownRenderer:
     LainBrainMarkdownRenderBatch;
 
@@ -65,6 +76,11 @@ export class LainBrainLargeView extends ItemView {
     this.chatPanel = undefined;
     this.candidateEditor = undefined;
     this.candidatePreviewEl = undefined;
+    this.candidateCreationStatusEl = undefined;
+    this.candidateCreationErrorEl = undefined;
+    this.candidateParentStatusEl = undefined;
+    this.candidateGroupStatusEl = undefined;
+    this.candidateGroupErrorEl = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.candidateMarkdownRenderer.destroy();
@@ -92,7 +108,11 @@ export class LainBrainLargeView extends ItemView {
       this.renderedCandidateLoading !==
         this.session.candidateLoading ||
       this.renderedCandidateError !==
-        this.session.candidateError
+        this.session.candidateError ||
+      this.renderedCreatedVaultPath !==
+        this.session.getActiveCandidate()?.createdVaultPath ||
+      this.renderedCandidateGroupKey !==
+        this.getActiveCandidateGroupKey()
     ) {
       this.renderCandidate();
       return;
@@ -106,6 +126,11 @@ export class LainBrainLargeView extends ItemView {
     this.chatPanel = undefined;
     this.candidateEditor = undefined;
     this.candidatePreviewEl = undefined;
+    this.candidateCreationStatusEl = undefined;
+    this.candidateCreationErrorEl = undefined;
+    this.candidateParentStatusEl = undefined;
+    this.candidateGroupStatusEl = undefined;
+    this.candidateGroupErrorEl = undefined;
     this.candidateMarkdownRenderer.destroy();
     this.contentEl.empty();
     this.contentEl.style.display = "flex";
@@ -179,7 +204,7 @@ export class LainBrainLargeView extends ItemView {
 
   private renderCandidate(): void {
     const candidateContainer =
-      this.prepareContent("候选笔记");
+      this.prepareContent("Candidate Notes");
 
     this.renderedMode = "candidate";
     this.renderedCandidateViewMode =
@@ -194,6 +219,10 @@ export class LainBrainLargeView extends ItemView {
       this.session.candidateLoading;
     this.renderedCandidateError =
       this.session.candidateError;
+    this.renderedCreatedVaultPath =
+      this.session.getActiveCandidate()?.createdVaultPath;
+    this.renderedCandidateGroupKey =
+      this.getActiveCandidateGroupKey();
 
     candidateContainer.style.display = "flex";
     candidateContainer.style.flexDirection = "column";
@@ -210,11 +239,11 @@ export class LainBrainLargeView extends ItemView {
     switcher.style.marginBottom = "0.6rem";
 
     switcher.createEl("label", {
-      text: `候选笔记（${candidates.length}）`
+      text: `Candidate Notes (${candidates.length})`
     });
 
     const candidateSelect = switcher.createEl("select");
-    candidateSelect.setAttr("aria-label", "选择候选笔记");
+    candidateSelect.setAttr("aria-label", "Select Candidate Note");
     candidateSelect.style.flex = "1";
     candidateSelect.style.minWidth = "0";
     candidateSelect.style.padding = "4px 8px";
@@ -228,9 +257,7 @@ export class LainBrainLargeView extends ItemView {
 
     for (const candidate of candidates) {
       const option = candidateSelect.createEl("option", {
-        text:
-          `${candidate.title} — ` +
-          candidate.primaryConcept.name,
+        text: candidate.title,
         value: candidate.id
       });
       option.selected =
@@ -243,7 +270,7 @@ export class LainBrainLargeView extends ItemView {
 
     if (activeCandidate === undefined) {
       candidateContainer.createEl("p", {
-        text: "暂无候选笔记。"
+        text: "No candidate notes."
       });
       return;
     }
@@ -254,12 +281,14 @@ export class LainBrainLargeView extends ItemView {
     modeTabs.style.gap = "0.4rem";
     modeTabs.style.marginBottom = "0.75rem";
 
-    this.createModeButton(modeTabs, "编辑", "edit");
-    this.createModeButton(modeTabs, "预览", "preview");
+    this.createModeButton(modeTabs, "Edit", "edit");
+    this.createModeButton(modeTabs, "Preview", "preview");
+    this.renderCandidateGroupActions(modeTabs);
+    this.renderCandidateNoteActions(modeTabs, activeCandidate);
 
     if (this.session.candidateLoading) {
       candidateContainer.createEl("p", {
-        text: "brain> 正在整理候选笔记..."
+        text: "brain> Organizing candidate notes..."
       });
     }
 
@@ -281,6 +310,167 @@ export class LainBrainLargeView extends ItemView {
     } else {
       this.renderCandidatePreview(workspace);
     }
+  }
+
+  private renderCandidateGroupActions(container: HTMLElement): void {
+    const group = this.session.getActiveCandidateGroup();
+
+    if (group === undefined) {
+      return;
+    }
+
+    const actions = container.createDiv();
+    actions.style.display = "flex";
+    actions.style.alignItems = "center";
+    actions.style.flexWrap = "wrap";
+    actions.style.gap = "0.4rem";
+
+    this.candidateGroupStatusEl = actions.createEl("small");
+    this.candidateGroupErrorEl = actions.createEl("small");
+    this.candidateGroupErrorEl.style.color = "var(--text-error)";
+
+    if (group.parentVaultPath === undefined) {
+      const blocker =
+        this.session.getCandidateGroupCreationBlocker(group.id);
+      const createButton = actions.createEl("button", {
+        text: "Create Group"
+      });
+      createButton.disabled =
+        this.session.candidateLoading || blocker !== null;
+      createButton.addEventListener("click", () => {
+        new CreateCandidateGroupModal(
+          this.app,
+          this.session,
+          group.id
+        ).open();
+      });
+
+      if (blocker !== null) {
+        this.candidateGroupErrorEl.setText(blocker);
+      }
+    } else {
+      this.candidateGroupStatusEl.setText(
+        `Group created — ${group.parentVaultPath}`
+      );
+      const openButton = actions.createEl("button", {
+        text: "Open Parent Note"
+      });
+      openButton.addEventListener("click", () => {
+        void this.session
+          .openCreatedCandidateGroup(group.id)
+          .then((opened) => {
+            if (!opened) {
+              this.candidateGroupErrorEl?.setText(
+                "Unable to open parent note"
+              );
+            }
+          });
+      });
+    }
+  }
+
+  private renderCandidateNoteActions(
+    container: HTMLElement,
+    candidate: CandidateNote
+  ): void {
+    const actions = container.createDiv();
+    actions.style.display = "flex";
+    actions.style.alignItems = "center";
+    actions.style.flexWrap = "wrap";
+    actions.style.gap = "0.4rem";
+    actions.style.marginLeft = "auto";
+
+    this.candidateCreationStatusEl = actions.createEl("small");
+    this.candidateCreationErrorEl = actions.createEl("small");
+    this.candidateCreationErrorEl.style.color = "var(--text-error)";
+    this.candidateParentStatusEl = actions.createEl("small");
+
+    if (candidate.createdVaultPath === undefined) {
+      const createButton = actions.createEl("button", {
+        text: "Create Note"
+      });
+      createButton.disabled = this.session.candidateLoading;
+      createButton.addEventListener("click", () => {
+        new CreateCandidateNoteModal(
+          this.app,
+          this.session,
+          candidate.id,
+          candidate.title
+        ).open();
+      });
+    } else {
+      const openButton = actions.createEl("button", {
+        text: "Open Note"
+      });
+      openButton.addEventListener("click", () => {
+        void this.session
+          .openCreatedCandidateNote(candidate.id)
+          .then((opened) => {
+            if (!opened) {
+              this.candidateCreationErrorEl?.setText(
+                "Unable to open note"
+              );
+            }
+          });
+      });
+
+      const deleteButton = actions.createEl("button", {
+        text: "Delete Note"
+      });
+      deleteButton.addEventListener("click", () => {
+        new DeleteCandidateNoteModal(
+          this.app,
+          this.session,
+          candidate.id
+        ).open();
+      });
+    }
+
+    this.syncCandidateCreatedState();
+    this.syncCandidateParentStatus();
+  }
+
+  private syncCandidateParentStatus(): void {
+    const candidate = this.session.getActiveCandidate();
+
+    if (
+      candidate === undefined ||
+      this.candidateParentStatusEl === undefined
+    ) {
+      return;
+    }
+
+    const status = this.session.getCandidateParentStatus(candidate.id);
+    this.candidateParentStatusEl.setText(status);
+    this.candidateParentStatusEl.style.color =
+      status.startsWith("Suggested parent is unavailable")
+        ? "var(--text-error)"
+        : "var(--text-muted)";
+  }
+
+  private syncCandidateCreatedState(): void {
+    const candidate = this.session.getActiveCandidate();
+
+    if (
+      candidate === undefined ||
+      this.candidateCreationStatusEl === undefined
+    ) {
+      return;
+    }
+
+    if (candidate.createdVaultPath === undefined) {
+      this.candidateCreationStatusEl.setText(
+        this.session.getCandidateVaultActionMessage(candidate.id)
+      );
+      return;
+    }
+
+    const changed =
+      candidate.createdRevision !== candidate.revision;
+    this.candidateCreationStatusEl.setText(
+      `Note created — ${candidate.createdVaultPath}` +
+      (changed ? " — Changed since creation" : "")
+    );
   }
 
   private createModeButton(
@@ -319,7 +509,7 @@ export class LainBrainLargeView extends ItemView {
 
     this.candidateEditor = editor;
     editor.value = this.session.candidateNoteMarkdown;
-    editor.setAttr("aria-label", "编辑候选笔记 Markdown");
+    editor.setAttr("aria-label", "Edit Candidate Note Markdown");
     editor.setAttr("wrap", "soft");
     editor.spellcheck = true;
     editor.disabled = this.session.candidateLoading;
@@ -373,7 +563,7 @@ export class LainBrainLargeView extends ItemView {
 
       menu.addItem((item) => {
         item
-          .setTitle("在 Lain Brain Chat 中讨论此选区")
+          .setTitle("Discuss Selection in Chat")
           .setIcon("message-circle")
           .onClick(() => {
             const started =
@@ -411,7 +601,7 @@ export class LainBrainLargeView extends ItemView {
     previewEl.style.borderRadius = "4px";
 
     if (this.session.candidateNoteMarkdown === "") {
-      previewEl.setText("候选笔记为空。");
+      previewEl.setText("Candidate note is empty.");
       return;
     }
 
@@ -420,6 +610,24 @@ export class LainBrainLargeView extends ItemView {
       this.session.candidateNoteMarkdown,
       previewEl,
       this.session.activeNoteSourcePath
+    );
+  }
+
+  private getActiveCandidateGroupKey(): string {
+    const group = this.session.getActiveCandidateGroup();
+
+    if (group === undefined) {
+      return "";
+    }
+
+    return (
+      `${group.id}:${group.revision}:` +
+      `${group.parentVaultPath ?? ""}:` +
+      this.session.getCandidatesForGroup(group.id)
+        .map((candidate) =>
+          `${candidate.id}:${candidate.createdVaultPath ?? ""}`
+        )
+        .join("|")
     );
   }
 
@@ -435,6 +643,9 @@ export class LainBrainLargeView extends ItemView {
 
   private syncCandidateContent(): void {
     const markdown = this.session.candidateNoteMarkdown;
+
+    this.syncCandidateCreatedState();
+    this.syncCandidateParentStatus();
 
     if (this.session.candidateViewMode === "edit") {
       const editor = this.candidateEditor;
@@ -469,7 +680,7 @@ export class LainBrainLargeView extends ItemView {
         this.candidateMarkdownRenderer.reset();
 
         if (markdown === "") {
-          previewEl.setText("候选笔记为空。");
+          previewEl.setText("Candidate note is empty.");
         } else {
           this.candidateMarkdownRenderer.render(
             markdown,

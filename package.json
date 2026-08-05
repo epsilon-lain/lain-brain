@@ -6,7 +6,12 @@
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test:parent-selector": "node tests/create-candidate-note-modal.test.mjs",
+    "test:parent-persistence": "node tests/candidate-parent-persistence.test.mjs",
+    "test": "npm run test:parent-selector && npm run test:parent-persistence && npm run test:name-cleanup && npm run test:broken-links",
+    "test:name-cleanup": "node tests/note-name-cleanup.test.mjs",
+    "test:broken-links": "node tests/broken-link-cleanup.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.17",

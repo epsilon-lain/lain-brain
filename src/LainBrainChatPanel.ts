@@ -41,7 +41,7 @@ export class LainBrainChatPanel {
     this.noteLabel = toolbar.createEl("small");
 
     this.clearButton = toolbar.createEl("button", {
-      text: "清除当前聊天"
+      text: "Clear Chat"
     });
     this.clearButton.style.padding = "2px 6px";
     this.clearButton.style.fontSize = "0.75rem";
@@ -191,7 +191,7 @@ export class LainBrainChatPanel {
       if (candidateLoading) {
         this.addTranscriptLine(
           "assistant",
-          "正在整理候选笔记..."
+          "Organizing candidate notes..."
         );
       }
 
@@ -233,8 +233,8 @@ export class LainBrainChatPanel {
     );
     const title = this.selectionContextEl.createEl("strong", {
       text:
-        "正在讨论候选笔记：" +
-        (candidate?.title ?? "未知候选笔记")
+        "Discussing candidate note: " +
+        (candidate?.title ?? "Unknown candidate note")
     });
     title.style.display = "block";
 
@@ -243,7 +243,7 @@ export class LainBrainChatPanel {
     selection.style.whiteSpace = "pre-wrap";
     selection.style.overflowWrap = "anywhere";
     selection.setText(
-      "选区：" + truncateSelection(context.originalText)
+      "Selection: " + truncateSelection(context.originalText)
     );
 
     const actions = this.selectionContextEl.createDiv();
@@ -253,7 +253,7 @@ export class LainBrainChatPanel {
     actions.style.marginTop = "0.5rem";
 
     const cancelButton = actions.createEl("button", {
-      text: "取消选区讨论"
+      text: "Cancel Selection Discussion"
     });
     cancelButton.style.padding = "2px 6px";
     cancelButton.addEventListener("click", () => {
@@ -267,7 +267,7 @@ export class LainBrainChatPanel {
 
     if (hasRequest && context.pendingReplacement === undefined) {
       const generateButton = actions.createEl("button", {
-        text: "生成选区修改候选"
+        text: "Generate Replacement"
       });
       generateButton.style.padding = "2px 6px";
       generateButton.disabled = this.session.loading;
@@ -278,7 +278,7 @@ export class LainBrainChatPanel {
 
     if (this.session.selectionReplacementLoading) {
       this.selectionContextEl.createEl("p", {
-        text: "brain> 正在生成选区修改候选..."
+        text: "brain> Generating replacement..."
       });
     }
 
@@ -302,13 +302,13 @@ export class LainBrainChatPanel {
 
     this.createDiffBlock(
       diff,
-      "原选区",
+      "Original Selection",
       context.originalText,
       "var(--background-modifier-error)"
     );
     this.createDiffBlock(
       diff,
-      "建议替换文本",
+      "Suggested Replacement",
       context.pendingReplacement,
       "var(--background-modifier-success)"
     );
@@ -319,7 +319,7 @@ export class LainBrainChatPanel {
     decisionActions.style.marginTop = "0.6rem";
 
     const applyButton = decisionActions.createEl("button", {
-      text: "应用修改"
+      text: "Apply Change"
     });
     applyButton.addClass("mod-cta");
     applyButton.addEventListener("click", () => {
@@ -327,7 +327,7 @@ export class LainBrainChatPanel {
     });
 
     const discardButton = decisionActions.createEl("button", {
-      text: "放弃"
+      text: "Discard"
     });
     discardButton.addEventListener("click", () => {
       this.session.discardSelectionReplacement();

@@ -17,7 +17,9 @@ import type {
 import {
   buildCandidateNoteMarkdown,
   findConceptEvidence,
-  haveSameCandidateConcept
+  haveSameCandidateConcept,
+  normalizeCandidatePrimaryConcept,
+  normalizeCandidateTitle
 } from "./CandidateNoteRelations";
 import type {
   CandidatePrimaryConcept,
@@ -27,6 +29,29 @@ import {
   appendLatexFormatWarning,
   reviewLatexFormatting
 } from "./LatexFormatReview";
+import {
+  isSafeWikiLinkTarget,
+  suggestCandidateFileName,
+  validateCandidateNotePath,
+  validateExistingVaultMarkdownPath
+} from "./CandidateNoteVault";
+import {
+  addCandidateParentLink,
+  addCandidateChildLink,
+  buildCandidateGroupParentMarkdown,
+  deriveConciseCandidateGroupTitle,
+  extractCandidateParentHint,
+  getMarkdownLinkTarget,
+  getVaultPathLinkTarget,
+  isValidCandidateGroupTitle,
+  removeCandidateChildLink,
+  setCandidateParentLink,
+  stripCandidateParentLinks
+} from "./CandidateGroupVault";
+import {
+  createVaultParentGroupId,
+  discoverCandidateParents
+} from "./CandidateParentDiscovery";
 
 export interface LainBrainTranscriptMessage {
   role: "user" | "assistant";
@@ -47,7 +72,73 @@ export interface CandidateNote {
   viewMode: LainBrainCandidateViewMode;
   userEdited: boolean;
   revision: number;
+  createdVaultPath?: string;
+  createdRevision?: number;
+  groupId?: string;
+  parentGroupId?: string;
+  parentVaultPath?: string;
 }
+
+export interface CandidateGroup {
+  id: string;
+  title: string;
+  sourceMessageIds: string[];
+  candidateIds: string[];
+  revision: number;
+  createdVaultPath?: string;
+  createdRevision?: number;
+  parentVaultPath?: string;
+  parentDisplayTitle?: string;
+}
+
+export interface CandidateParentSelection {
+  groupId: string;
+  parentVaultPath: string;
+}
+
+export type CandidateNoteCreateResult =
+  | { ok: true; path: string }
+  | {
+      ok: false;
+      error:
+        | "Invalid file name"
+        | "Invalid destination folder"
+        | "File already exists"
+        | "Candidate is empty"
+        | "Candidate no longer exists"
+        | "Pending replacement must be resolved first"
+        | "Note already created"
+        | "Suggested parent is unavailable. Choose a parent before creating this note."
+        | "Vault write failed";
+    };
+
+export type CandidateGroupCreateResult =
+  | { ok: true; parentPath: string; childPaths: string[] }
+  | {
+      ok: false;
+      error:
+        | "Candidate group no longer exists"
+        | "Invalid parent title"
+        | "Invalid file name"
+        | "Invalid destination folder"
+        | "File already exists"
+        | "Candidate is empty"
+        | "Pending replacement must be resolved first"
+        | "Group already created"
+        | "A group cannot be created while some child notes already exist individually."
+        | "Vault write failed";
+    };
+
+export type CandidateNoteTrashResult =
+  | { ok: true; message: string; warning?: string }
+  | {
+      ok: false;
+      error:
+        | "Candidate note no longer exists"
+        | "Invalid note path"
+        | "Note not found"
+        | "Unable to move note to Trash";
+    };
 
 export interface SelectionEditContext {
   candidateId: string;
@@ -84,7 +175,10 @@ export class LainBrainSession {
   private noteRevision = 0;
   private nextMessageSequence = 0;
   private nextCandidateSequence = 0;
+  private nextCandidateGroupSequence = 0;
   private candidates: CandidateNote[] = [];
+  private candidateGroups: CandidateGroup[] = [];
+  private candidateVaultActionMessages = new Map<string, string>();
   private pendingCandidateExtraction?: PendingCandidateExtraction;
   private overwriteConflictIds: string[] = [];
 
@@ -146,6 +240,275 @@ export class LainBrainSession {
     return this.candidates;
   }
 
+  getLainBrainManagedVaultPaths(): string[] {
+    const paths = new Set<string>();
+
+    for (const candidate of this.candidates) {
+      if (candidate.createdVaultPath !== undefined) {
+        paths.add(candidate.createdVaultPath);
+      }
+    }
+
+    return [...paths];
+  }
+
+  updateVaultPathReferences(
+    previousPath: string,
+    nextPath: string
+  ): void {
+    for (const candidate of this.candidates) {
+      if (candidate.createdVaultPath === previousPath) {
+        candidate.createdVaultPath = nextPath;
+      }
+
+      if (candidate.parentVaultPath === previousPath) {
+        candidate.parentVaultPath = nextPath;
+      }
+    }
+
+    for (const group of this.candidateGroups) {
+      if (group.createdVaultPath === previousPath) {
+        group.createdVaultPath = nextPath;
+      }
+
+      if (group.parentVaultPath === previousPath) {
+        group.parentVaultPath = nextPath;
+      }
+    }
+
+    this.notify();
+  }
+
+  getCandidateGroups(): readonly CandidateGroup[] {
+    return this.candidateGroups;
+  }
+
+  getCandidateGroup(groupId: string): CandidateGroup | undefined {
+    const group = this.candidateGroups.find(
+      (candidateGroup) => candidateGroup.id === groupId
+    );
+
+    if (group !== undefined) {
+      this.migrateCandidateGroupParentIdentity(group);
+    }
+
+    return group;
+  }
+
+  getCandidatesForGroup(groupId: string): CandidateNote[] {
+    const group = this.getCandidateGroup(groupId);
+
+    if (group === undefined) {
+      return [];
+    }
+
+    const ids = new Set(group.candidateIds);
+
+    return this.candidates.filter((candidate) => ids.has(candidate.id));
+  }
+
+  getActiveCandidateGroup(): CandidateGroup | undefined {
+    const groupId = this.getActiveCandidate()?.groupId;
+
+    return groupId === undefined
+      ? undefined
+      : this.getCandidateGroup(groupId);
+  }
+
+  getAvailableCandidateParentGroups(): CandidateGroup[] {
+    return this.candidateGroups.filter((group) => {
+      this.migrateCandidateGroupParentIdentity(group);
+
+      return (
+        group.parentVaultPath !== undefined &&
+        this.app.vault.getFileByPath(group.parentVaultPath) !== null
+      );
+    });
+  }
+
+  async discoverCandidateParentGroups(): Promise<CandidateGroup[]> {
+    const discovered = await discoverCandidateParents(this.app);
+
+    for (const parent of discovered) {
+      let group = this.candidateGroups.find(
+        (item) =>
+          item.id === parent.groupId ||
+          item.parentVaultPath === parent.parentVaultPath ||
+          item.createdVaultPath === parent.parentVaultPath
+      );
+
+      if (group === undefined) {
+        group = {
+          id: parent.groupId,
+          title: parent.parentDisplayTitle,
+          sourceMessageIds: [],
+          candidateIds: [],
+          revision: 0
+        };
+        this.candidateGroups.push(group);
+      }
+
+      group.parentVaultPath = parent.parentVaultPath;
+      group.parentDisplayTitle = parent.parentDisplayTitle;
+      group.createdVaultPath ??= parent.parentVaultPath;
+    }
+
+    return this.getAvailableCandidateParentGroups();
+  }
+
+  getExistingMarkdownParentFiles(): TFile[] {
+    return this.app.vault.getMarkdownFiles();
+  }
+
+  registerExistingNoteParent(
+    parentVaultPath: string
+  ): CandidateGroup | undefined {
+    const safePath = validateExistingVaultMarkdownPath(parentVaultPath);
+
+    if (safePath === null) {
+      return undefined;
+    }
+
+    const file = this.app.vault.getFileByPath(safePath);
+
+    if (file === null) {
+      return undefined;
+    }
+
+    const existing = this.candidateGroups.find(
+      (group) => group.parentVaultPath === safePath
+    );
+
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const group: CandidateGroup = {
+      id: createVaultParentGroupId("existing", safePath),
+      title: file.basename,
+      sourceMessageIds: [],
+      candidateIds: [],
+      revision: 0,
+      createdVaultPath: safePath,
+      parentVaultPath: safePath,
+      parentDisplayTitle: file.basename
+    };
+    this.candidateGroups.push(group);
+    return group;
+  }
+
+  getCandidateParentStatus(candidateId: string): string {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+
+    if (candidate?.parentGroupId === undefined) {
+      return "";
+    }
+
+    const group = this.getCandidateGroup(candidate.parentGroupId);
+    const path = group?.parentVaultPath ?? candidate.parentVaultPath;
+
+    if (
+      group === undefined ||
+      path === undefined ||
+      this.app.vault.getFileByPath(path) === null
+    ) {
+      return "Suggested parent is unavailable. Choose a parent before creating this note.";
+    }
+
+    return `Parent: ${group.parentDisplayTitle ?? group.title}`;
+  }
+
+  setCandidateParent(
+    candidateId: string,
+    groupId: string | null
+  ): boolean {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+
+    if (
+      candidate === undefined ||
+      candidate.createdVaultPath !== undefined
+    ) {
+      return false;
+    }
+
+    if (groupId === null) {
+      const markdown = stripCandidateParentLinks(candidate.markdown);
+
+      if (markdown !== candidate.markdown) {
+        candidate.markdown = markdown;
+        candidate.revision += 1;
+        candidate.userEdited = true;
+      }
+
+      candidate.parentGroupId = undefined;
+      candidate.parentVaultPath = undefined;
+      this.candidateVaultActionMessages.delete(candidate.id);
+      this.notify();
+      return true;
+    }
+
+    const group = this.getCandidateGroup(groupId);
+    const path = group?.parentVaultPath;
+
+    if (
+      group === undefined ||
+      path === undefined ||
+      this.app.vault.getFileByPath(path) === null
+    ) {
+      this.candidateVaultActionMessages.set(
+        candidate.id,
+        "Suggested parent is unavailable. Choose a parent before creating this note."
+      );
+      this.notify();
+      return false;
+    }
+
+    const displayTitle = group.parentDisplayTitle ?? group.title;
+    const markdown = setCandidateParentLink(
+      candidate.markdown,
+      getVaultPathLinkTarget(path),
+      displayTitle
+    );
+
+    if (markdown !== candidate.markdown) {
+      candidate.markdown = markdown;
+      candidate.revision += 1;
+      candidate.userEdited = true;
+    }
+
+    candidate.parentGroupId = group.id;
+    candidate.parentVaultPath = path;
+    this.candidateVaultActionMessages.delete(candidate.id);
+    this.notify();
+    return true;
+  }
+
+  getCandidateVaultActionMessage(candidateId: string): string {
+    return this.candidateVaultActionMessages.get(candidateId) ?? "";
+  }
+
+  getCandidateGroupCreationBlocker(groupId: string): string | null {
+    const group = this.getCandidateGroup(groupId);
+
+    if (group === undefined) {
+      return "Candidate group no longer exists";
+    }
+
+    if (
+      this.getCandidatesForGroup(groupId).some(
+        (candidate) => candidate.createdVaultPath !== undefined
+      )
+    ) {
+      return "A group cannot be created while some child notes already exist individually.";
+    }
+
+    return null;
+  }
+
   getActiveCandidate(): CandidateNote | undefined {
     if (this.activeCandidateId === null) {
       return undefined;
@@ -176,12 +539,14 @@ export class LainBrainSession {
       return;
     }
 
+    const legacyTitle = normalizeCandidateTitle(
+      extractCandidateTitle(markdown, "旧候选笔记")
+    );
     const primaryConceptName =
-      extractCandidateCoreConcept(markdown) ??
-      extractCandidateTitle(markdown, "旧候选笔记");
+      extractCandidateCoreConcept(markdown) ?? legacyTitle;
     const candidate: CandidateNote = {
       id: this.createCandidateId(),
-      title: extractCandidateTitle(markdown, "旧候选笔记"),
+      title: legacyTitle,
       primaryConcept: {
         name: primaryConceptName,
         aliases: [primaryConceptName]
@@ -222,6 +587,614 @@ export class LainBrainSession {
     return this.selectionEditContext;
   }
 
+  hasPendingSelectionReplacement(candidateId: string): boolean {
+    return (
+      this.selectionEditContext?.candidateId === candidateId &&
+      this.selectionEditContext.pendingReplacement !== undefined
+    );
+  }
+
+  async createCandidateNote(
+    candidateId: string,
+    fileName: string,
+    destinationFolder: string,
+    parentSelection?: CandidateParentSelection | null
+  ): Promise<CandidateNoteCreateResult> {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+
+    if (
+      candidate === undefined ||
+      this.activeCandidateId !== candidateId
+    ) {
+      return { ok: false, error: "Candidate no longer exists" };
+    }
+
+    if (candidate.createdVaultPath !== undefined) {
+      return { ok: false, error: "Note already created" };
+    }
+
+    if (candidate.markdown.trim() === "") {
+      return { ok: false, error: "Candidate is empty" };
+    }
+
+    if (this.hasPendingSelectionReplacement(candidateId)) {
+      return {
+        ok: false,
+        error: "Pending replacement must be resolved first"
+      };
+    }
+
+    const requestedGroupId = parentSelection === undefined
+      ? candidate.parentGroupId
+      : parentSelection?.groupId;
+    const requestedParentPath = parentSelection === undefined
+      ? candidate.parentVaultPath
+      : parentSelection?.parentVaultPath;
+    const parentGroup = requestedGroupId === undefined
+      ? undefined
+      : this.getCandidateGroup(requestedGroupId);
+    const hasSuggestedParent =
+      requestedGroupId !== undefined ||
+      requestedParentPath !== undefined;
+    const parentPath = parentGroup?.parentVaultPath;
+    const parentFile = parentPath === undefined
+      ? null
+      : this.app.vault.getFileByPath(parentPath);
+
+    if (
+      hasSuggestedParent &&
+      (
+        parentGroup === undefined ||
+        parentPath === undefined ||
+        parentPath !== requestedParentPath ||
+        parentFile === null
+      )
+    ) {
+      this.candidateVaultActionMessages.set(
+        candidate.id,
+        "Suggested parent is unavailable. Choose a parent before creating this note."
+      );
+      this.notify();
+      return {
+        ok: false,
+        error: "Suggested parent is unavailable. Choose a parent before creating this note."
+      };
+    }
+
+    const markdown = parentGroup !== undefined && parentPath !== undefined
+      ? setCandidateParentLink(
+          candidate.markdown,
+          getVaultPathLinkTarget(parentPath),
+          parentGroup.parentDisplayTitle ?? parentGroup.title
+        )
+      : parentSelection === null
+        ? stripCandidateParentLinks(candidate.markdown)
+        : candidate.markdown;
+
+    const pathResult = validateCandidateNotePath(
+      fileName,
+      destinationFolder
+    );
+
+    if (!pathResult.ok) {
+      return pathResult;
+    }
+
+    if (
+      this.app.vault.getAbstractFileByPath(pathResult.vaultPath) !==
+      null
+    ) {
+      return { ok: false, error: "File already exists" };
+    }
+
+    const revision = candidate.revision;
+    const candidateMarkdownSnapshot = candidate.markdown;
+    let parentUpdate:
+      | { file: TFile; markdown: string; added: boolean }
+      | undefined;
+
+    if (parentFile !== null) {
+      try {
+        const currentParentMarkdown =
+          await this.app.vault.cachedRead(parentFile);
+        const updated = addCandidateChildLink(
+          currentParentMarkdown,
+          getVaultPathLinkTarget(pathResult.vaultPath),
+          candidate.title
+        );
+        parentUpdate = {
+          file: parentFile,
+          markdown: updated.markdown,
+          added: updated.added
+        };
+      } catch {
+        return { ok: false, error: "Vault write failed" };
+      }
+    }
+
+    let createdFile: TFile | undefined;
+
+    try {
+      await this.ensureVaultFolder(pathResult.folderPath);
+
+      const currentCandidate = this.candidates.find(
+        (item) => item.id === candidateId
+      );
+
+      if (
+        currentCandidate === undefined ||
+        this.activeCandidateId !== candidateId ||
+        currentCandidate.revision !== revision ||
+        currentCandidate.markdown !== candidateMarkdownSnapshot
+      ) {
+        return { ok: false, error: "Candidate no longer exists" };
+      }
+
+      if (this.hasPendingSelectionReplacement(candidateId)) {
+        return {
+          ok: false,
+          error: "Pending replacement must be resolved first"
+        };
+      }
+
+      if (
+        this.app.vault.getAbstractFileByPath(pathResult.vaultPath) !==
+        null
+      ) {
+        return { ok: false, error: "File already exists" };
+      }
+
+      if (
+        parentPath !== undefined &&
+        this.app.vault.getFileByPath(parentPath) === null
+      ) {
+        return {
+          ok: false,
+          error: "Suggested parent is unavailable. Choose a parent before creating this note."
+        };
+      }
+
+      createdFile = await this.app.vault.create(
+        pathResult.vaultPath,
+        markdown
+      );
+
+      if (parentUpdate?.added === true) {
+        await this.app.vault.modify(
+          parentUpdate.file,
+          parentUpdate.markdown
+        );
+      }
+
+      currentCandidate.createdVaultPath = pathResult.vaultPath;
+
+      if (currentCandidate.markdown !== markdown) {
+        currentCandidate.markdown = markdown;
+        currentCandidate.revision += 1;
+      }
+
+      currentCandidate.createdRevision = currentCandidate.revision;
+      currentCandidate.parentGroupId = parentGroup?.id;
+      currentCandidate.parentVaultPath = parentPath;
+      this.candidateVaultActionMessages.delete(currentCandidate.id);
+      this.notify();
+
+      return { ok: true, path: pathResult.vaultPath };
+    } catch (error) {
+      if (createdFile !== undefined) {
+        try {
+          await this.app.vault.trash(createdFile, false);
+        } catch {
+          // The Vault API made its best recoverable rollback attempt.
+        }
+
+        return { ok: false, error: "Vault write failed" };
+      }
+
+      if (
+        error instanceof Error &&
+        error.message === "invalid-destination-folder"
+      ) {
+        return { ok: false, error: "Invalid destination folder" };
+      }
+
+      if (
+        this.app.vault.getAbstractFileByPath(pathResult.vaultPath) !==
+        null
+      ) {
+        return { ok: false, error: "File already exists" };
+      }
+
+      return { ok: false, error: "Vault write failed" };
+    }
+  }
+  async openCreatedCandidateNote(candidateId: string): Promise<boolean> {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+    const path = candidate?.createdVaultPath;
+
+    if (path === undefined) {
+      return false;
+    }
+
+    const file = this.app.vault.getFileByPath(path);
+
+    if (file === null) {
+      return false;
+    }
+
+    try {
+      await this.app.workspace.getLeaf("tab").openFile(file);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async createCandidateGroup(
+    groupId: string,
+    parentTitle: string,
+    parentFileName: string,
+    destinationFolder: string
+  ): Promise<CandidateGroupCreateResult> {
+    const group = this.getCandidateGroup(groupId);
+
+    if (
+      group === undefined ||
+      this.getActiveCandidateGroup()?.id !== groupId
+    ) {
+      return { ok: false, error: "Candidate group no longer exists" };
+    }
+
+    if (group.createdVaultPath !== undefined) {
+      return { ok: false, error: "Group already created" };
+    }
+
+    if (!isValidCandidateGroupTitle(parentTitle)) {
+      return { ok: false, error: "Invalid parent title" };
+    }
+
+    const children = this.getCandidatesForGroup(groupId);
+
+    if (
+      children.length < 2 ||
+      children.length !== group.candidateIds.length
+    ) {
+      return { ok: false, error: "Candidate group no longer exists" };
+    }
+
+    if (children.some((candidate) => candidate.createdVaultPath !== undefined)) {
+      return {
+        ok: false,
+        error: "A group cannot be created while some child notes already exist individually."
+      };
+    }
+
+    if (children.some((candidate) => candidate.markdown.trim() === "")) {
+      return { ok: false, error: "Candidate is empty" };
+    }
+
+    if (
+      children.some((candidate) =>
+        this.hasPendingSelectionReplacement(candidate.id)
+      )
+    ) {
+      return {
+        ok: false,
+        error: "Pending replacement must be resolved first"
+      };
+    }
+
+    const parentPathResult = validateCandidateNotePath(
+      parentFileName,
+      destinationFolder
+    );
+
+    if (!parentPathResult.ok) {
+      return parentPathResult;
+    }
+
+    const parentLinkTarget = getVaultPathLinkTarget(
+      parentPathResult.vaultPath
+    );
+
+    if (!isSafeWikiLinkTarget(parentLinkTarget)) {
+      return { ok: false, error: "Invalid file name" };
+    }
+
+    const childPlans = children.map((candidate) => {
+      const pathResult = validateCandidateNotePath(
+        suggestCandidateFileName(candidate.title),
+        destinationFolder
+      );
+
+      if (!pathResult.ok) {
+        return { candidate, pathResult };
+      }
+
+      const linkTarget = getMarkdownLinkTarget(pathResult.vaultPath);
+
+      return {
+        candidate,
+        pathResult,
+        linkTarget,
+        markdown: addCandidateParentLink(
+          candidate.markdown,
+          parentLinkTarget,
+          parentTitle.trim()
+        )
+      };
+    });
+
+    const invalidChild = childPlans.find(
+      (plan) =>
+        !plan.pathResult.ok ||
+        (
+          "linkTarget" in plan &&
+          typeof plan.linkTarget === "string" &&
+          !isSafeWikiLinkTarget(plan.linkTarget)
+        )
+    );
+
+    if (invalidChild !== undefined) {
+      return {
+        ok: false,
+        error: invalidChild.pathResult.ok
+          ? "Invalid file name"
+          : invalidChild.pathResult.error
+      };
+    }
+
+    const validChildPlans = childPlans.filter(
+      (plan): plan is typeof plan & {
+        pathResult: Extract<typeof plan.pathResult, { ok: true }>;
+        linkTarget: string;
+        markdown: string;
+      } => plan.pathResult.ok && "linkTarget" in plan
+    );
+    const allPaths = [
+      parentPathResult.vaultPath,
+      ...validChildPlans.map((plan) => plan.pathResult.vaultPath)
+    ];
+    const uniquePaths = new Set(
+      allPaths.map((path) => path.normalize("NFKC").toLocaleLowerCase())
+    );
+
+    if (uniquePaths.size !== allPaths.length) {
+      return { ok: false, error: "File already exists" };
+    }
+
+    if (
+      allPaths.some(
+        (path) => this.app.vault.getAbstractFileByPath(path) !== null
+      )
+    ) {
+      return { ok: false, error: "File already exists" };
+    }
+
+    const groupRevision = group.revision;
+    const childSnapshots = new Map(
+      children.map((candidate) => [
+        candidate.id,
+        { revision: candidate.revision, markdown: candidate.markdown }
+      ])
+    );
+    const createdFiles: TFile[] = [];
+
+    try {
+      await this.ensureVaultFolder(parentPathResult.folderPath);
+
+      const currentGroup = this.getCandidateGroup(groupId);
+      const currentChildren = this.getCandidatesForGroup(groupId);
+      const changed =
+        currentGroup === undefined ||
+        currentGroup.revision !== groupRevision ||
+        currentGroup.createdVaultPath !== undefined ||
+        currentChildren.length !== children.length ||
+        currentChildren.some((candidate) => {
+          const snapshot = childSnapshots.get(candidate.id);
+
+          return (
+            snapshot === undefined ||
+            snapshot.revision !== candidate.revision ||
+            snapshot.markdown !== candidate.markdown ||
+            candidate.createdVaultPath !== undefined ||
+            this.hasPendingSelectionReplacement(candidate.id)
+          );
+        });
+
+      if (changed) {
+        return { ok: false, error: "Candidate group no longer exists" };
+      }
+
+      if (
+        allPaths.some(
+          (path) => this.app.vault.getAbstractFileByPath(path) !== null
+        )
+      ) {
+        return { ok: false, error: "File already exists" };
+      }
+
+      const parentMarkdown = buildCandidateGroupParentMarkdown(
+        parentTitle,
+        currentGroup.id,
+        validChildPlans.map((plan) => plan.linkTarget)
+      );
+      createdFiles.push(
+        await this.app.vault.create(
+          parentPathResult.vaultPath,
+          parentMarkdown
+        )
+      );
+
+      for (const plan of validChildPlans) {
+        createdFiles.push(
+          await this.app.vault.create(
+            plan.pathResult.vaultPath,
+            plan.markdown
+          )
+        );
+      }
+
+      const normalizedTitle = parentTitle.trim();
+
+      if (currentGroup.title !== normalizedTitle) {
+        currentGroup.title = normalizedTitle;
+        currentGroup.revision += 1;
+      }
+
+      currentGroup.createdVaultPath = parentPathResult.vaultPath;
+      currentGroup.parentVaultPath = parentPathResult.vaultPath;
+      currentGroup.parentDisplayTitle = normalizedTitle;
+      currentGroup.createdRevision = currentGroup.revision;
+
+      for (const plan of validChildPlans) {
+        if (plan.candidate.markdown !== plan.markdown) {
+          plan.candidate.markdown = plan.markdown;
+          plan.candidate.revision += 1;
+        }
+
+        plan.candidate.createdVaultPath = plan.pathResult.vaultPath;
+        plan.candidate.createdRevision = plan.candidate.revision;
+        plan.candidate.parentGroupId = currentGroup.id;
+        plan.candidate.parentVaultPath = parentPathResult.vaultPath;
+        this.candidateVaultActionMessages.delete(plan.candidate.id);
+      }
+
+      this.notify();
+
+      return {
+        ok: true,
+        parentPath: parentPathResult.vaultPath,
+        childPaths: validChildPlans.map(
+          (plan) => plan.pathResult.vaultPath
+        )
+      };
+    } catch {
+      for (const file of createdFiles.reverse()) {
+        try {
+          await this.app.vault.trash(file, false);
+        } catch {
+          // Continue rolling back every file created by this operation.
+        }
+      }
+
+      return { ok: false, error: "Vault write failed" };
+    }
+  }
+
+  async openCreatedCandidateGroup(groupId: string): Promise<boolean> {
+    const path = this.getCandidateGroup(groupId)?.parentVaultPath;
+
+    if (path === undefined) {
+      return false;
+    }
+
+    const file = this.app.vault.getFileByPath(path);
+
+    if (file === null) {
+      return false;
+    }
+
+    try {
+      await this.app.workspace.getLeaf("tab").openFile(file);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async trashCandidateNote(
+    candidateId: string
+  ): Promise<CandidateNoteTrashResult> {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+
+    if (
+      candidate === undefined ||
+      this.activeCandidateId !== candidateId ||
+      candidate.createdVaultPath === undefined
+    ) {
+      return { ok: false, error: "Candidate note no longer exists" };
+    }
+
+    const childPath = validateExistingVaultMarkdownPath(
+      candidate.createdVaultPath
+    );
+
+    if (childPath === null) {
+      return { ok: false, error: "Invalid note path" };
+    }
+
+    const file = this.app.vault.getFileByPath(childPath);
+
+    if (file === null) {
+      return { ok: false, error: "Note not found" };
+    }
+
+    const parentPath = candidate.parentVaultPath;
+    const childLinkTarget = getMarkdownLinkTarget(childPath);
+
+    try {
+      await this.app.vault.trash(file, false);
+    } catch {
+      return { ok: false, error: "Unable to move note to Trash" };
+    }
+
+    let warning: string | undefined;
+
+    if (parentPath !== undefined) {
+      const safeParentPath =
+        validateExistingVaultMarkdownPath(parentPath);
+      const parentFile = safeParentPath === null
+        ? null
+        : this.app.vault.getFileByPath(safeParentPath);
+
+      if (parentFile === null) {
+        warning = "Parent note was not updated.";
+      } else {
+        try {
+          const parentMarkdown =
+            await this.app.vault.cachedRead(parentFile);
+          const updated = removeCandidateChildLink(
+            parentMarkdown,
+            childLinkTarget
+          );
+
+          if (updated.removed) {
+            await this.app.vault.modify(
+              parentFile,
+              updated.markdown
+            );
+          } else {
+            warning = "Parent note link was not found.";
+          }
+        } catch {
+          warning = "Parent note was not updated.";
+        }
+      }
+    }
+
+    candidate.createdVaultPath = undefined;
+    candidate.createdRevision = undefined;
+    candidate.parentGroupId = undefined;
+    candidate.parentVaultPath = undefined;
+    const message = warning === undefined
+      ? "Note moved to Trash"
+      : `Note moved to Trash — ${warning}`;
+    this.candidateVaultActionMessages.set(candidate.id, message);
+    this.notify();
+
+    return {
+      ok: true,
+      message: "Note moved to Trash",
+      warning
+    };
+  }
   getConversationHistory(): DeepSeekConversationMessage[] {
     return this.messages
       .filter((message) => message.includeInHistory)
@@ -416,7 +1389,7 @@ export class LainBrainSession {
 
     if (candidate === undefined) {
       context.replacementError =
-        "选区已变化，请重新选择";
+        "Selection changed. Please select it again.";
       this.notify();
       return false;
     }
@@ -448,8 +1421,8 @@ export class LainBrainSession {
         context.replacementError =
           error instanceof Error &&
           error.message === "selection-latex-invalid"
-            ? "选区修改中的 LaTeX 格式审查失败，未应用任何修改。"
-            : "无法生成选区修改建议，请重试。";
+            ? "The LaTeX format check failed. No change was applied."
+            : "Unable to generate a replacement. Please try again.";
       }
 
       return false;
@@ -480,7 +1453,7 @@ export class LainBrainSession {
     ) {
       if (context !== undefined) {
         context.replacementError =
-          "选区已变化，请重新选择";
+          "Selection changed. Please select it again.";
         this.notify();
       }
 
@@ -690,7 +1663,7 @@ export class LainBrainSession {
 
     if (candidate === undefined) {
       context.replacementError =
-        "选区已变化，请重新选择";
+        "Selection changed. Please select it again.";
       this.notify();
       return;
     }
@@ -728,7 +1701,7 @@ export class LainBrainSession {
       if (this.selectionEditContext === context) {
         context.discussionMessages.push({
           role: "assistant",
-          content: "无法讨论此选区，请重试。"
+          content: "Unable to discuss this selection. Please try again."
         });
       }
     } finally {
@@ -784,7 +1757,7 @@ export class LainBrainSession {
 
       if (topics.length === 0) {
         this.candidateError =
-          "当前聊天中没有发现可整理的实质主题。";
+          "No substantive topics were found in the current chat.";
         return "failed";
       }
 
@@ -827,7 +1800,7 @@ export class LainBrainSession {
           (candidate) => candidate.id
         );
         this.candidateError =
-          "部分候选笔记包含手动修改；覆盖前需要确认。";
+          "Some candidate notes contain manual edits. Confirm before overwriting.";
         return "needs-confirmation";
       }
 
@@ -845,8 +1818,12 @@ export class LainBrainSession {
           continue;
         }
 
+        const primaryConcept = normalizeCandidatePrimaryConcept(
+          item.topic,
+          item.topic.title
+        );
         const verifiedRelations =
-          await this.findVerifiedConceptNotes(item.topic);
+          await this.findVerifiedConceptNotes(primaryConcept);
         const relevantNoteContext =
           item.topic.activeNoteRelevant
             ? this.activeNoteContext
@@ -857,7 +1834,7 @@ export class LainBrainSession {
             role: message.role,
             content: message.content
           })),
-          item.topic,
+          { ...item.topic, ...primaryConcept },
           relevantNoteContext,
           item.existing?.markdown
         );
@@ -865,27 +1842,59 @@ export class LainBrainSession {
           apiKey,
           rawCandidateBody
         );
-        const markdown = buildCandidateNoteMarkdown(
+        const baseMarkdown = buildCandidateNoteMarkdown(
           candidateBody,
-          item.topic,
+          primaryConcept,
           verifiedRelations
         );
+        const parentGroup = item.existing?.parentGroupId === undefined
+          ? this.findKnownParentGroup(rawCandidateBody, topicMessages)
+          : this.getCandidateGroup(item.existing.parentGroupId);
+        const parentPath =
+          parentGroup?.parentVaultPath ??
+          item.existing?.parentVaultPath;
+        const parentAvailable =
+          parentGroup !== undefined &&
+          parentPath !== undefined &&
+          this.app.vault.getFileByPath(parentPath) !== null;
+        const markdown = parentAvailable
+          ? setCandidateParentLink(
+              baseMarkdown,
+              getVaultPathLinkTarget(parentPath),
+              parentGroup.parentDisplayTitle ?? parentGroup.title
+            )
+          : stripCandidateParentLinks(baseMarkdown);
         const candidate: CandidateNote = {
           id: item.existing?.id ?? this.createCandidateId(),
-          title: extractCandidateTitle(
-            markdown,
+          title: normalizeCandidateTitle(
+            extractCandidateTitle(
+              markdown,
+              item.topic.title
+            ),
             item.topic.title
           ),
-          primaryConcept: {
-            name: item.topic.name,
-            aliases: [...item.topic.aliases]
-          },
+          primaryConcept,
           markdown,
           sourceMessageIds: [...item.topic.sourceMessageIds],
           viewMode: item.existing?.viewMode ?? "preview",
           userEdited: false,
-          revision: (item.existing?.revision ?? -1) + 1
+          revision: (item.existing?.revision ?? -1) + 1,
+          createdVaultPath: item.existing?.createdVaultPath,
+          createdRevision: item.existing?.createdRevision,
+          groupId: item.existing?.groupId,
+          parentGroupId:
+            parentGroup?.id ?? item.existing?.parentGroupId,
+          parentVaultPath: parentPath
         };
+
+        if (candidate.parentGroupId !== undefined && !parentAvailable) {
+          this.candidateVaultActionMessages.set(
+            candidate.id,
+            "Suggested parent is unavailable. Choose a parent before creating this note."
+          );
+        } else {
+          this.candidateVaultActionMessages.delete(candidate.id);
+        }
 
         if (item.existing === undefined) {
           additions.push(candidate);
@@ -904,6 +1913,7 @@ export class LainBrainSession {
       }
 
       this.candidates.push(...additions);
+      this.reconcileCandidateGroups(sourceMessages);
       this.pendingCandidateExtraction = undefined;
       this.overwriteConflictIds = [];
 
@@ -943,6 +1953,27 @@ export class LainBrainSession {
         allowOverwriteUserEdits
       )
     ) === "success";
+  }
+
+  private async ensureVaultFolder(folderPath: string): Promise<void> {
+    const segments = folderPath.split("/");
+    let currentPath = "";
+
+    for (const segment of segments) {
+      currentPath = currentPath === ""
+        ? segment
+        : `${currentPath}/${segment}`;
+      const existing =
+        this.app.vault.getAbstractFileByPath(currentPath);
+
+      if (existing === null) {
+        await this.app.vault.createFolder(currentPath);
+      } else if (
+        this.app.vault.getFolderByPath(currentPath) === null
+      ) {
+        throw new Error("invalid-destination-folder");
+      }
+    }
   }
 
   private createSelectionRequestContext(
@@ -1104,9 +2135,198 @@ export class LainBrainSession {
     );
   }
 
+  private migrateCandidateGroupParentIdentity(
+    group: CandidateGroup
+  ): void {
+    group.parentVaultPath ??= group.createdVaultPath;
+
+    if (group.parentDisplayTitle !== undefined) {
+      return;
+    }
+
+    const fallback = group.parentVaultPath === undefined
+      ? "Candidate Group"
+      : getMarkdownLinkTarget(group.parentVaultPath);
+    group.parentDisplayTitle = deriveConciseCandidateGroupTitle(
+      group.title,
+      fallback
+    );
+  }
+
+  private findKnownParentGroup(
+    modelMarkdown: string,
+    messages: readonly CandidateSourceMessage[]
+  ): CandidateGroup | undefined {
+    const hint = extractCandidateParentHint(modelMarkdown);
+    const normalizedHint = hint === null
+      ? null
+      : normalizeCandidateLabel(hint);
+    const sourceText = normalizeCandidateLabel(
+      messages.map((message) => message.content).join(" ")
+    );
+    const explicitMatches: CandidateGroup[] = [];
+    const contextualMatches: CandidateGroup[] = [];
+
+    for (const group of this.candidateGroups) {
+      this.migrateCandidateGroupParentIdentity(group);
+
+      if (group.parentVaultPath === undefined) {
+        continue;
+      }
+
+      const identities = [
+        group.parentDisplayTitle,
+        group.title,
+        getMarkdownLinkTarget(group.parentVaultPath),
+        getVaultPathLinkTarget(group.parentVaultPath)
+      ]
+        .filter((value): value is string => value !== undefined)
+        .map(normalizeCandidateLabel);
+
+      if (
+        normalizedHint !== null &&
+        identities.includes(normalizedHint)
+      ) {
+        explicitMatches.push(group);
+      }
+
+      const displayTitle = normalizeCandidateLabel(
+        group.parentDisplayTitle ?? group.title
+      );
+
+      if (
+        displayTitle.length >= 4 &&
+        sourceText.includes(displayTitle)
+      ) {
+        contextualMatches.push(group);
+      }
+    }
+
+    if (explicitMatches.length === 1) {
+      return explicitMatches[0];
+    }
+
+    return contextualMatches.length === 1
+      ? contextualMatches[0]
+      : undefined;
+  }
+
+  private reconcileCandidateGroups(
+    messages: readonly CandidateSourceMessage[]
+  ): void {
+    const turns = createCandidateSourceTurns(messages);
+    const assignments = new Map<
+      string,
+      {
+        messages: CandidateSourceMessage[];
+        candidateIds: string[];
+      }
+    >();
+
+    for (const candidate of this.candidates) {
+      const sourceIds = new Set(candidate.sourceMessageIds);
+      const turn = turns.find((item) => {
+        const userMessage = item.find(
+          (message) => message.role === "user"
+        );
+
+        return userMessage !== undefined && sourceIds.has(userMessage.id);
+      }) ?? turns.find((item) =>
+        item.some((message) => sourceIds.has(message.id))
+      );
+
+      if (turn === undefined) {
+        continue;
+      }
+
+      const key = turn[0]?.id;
+
+      if (key === undefined) {
+        continue;
+      }
+
+      const assignment = assignments.get(key) ?? {
+        messages: turn,
+        candidateIds: []
+      };
+      assignment.candidateIds.push(candidate.id);
+      assignments.set(key, assignment);
+    }
+
+    for (const assignment of assignments.values()) {
+      if (assignment.candidateIds.length < 2) {
+        continue;
+      }
+
+      const assignedCandidates = this.candidates.filter(
+        (candidate) => assignment.candidateIds.includes(candidate.id)
+      );
+      const existingGroupId = assignedCandidates
+        .map((candidate) => candidate.groupId)
+        .find((groupId): groupId is string =>
+          groupId !== undefined &&
+          this.getCandidateGroup(groupId) !== undefined
+        );
+      const sourceMessageIds = assignment.messages.map(
+        (message) => message.id
+      );
+      let group = existingGroupId === undefined
+        ? this.candidateGroups.find((candidateGroup) =>
+            haveSameSourceMessages(
+              candidateGroup.sourceMessageIds,
+              sourceMessageIds
+            )
+          )
+        : this.getCandidateGroup(existingGroupId);
+
+      if (group === undefined) {
+        group = {
+          id: this.createCandidateGroupId(),
+          title: deriveCandidateGroupTitle(
+            assignment.messages,
+            assignedCandidates
+          ),
+          sourceMessageIds,
+          candidateIds: [...assignment.candidateIds],
+          revision: 0
+        };
+        this.candidateGroups.push(group);
+      } else {
+        const membershipChanged =
+          !haveSameSourceMessages(
+            group.candidateIds,
+            assignment.candidateIds
+          );
+        const sourceChanged =
+          !haveSameSourceMessages(
+            group.sourceMessageIds,
+            sourceMessageIds
+          );
+
+        if (membershipChanged || sourceChanged) {
+          group.candidateIds = [...assignment.candidateIds];
+          group.sourceMessageIds = sourceMessageIds;
+          group.revision += 1;
+        }
+      }
+
+      for (const candidate of assignedCandidates) {
+        candidate.groupId = group.id;
+      }
+    }
+  }
+
   private createMessageId(): string {
     this.nextMessageSequence += 1;
     return `message-${this.nextMessageSequence}`;
+  }
+
+  private createCandidateGroupId(): string {
+    this.nextCandidateGroupSequence += 1;
+    return (
+      `candidate-group-${Date.now().toString(36)}-` +
+      this.nextCandidateGroupSequence
+    );
   }
 
   private createCandidateId(): string {
@@ -1163,6 +2383,40 @@ export class LainBrainSession {
 }
 
 
+export function createCandidateSourceTurns(
+  messages: readonly CandidateSourceMessage[]
+): CandidateSourceMessage[][] {
+  const turns: CandidateSourceMessage[][] = [];
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      turns.push([message]);
+      continue;
+    }
+
+    const current = turns[turns.length - 1];
+
+    if (current !== undefined) {
+      current.push(message);
+    }
+  }
+
+  return turns;
+}
+
+function deriveCandidateGroupTitle(
+  messages: readonly CandidateSourceMessage[],
+  candidates: readonly CandidateNote[]
+): string {
+  const userMessage = messages.find(
+    (message) => message.role === "user"
+  );
+
+  return deriveConciseCandidateGroupTitle(
+    userMessage?.content ?? "",
+    candidates[0]?.title ?? "Candidate Group"
+  );
+}
 export const CANDIDATE_TOPIC_BATCH_SIZE = 12;
 export const CANDIDATE_TOPIC_BATCH_OVERLAP = 2;
 

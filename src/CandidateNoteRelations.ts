@@ -8,6 +8,30 @@ export interface VerifiedCandidateRelation {
   matchedAlias: string;
 }
 
+export const MAX_CANDIDATE_TITLE_LENGTH = 70;
+export const MAX_PRIMARY_CONCEPT_LENGTH = 60;
+
+export function normalizeCandidateTitle(
+  value: string,
+  fallback = "Candidate Note"
+): string {
+  const cleaned = value
+    .replace(/^#+\s*/, "")
+    .replace(/\[\[|\]\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const fallbackValue = fallback
+    .replace(/^#+\s*/, "")
+    .replace(/\[\[|\]\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return truncateLabel(
+    cleaned === "" ? fallbackValue || "Candidate Note" : cleaned,
+    MAX_CANDIDATE_TITLE_LENGTH
+  );
+}
+
 interface FenceState {
   marker: "`" | "~";
   length: number;
@@ -27,7 +51,8 @@ const PSEUDOINVERSE_KEYS = new Set(
 );
 
 export function normalizeCandidatePrimaryConcept(
-  concept: CandidatePrimaryConcept
+  concept: CandidatePrimaryConcept,
+  fallbackName?: string
 ): CandidatePrimaryConcept {
   const terms = [concept.name, ...concept.aliases]
     .map(cleanConceptTerm)
@@ -44,24 +69,48 @@ export function normalizeCandidatePrimaryConcept(
     };
   }
 
-  const name = terms[0];
+  const proposedName = terms[0];
+  const fallback = fallbackName === undefined
+    ? undefined
+    : truncateLabel(
+        cleanConceptTerm(fallbackName),
+        MAX_PRIMARY_CONCEPT_LENGTH
+      );
+  const name = proposedName !== undefined &&
+    isConcisePrimaryConcept(proposedName)
+      ? proposedName
+      : fallback;
 
-  if (name === undefined) {
-    throw new Error("No primary concept was identified.");
+  if (name === undefined || name === "") {
+    throw new Error("No concise primary concept was identified.");
   }
 
-  const aliases = [
+  const aliases = [name, ...terms]
+    .filter(isConcisePrimaryConcept);
+  const uniqueAliases = [
     ...new Map(
-      terms.map((term) => [normalizeSearchText(term), term])
+      aliases.map((term) => [normalizeSearchText(term), term])
     ).values()
   ];
 
   return {
     name,
-    aliases
+    aliases: uniqueAliases
   };
 }
 
+export function isConcisePrimaryConcept(value: string): boolean {
+  const term = value.trim();
+  const wordCount = term.split(/\s+/).filter(Boolean).length;
+
+  return (
+    term !== "" &&
+    term.length <= MAX_PRIMARY_CONCEPT_LENGTH &&
+    wordCount <= 12 &&
+    !/[.!?。！？;；:]$/.test(term) &&
+    !/\b(?:is|are|was|were|means|refers to|describes|explains|states that)\b/i.test(term)
+  );
+}
 export function findConfirmedPrimaryConcept(
   text: string
 ): CandidatePrimaryConcept | null {
@@ -176,12 +225,29 @@ export function buildCandidateNoteMarkdown(
     .trim();
 }
 
+function truncateLabel(value: string, maximum: number): string {
+  if (value.length <= maximum) {
+    return value;
+  }
+
+  const prefix = value.slice(0, maximum + 1);
+  const boundary = Math.max(
+    prefix.lastIndexOf(" "),
+    prefix.lastIndexOf("-"),
+    prefix.lastIndexOf("–")
+  );
+
+  return value.slice(
+    0,
+    boundary >= Math.floor(maximum * 0.6) ? boundary : maximum
+  ).trim();
+}
+
 function cleanConceptTerm(value: string): string {
   return value
     .replace(/\[\[|\]\]/g, "")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
+    .trim();
 }
 
 function normalizeSearchText(value: string): string {

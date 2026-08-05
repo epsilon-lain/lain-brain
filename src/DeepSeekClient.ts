@@ -1,6 +1,7 @@
 import { requestUrl } from "obsidian";
 import {
-  normalizeCandidatePrimaryConcept
+  normalizeCandidatePrimaryConcept,
+  normalizeCandidateTitle
 } from "./CandidateNoteRelations";
 import type {
   CandidatePrimaryConcept
@@ -190,8 +191,12 @@ export async function identifyCandidateTopics(
         "is the AI. Do not select only the newest topic. Every domain has " +
         "equal status. Ignore greetings, empty chatter, obvious test strings, " +
         "and isolated trivial probes such as 1+1=2. Do not merge unrelated " +
-        "topics. For each topic choose a concise title, one specific primary " +
-        "concept explicitly present in its source messages, exact aliases " +
+        "topics. For each topic choose a concise title of at most 70 " +
+        "characters, one specific primary " +
+        "concept explicitly present in its source messages. The primary " +
+        "concept must be a concise noun phrase of at most 60 characters, " +
+        "never a full explanatory " +
+        "sentence. Provide exact aliases " +
         "that occur in those messages, and every message ID that supplies " +
         "questions, views, explanations, corrections, examples, disputes, or " +
         "open points for that topic. IDs must be copied exactly from the " +
@@ -253,7 +258,9 @@ export async function identifyPrimaryConcept(
         "or body. A previous candidate is only an editorial reference and " +
         "must not revive an older topic. The primary concept must be a " +
         "specific concept explicitly present in the selected conversation " +
-        "topic, never a broad field label such as a discipline. Return " +
+        "topic, never a broad field label such as a discipline. It must be " +
+        "a concise noun phrase of at most 60 characters, not a full " +
+        "explanatory sentence. Return " +
         "strict JSON only in this shape: " +
         "{\"conversationTopic\":\"short description\",\"primaryConcept\":" +
         "\"name\",\"aliases\":[\"alias\"],\"activeNoteRelevant\":false}. " +
@@ -500,7 +507,7 @@ function parsePrimaryConceptResponse(
   const concept = normalizeCandidatePrimaryConcept({
     name: parsed.primaryConcept,
     aliases
-  });
+  }, parsed.conversationTopic);
 
   return {
     ...concept,
@@ -586,11 +593,11 @@ function parseCandidateTopicsResponse(
     const concept = normalizeCandidatePrimaryConcept({
       name: item.primaryConcept,
       aliases
-    });
+    }, item.title);
 
     topics.push({
       ...concept,
-      title: item.title.trim().slice(0, 200),
+      title: normalizeCandidateTitle(item.title),
       conversationTopic:
         item.conversationTopic.trim().slice(0, 500),
       sourceMessageIds,

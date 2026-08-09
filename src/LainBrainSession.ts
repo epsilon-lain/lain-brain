@@ -11,6 +11,7 @@ import { canAnalyzeImages } from "./ProviderProfiles";
 import type { ProviderProfile } from "./ProviderProfiles";
 import {
   askDeepSeek,
+  classifyCandidateClaims,
   discussCandidateSelection,
   generateCandidateNote,
   generateSelectionReplacement,
@@ -69,6 +70,52 @@ import {
   resolveDisplayName
 } from "./PersonalNaming";
 import type { PersonalNamingSettings } from "./PersonalNaming";
+import {
+  hasSafelyLocatedKnowledgeStatus,
+  normalizeReviewedClaim,
+  removeManagedKnowledgeStatusBlock,
+  updateKnowledgeStatusMarkdown
+} from "./ClaimClassification";
+import type {
+  ClaimKind,
+  ClaimRecord,
+  ClaimReviewItem,
+  ClaimSuggestion
+} from "./ClaimClassification";
+import {
+  createFormalizationRecord,
+  applyFormalizationReview as applyFormalizationReviewUpdate,
+  validateFormalizationInvariants,
+  buildAllFormalizationSummaries,
+  serializeFormalizationIndex,
+  deserializeFormalizationIndex,
+  canSetPrimaryFormalization,
+  shouldClearPrimaryOnRejection,
+  checkLeanEligibility,
+  validateLeanCode,
+  LEAN_ARTIFACT_SCHEMA_VERSION,
+  buildLeanCode,
+  selectLeanImportsForFormalization,
+  validateLeanBodyNoImports
+} from "./FormalizationProtocol";
+import type {
+  FormalizationRecord,
+  FormalizationIndex,
+  ReviewStatus,
+  SourceRef,
+  LeanArtifact,
+  LeanArtifactIndex,
+  LeanRunner,
+  LeanEligibilityResult,
+  LeanDiagnostic
+} from "./FormalizationProtocol";
+import {
+  classifyMathSpeechAct,
+  generateLeanStatement
+} from "./DeepSeekClient";
+import type {
+  LeanGenerationResult
+} from "./DeepSeekClient";
 
 export interface LainBrainImageAttachmentMetadata {
   filename: string;
@@ -112,6 +159,10 @@ export interface CandidateNote {
   groupId?: string;
   parentGroupId?: string;
   parentVaultPath?: string;
+  claims: ClaimRecord[];
+  claimStatusWarning?: string;
+  formalizationIds: string[];
+  primaryFormalizationId?: string;
 }
 
 export interface CandidateGroup {
@@ -196,6 +247,17 @@ interface PendingCandidateExtraction {
 
 export type CandidateGenerationResult =
   "success" | "needs-confirmation" | "failed";
+export type ClaimReviewResult =
+  | { ok: true; items: ClaimReviewItem[] }
+  | { ok: false; error: string };
+
+export type ClaimApplyResult =
+  | {
+      ok: true;
+      appliedCount: number;
+      warning?: string;
+    }
+  | { ok: false; error: string; offendingClaimId?: string };
 
 type SessionListener = () => void;
 export type LainBrainLoadingMode = "chat" | null;
@@ -203,6 +265,24 @@ export type LainBrainLargeViewMode = "chat" | "candidate";
 export type LainBrainCandidateViewMode = "edit" | "preview";
 export type LainBrainSendResult =
   "sent" | "blocked" | "needs-vision-confirmation";
+
+/**
+ * Ephemeral formalization preview for an un-applied suggestion.
+ *
+ * Stored in a session-only Map — NEVER written to formalizationIndex
+ * or persisted to plugin data.  On Apply the preview is materialized
+ * into a proper FormalizationRecord and committed to the index.
+ */
+export interface SuggestionFormalizationPreview {
+  /** The formalization content (same shape as FormalizationRecord). */
+  readonly record: FormalizationRecord;
+  /** The suggestion ID this preview belongs to. */
+  readonly suggestionId: string;
+  /** Snapshot of claim text at formalization time (staleness detection). */
+  readonly sourceText: string;
+  /** Snapshot of claim kind at formalization time. */
+  readonly sourceKind: ClaimKind;
+}
 
 export class LainBrainSession {
   private readonly messages: StoredMessage[] = [];
@@ -213,6 +293,7 @@ export class LainBrainSession {
   private nextMessageSequence = 0;
   private nextCandidateSequence = 0;
   private nextCandidateGroupSequence = 0;
+  private nextClaimSequence = 0;
   private candidates: CandidateNote[] = [];
   private candidateGroups: CandidateGroup[] = [];
   private candidateVaultActionMessages = new Map<string, string>();
@@ -232,8 +313,28 @@ export class LainBrainSession {
   loadingMode: LainBrainLoadingMode = null;
   candidateLoading = false;
   selectionReplacementLoading = false;
+  claimReviewLoading = false;
+  claimReviewError: string | null = null;
   candidateError: string | null = null;
   largeViewMode: LainBrainLargeViewMode = "chat";
+  private formalizationIndex: FormalizationIndex = {
+    schemaVersion: 1,
+    records: {}
+  };
+  private leanArtifactIndex: LeanArtifactIndex = {
+    schemaVersion: LEAN_ARTIFACT_SCHEMA_VERSION,
+    artifacts: {}
+  };
+  private leanRunner: LeanRunner | null = null;
+
+  // Ephemeral formalization previews for un-applied suggestions.
+  // Key = suggestionId.  NOT persisted — survives only within the session.
+  // On Apply, previews are materialized into formalizationIndex.
+  // On Cancel/Delete, previews are discarded without touching formalizationIndex.
+  private suggestionPreviews = new Map<
+    string,
+    SuggestionFormalizationPreview[]
+  >();
 
   constructor(
     private app: App,
@@ -242,13 +343,18 @@ export class LainBrainSession {
       () => ProviderProfile | null = () => null,
     private visionClient: VisionProviderClient =
       new VisionProviderRouter(),
-    private askText: typeof askDeepSeek = askDeepSeek
+    private askText: typeof askDeepSeek = askDeepSeek,
+    private classifyClaims: typeof classifyCandidateClaims =
+      classifyCandidateClaims,
+    private generateLean: typeof generateLeanStatement =
+      generateLeanStatement
   ) {}
 
   get loading(): boolean {
     return this.loadingMode !== null ||
       this.candidateLoading ||
-      this.selectionReplacementLoading;
+      this.selectionReplacementLoading ||
+      this.claimReviewLoading;
   }
 
   get userDisplayName(): string {
@@ -281,6 +387,72 @@ export class LainBrainSession {
   ): void {
     this.getPersonalNaming = provider;
     this.notify();
+  }
+
+  private onFormalizationChanged?: () => void;
+
+  setFormalizationSaveCallback(
+    callback: () => void
+  ): void {
+    this.onFormalizationChanged = callback;
+  }
+
+  private notifyFormalizationChanged(): void {
+    this.onFormalizationChanged?.();
+  }
+
+  private onLeanArtifactsChanged?: () => void;
+
+  setLeanArtifactSaveCallback(
+    callback: () => void
+  ): void {
+    this.onLeanArtifactsChanged = callback;
+  }
+
+  private notifyLeanArtifactsChanged(): void {
+    this.onLeanArtifactsChanged?.();
+  }
+
+  setLeanRunner(runner: LeanRunner | null): void {
+    this.leanRunner = runner;
+  }
+
+  getLeanRunner(): LeanRunner | null {
+    return this.leanRunner;
+  }
+
+  setLeanArtifactIndex(index: LeanArtifactIndex | undefined): void {
+    if (index === undefined) {
+      this.leanArtifactIndex = {
+        schemaVersion: LEAN_ARTIFACT_SCHEMA_VERSION,
+        artifacts: {}
+      };
+      return;
+    }
+
+    // Defensive copy — same ownership principle as setFormalizationIndex.
+    this.leanArtifactIndex = {
+      schemaVersion: index.schemaVersion,
+      artifacts: { ...index.artifacts }
+    };
+  }
+
+  getLeanArtifactIndex(): Readonly<LeanArtifactIndex> {
+    return this.leanArtifactIndex;
+  }
+
+  getLeanArtifactsForClaim(
+    claimId: string
+  ): Readonly<LeanArtifact>[] {
+    return Object.values(this.leanArtifactIndex.artifacts)
+      .filter((a) => a.claimId === claimId);
+  }
+
+  getLeanArtifactForFormalization(
+    formalizationId: string
+  ): Readonly<LeanArtifact> | undefined {
+    return Object.values(this.leanArtifactIndex.artifacts)
+      .find((a) => a.formalizationId === formalizationId);
   }
 
   notifyPersonalNamingChanged(): void {
@@ -322,7 +494,36 @@ export class LainBrainSession {
   }
 
   getCandidateNotes(): readonly CandidateNote[] {
+    for (const candidate of this.candidates) {
+      candidate.claims ??= [];
+      candidate.formalizationIds ??= [];
+    }
+
     return this.candidates;
+  }
+
+  getCandidateClaims(candidateId: string): readonly ClaimRecord[] {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+
+    if (candidate === undefined) {
+      return [];
+    }
+
+    candidate.claims ??= [];
+
+    for (const claim of candidate.claims) {
+      claim.formalizationIds ??= [];
+    }
+
+    return candidate.claims;
+  }
+
+  getClaimStatusWarning(candidateId: string): string {
+    return this.candidates.find(
+      (item) => item.id === candidateId
+    )?.claimStatusWarning ?? "";
   }
 
   getLainBrainManagedVaultPaths(): string[] {
@@ -641,7 +842,9 @@ export class LainBrainSession {
         .map((message) => message.id),
       viewMode,
       userEdited,
-      revision: 0
+      revision: 0,
+      claims: [],
+      formalizationIds: []
     };
 
     this.candidates.push(candidate);
@@ -677,6 +880,1518 @@ export class LainBrainSession {
       this.selectionEditContext?.candidateId === candidateId &&
       this.selectionEditContext.pendingReplacement !== undefined
     );
+  }
+
+  async generateClaimReview(
+    candidateId: string
+  ): Promise<ClaimReviewResult> {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+
+    if (
+      candidate === undefined ||
+      this.activeCandidateId !== candidateId ||
+      this.loading
+    ) {
+      return {
+        ok: false,
+        error: "Candidate is unavailable for claim review."
+      };
+    }
+
+    const apiKey = this.getApiKey().trim();
+
+    if (apiKey === "") {
+      return {
+        ok: false,
+        error:
+          "Please add your DeepSeek API key in Lain Brain settings."
+      };
+    }
+
+    const allSources = this.getCandidateSourceMessages();
+    const sourceMessages = this.getMessagesForTopic(
+      allSources,
+      candidate.sourceMessageIds
+    );
+
+    this.claimReviewLoading = true;
+    this.claimReviewError = null;
+    this.notify();
+
+    try {
+      const suggestions = await this.classifyClaims(apiKey, {
+        title: candidate.title,
+        primaryConcept: candidate.primaryConcept.name,
+        markdown: candidate.markdown,
+        sourceMessages
+      });
+      if (
+        suggestions.some((suggestion) =>
+          containsSensitiveClaimData(
+            suggestion,
+            apiKey
+          )
+        )
+      ) {
+        throw new Error("unsafe-claim-suggestion");
+      }
+
+      const existingClaims = candidate.claims ?? [];
+      const usedIds = new Set<string>();
+      const items = suggestions.map((suggestion) => {
+        const existing = existingClaims.find(
+          (claim) =>
+            !usedIds.has(claim.id) &&
+            normalizeClaimIdentity(claim.text) ===
+              normalizeClaimIdentity(suggestion.text)
+        );
+        const id = existing?.id ?? this.createClaimId(candidate.id);
+        usedIds.add(id);
+        return {
+          id,
+          ...copyClaimSuggestion(suggestion)
+        };
+      });
+
+      return { ok: true, items };
+    } catch {
+      const error =
+        "Unable to review claims. DeepSeek returned invalid claim suggestions.";
+      this.claimReviewError = error;
+      return { ok: false, error };
+    } finally {
+      this.claimReviewLoading = false;
+      this.notify();
+    }
+  }
+
+  createEmptyClaimReviewItem(
+    candidateId: string
+  ): ClaimReviewItem | null {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+
+    if (
+      candidate === undefined ||
+      this.activeCandidateId !== candidateId
+    ) {
+      return null;
+    }
+
+    return {
+      id: this.createClaimId(candidateId),
+      text: "",
+      kind: "personal_interpretation",
+      verification: "user_authored",
+      sourceReferences: [],
+      sourceMessageIds: []
+    };
+  }
+
+  applyReviewedClaims(
+    candidateId: string,
+    selectedItems: readonly ClaimReviewItem[]
+  ): ClaimApplyResult {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+
+    if (
+      candidate === undefined ||
+      this.activeCandidateId !== candidateId
+    ) {
+      return {
+        ok: false,
+        error: "Candidate is unavailable for claim review."
+      };
+    }
+
+    if (selectedItems.length === 0) {
+      return { ok: true, appliedCount: 0 };
+    }
+
+    if (selectedItems.length > 12) {
+      return {
+        ok: false,
+        error: "Select no more than 12 claims."
+      };
+    }
+
+    const apiKey = this.getApiKey().trim();
+
+    if (
+      selectedItems.some((item) =>
+        containsSensitiveClaimData(item, apiKey)
+      )
+    ) {
+      return {
+        ok: false,
+        error: "Selected claims contain unsafe sensitive data."
+      };
+    }
+
+    // ── Guard: formal_statement must have a valid, reviewed formalization ──
+    for (const item of selectedItems) {
+      if (item.kind !== "formal_statement") {
+        continue;
+      }
+
+      // Check committed formalizations first, then ephemeral previews
+      const committedFormalizations = this.getFormalizationsForClaim(item.id);
+      const acceptedCurrentPreview =
+        this.getCurrentFormalizationPreviewForSuggestion(
+          item.id,
+          item.text,
+          item.kind,
+          "accepted"
+        );
+
+      const committedValid = committedFormalizations.some(
+        (r) => r.reviewStatus === "accepted"
+      );
+      const previewValid = acceptedCurrentPreview !== undefined;
+
+      if (!committedValid && !previewValid) {
+        return {
+          ok: false,
+          error:
+            "Formalize and review this formal statement before applying it.",
+          offendingClaimId: item.id
+        };
+      }
+    }
+
+    candidate.claims ??= [];
+    const allowedSourceIds = new Set(candidate.sourceMessageIds);
+    const nextClaims = candidate.claims.map((claim) => ({
+      ...claim,
+      sourceReferences: [...claim.sourceReferences],
+      sourceMessageIds: [...claim.sourceMessageIds],
+      formalizationIds: [...(claim.formalizationIds ?? [])]
+    }));
+    const now = new Date().toISOString();
+    let appliedCount = 0;
+
+    for (const item of selectedItems) {
+      const existingIndex = nextClaims.findIndex(
+        (claim) => claim.id === item.id
+      );
+      const existing = existingIndex === -1
+        ? undefined
+        : nextClaims[existingIndex];
+      const belongsToCandidate =
+        existing !== undefined ||
+        item.id.startsWith("claim-" + candidateId + "-");
+
+      if (!belongsToCandidate) {
+        continue;
+      }
+
+      const normalized = normalizeReviewedClaim(
+        {
+          ...item,
+          sourceMessageIds: item.sourceMessageIds.filter(
+            (id) => allowedSourceIds.has(id)
+          )
+        },
+        existing,
+        now
+      );
+
+      if (normalized === null) {
+        continue;
+      }
+
+      // ── Materialize suggestion formalization previews ──────────
+      // Transfer draft formalizations from suggestion ID to committed claim ID.
+      this.materializeSuggestionFormalizations(
+        item.id,
+        normalized
+      );
+
+      if (existingIndex === -1) {
+        nextClaims.push(normalized);
+      } else {
+        nextClaims[existingIndex] = normalized;
+      }
+
+      appliedCount += 1;
+    }
+
+    if (appliedCount === 0) {
+      return {
+        ok: false,
+        error: "No valid claims were selected."
+      };
+    }
+
+    candidate.claims = nextClaims;
+    const update = updateKnowledgeStatusMarkdown(
+      candidate.markdown,
+      candidate.claims
+    );
+    candidate.claimStatusWarning = update.warning;
+
+    if (update.changed) {
+      candidate.markdown = update.markdown;
+      candidate.revision += 1;
+      candidate.userEdited = true;
+    }
+
+    this.notify();
+    this.notifyFormalizationChanged();
+    return {
+      ok: true,
+      appliedCount,
+      warning: update.warning
+    };
+  }
+
+  /**
+   * Materialize suggestion formalization previews: move them from the
+   * ephemeral suggestionPreviews store into the persistent formalizationIndex.
+   *
+   * Updates claimId from the suggestion ID to the newly committed claim ID,
+   * links them to the committed claim, and removes them from the ephemeral store.
+   *
+   * Does NOT re-call the LLM — the user-reviewed formalization content
+   * is preserved exactly.
+   */
+  private materializeSuggestionFormalizations(
+    suggestionId: string,
+    committedClaim: ClaimRecord
+  ): void {
+    const previews = this.suggestionPreviews.get(suggestionId);
+
+    if (previews === undefined || previews.length === 0) {
+      return;
+    }
+
+    const surviving: SuggestionFormalizationPreview[] = [];
+
+    for (const preview of previews) {
+      // Verify the preview is not stale relative to the committed text
+      if (
+        preview.sourceText !== committedClaim.text ||
+        preview.sourceKind !== committedClaim.kind
+      ) {
+        // Stale — discard the preview (the guard above should have caught this)
+        continue;
+      }
+
+      // Only materialize accepted previews
+      if (preview.record.reviewStatus !== "accepted") {
+        surviving.push(preview);
+        continue;
+      }
+
+      // Create a mutable copy with the new committed claimId
+      const materialized: FormalizationRecord = {
+        ...preview.record,
+        claimId: committedClaim.id
+      };
+
+      // Write to persistent formalizationIndex
+      const recordId = materialized.id;
+      this.formalizationIndex.records[recordId] = materialized;
+
+      // Link to committed claim
+      committedClaim.formalizationIds ??= [];
+      committedClaim.formalizationIds.push(recordId);
+      committedClaim.primaryFormalizationId ??= recordId;
+    }
+
+    // Remove materialized previews from ephemeral store
+    if (surviving.length === 0) {
+      this.suggestionPreviews.delete(suggestionId);
+    } else {
+      this.suggestionPreviews.set(suggestionId, surviving);
+    }
+
+    // Now that records are in formalizationIndex, trigger persistence
+    this.notifyFormalizationChanged();
+  }
+
+  // ── Formalization ────────────────────────────────────────────
+
+  getFormalizationIndex(): Readonly<FormalizationIndex> {
+    return this.formalizationIndex;
+  }
+
+  setFormalizationIndex(index: FormalizationIndex | undefined): void {
+    if (index === undefined) {
+      this.formalizationIndex = { schemaVersion: 1, records: {} };
+      return;
+    }
+
+    // Defensive copy: the caller-owned index may be frozen or
+    // non-extensible (e.g. Object.freeze in a settings snapshot).
+    // Session must own a mutable records container so materialize
+    // can add entries without throwing.
+    this.formalizationIndex = {
+      schemaVersion: index.schemaVersion,
+      records: { ...index.records }
+    };
+  }
+
+  getFormalization(
+    recordId: string
+  ): Readonly<FormalizationRecord> | undefined {
+    return this.formalizationIndex.records[recordId];
+  }
+
+  getFormalizationsForClaim(
+    claimId: string
+  ): Readonly<FormalizationRecord>[] {
+    const candidate = this.candidates.find(
+      (c) => c.claims.some((claim) => claim.id === claimId)
+    );
+
+    if (candidate === undefined) {
+      return [];
+    }
+
+    const claim = candidate.claims.find((c) => c.id === claimId);
+
+    if (claim === undefined) {
+      return [];
+    }
+
+    claim.formalizationIds ??= [];
+
+    return claim.formalizationIds
+      .map((id) => this.formalizationIndex.records[id])
+      .filter((r): r is FormalizationRecord => r !== undefined);
+  }
+
+  /**
+   * Get ephemeral formalization previews for an un-applied suggestion.
+   * These are NOT in formalizationIndex and are NOT persisted.
+   */
+  getFormalizationPreviewsForSuggestion(
+    suggestionId: string
+  ): Readonly<SuggestionFormalizationPreview>[] {
+    return this.suggestionPreviews.get(suggestionId) ?? [];
+  }
+
+  /**
+   * Return the newest preview that still belongs to this suggestion and
+   * exactly matches its current editable source. The modal badge and Apply
+   * guard share this predicate so a rendered current state cannot disagree
+   * with materialization eligibility.
+   */
+  getCurrentFormalizationPreviewForSuggestion(
+    suggestionId: string,
+    currentText: string,
+    currentKind: ClaimKind,
+    reviewStatus?: ReviewStatus
+  ): Readonly<SuggestionFormalizationPreview> | undefined {
+    const previews = this.suggestionPreviews.get(suggestionId) ?? [];
+
+    for (let index = previews.length - 1; index >= 0; index -= 1) {
+      const preview = previews[index]!;
+
+      if (
+        preview.suggestionId === suggestionId &&
+        preview.sourceText === currentText &&
+        preview.sourceKind === currentKind &&
+        (reviewStatus === undefined ||
+          preview.record.reviewStatus === reviewStatus)
+      ) {
+        return preview;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Check whether a suggestion formalization preview is stale relative
+   * to the current claim text / kind.
+   *
+   * Returns:
+   *   - undefined  if no suggestion source snapshot exists (not a suggestion
+   *                formalization, or already materialized)
+   *   - false      if the preview matches the current text and kind
+   *   - true       if the preview is stale (text or kind changed)
+   */
+  /**
+   * Check whether a suggestion formalization preview is stale relative
+   * to the current claim text / kind.
+   *
+   * Returns:
+   *   - undefined  if no suggestion preview found for this recordId
+   *   - false      if the preview matches the current text and kind
+   *   - true       if the preview is stale (text or kind changed)
+   */
+  isFormalizationStale(
+    recordId: string,
+    currentText: string,
+    currentKind: ClaimKind
+  ): boolean | undefined {
+    const preview = this.findPreviewByRecordId(recordId);
+
+    if (preview === undefined) {
+      return undefined; // not a suggestion formalization
+    }
+
+    return (
+      preview.sourceText !== currentText ||
+      preview.sourceKind !== currentKind
+    );
+  }
+
+  /**
+   * Get the source text snapshot for a formalization record.
+   * Returns undefined for non-suggestion formalizations.
+   */
+  getFormalizationSourceSnapshot(
+    recordId: string
+  ): { sourceText: string; sourceKind: ClaimKind } | undefined {
+    const preview = this.findPreviewByRecordId(recordId);
+
+    if (preview === undefined) {
+      return undefined;
+    }
+
+    return { sourceText: preview.sourceText, sourceKind: preview.sourceKind };
+  }
+
+  /** Find a suggestion preview by its record ID across all suggestions. */
+  private findPreviewByRecordId(
+    recordId: string
+  ): SuggestionFormalizationPreview | undefined {
+    for (const previews of this.suggestionPreviews.values()) {
+      const found = previews.find((p) => p.record.id === recordId);
+
+      if (found !== undefined) {
+        return found;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Remove a single suggestion formalization preview by record ID.
+   * Does NOT touch formalizationIndex — only removes from the ephemeral store.
+   */
+  deleteFormalizationForSuggestion(recordId: string): void {
+    for (const [suggestionId, previews] of this.suggestionPreviews) {
+      const index = previews.findIndex((p) => p.record.id === recordId);
+
+      if (index !== -1) {
+        previews.splice(index, 1);
+
+        if (previews.length === 0) {
+          this.suggestionPreviews.delete(suggestionId);
+        }
+
+        return;
+      }
+    }
+  }
+
+  /**
+   * Remove all ephemeral formalization previews for a suggestion ID.
+   * Does NOT touch formalizationIndex.
+   */
+  deleteAllFormalizationsForSuggestionId(suggestionId: string): void {
+    this.suggestionPreviews.delete(suggestionId);
+  }
+
+  async generateFormalization(
+    candidateId: string,
+    claimId: string,
+    suggestionItem?: ClaimReviewItem
+  ): Promise<
+    | { ok: true; record: Readonly<FormalizationRecord> }
+    | { ok: false; error: string }
+  > {
+    const candidate = this.candidates.find(
+      (item) => item.id === candidateId
+    );
+
+    if (candidate === undefined || this.activeCandidateId !== candidateId) {
+      return {
+        ok: false,
+        error: "Candidate is unavailable for formalization."
+      };
+    }
+
+    const committedClaim = candidate.claims.find((c) => c.id === claimId);
+
+    // ── Suggestion path: claim not yet applied ──────────────────
+    if (committedClaim === undefined && suggestionItem !== undefined) {
+      return this.generateFormalizationForSuggestion(
+        candidate,
+        suggestionItem,
+        claimId
+      );
+    }
+
+    if (committedClaim === undefined) {
+      return {
+        ok: false,
+        error: "Claim not found."
+      };
+    }
+
+    const apiKey = this.getApiKey().trim();
+
+    if (apiKey === "") {
+      return {
+        ok: false,
+        error: "Please add your DeepSeek API key in Lain Brain settings."
+      };
+    }
+
+    // Collect sourceRefs from claim's source messages
+    const sourceRefs = this.collectSourceRefs(committedClaim.sourceMessageIds);
+
+    if (sourceRefs.length === 0) {
+      return {
+        ok: false,
+        error: "No source messages available for formalization."
+      };
+    }
+
+    // Collect context messages (all candidate source messages)
+    const allSources = this.getCandidateSourceMessages();
+    const contextMessages = this.getMessagesForTopic(
+      allSources,
+      candidate.sourceMessageIds
+    );
+
+    // sourceText = the first user message among sourceRefs
+    const userRef = sourceRefs.find((ref) => {
+      const msg = this.messages.find((m) => m.id === ref.messageId);
+      return msg?.role === "user";
+    });
+
+    const sourceText = userRef !== undefined
+      ? userRef.snapshot
+      : sourceRefs[0]?.snapshot ?? "";
+
+    if (sourceText.trim() === "") {
+      return {
+        ok: false,
+        error: "No user text available for formalization."
+      };
+    }
+
+    this.claimReviewLoading = true;
+    this.notify();
+
+    try {
+      const result = await classifyMathSpeechAct(apiKey, {
+        sourceText,
+        contextMessages
+      });
+
+      if ("error" in result) {
+        this.claimReviewLoading = false;
+        this.notify();
+
+        if (result.error === "not_mathematical") {
+          return {
+            ok: false,
+            error: "The selected text does not contain a recognizable mathematical utterance."
+          };
+        }
+
+        return {
+          ok: false,
+          error: "Unable to formalize. " + result.error
+        };
+      }
+
+      const record = createFormalizationRecord({
+        claimId,
+        sourceRefs,
+        speechAct: result.speechAct,
+        objects: result.objects,
+        explicitAssumptions: result.explicitAssumptions,
+        implicitAssumptions: result.implicitAssumptions,
+        quantifiers: result.quantifiers,
+        conclusion: result.conclusion,
+        ambiguities: result.ambiguities,
+        missingConditions: result.missingConditions,
+        semanticChanges: result.semanticChanges,
+        aiNormalizedStatement: result.normalizedStatement,
+        latexStatement: result.latexStatement
+      });
+
+      // Store in index
+      this.formalizationIndex.records[record.id] = record as FormalizationRecord;
+
+      // Link to committed claim
+      committedClaim.formalizationIds ??= [];
+      committedClaim.formalizationIds.push(record.id);
+
+      // Set as primary if first
+      committedClaim.primaryFormalizationId ??= record.id;
+
+      this.claimReviewLoading = false;
+      this.notify();
+      this.notifyFormalizationChanged();
+
+      return { ok: true, record };
+    } catch (error) {
+      this.claimReviewLoading = false;
+      this.notify();
+
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? "Unable to formalize. " + error.message
+          : "Unable to formalize. Please try again."
+      };
+    }
+  }
+
+  /**
+   * Generate a formalization preview for an un-applied suggestion.
+   *
+   * The formalization is stored in the main index with claimId = suggestionId,
+   * but is NOT linked to candidate.claims (the claim hasn't been committed).
+   * A source text/kind snapshot is saved for staleness detection.
+   */
+  private async generateFormalizationForSuggestion(
+    candidate: CandidateNote,
+    suggestionItem: ClaimReviewItem,
+    suggestionId: string
+  ): Promise<
+    | { ok: true; record: Readonly<FormalizationRecord> }
+    | { ok: false; error: string }
+  > {
+    const apiKey = this.getApiKey().trim();
+
+    if (apiKey === "") {
+      return {
+        ok: false,
+        error: "Please add your DeepSeek API key in Lain Brain settings."
+      };
+    }
+
+    if (suggestionItem.text.trim() === "") {
+      return {
+        ok: false,
+        error: "Claim text is empty. Write a claim before formalizing."
+      };
+    }
+
+    // Collect sourceRefs from the suggestion's source message IDs
+    const sourceRefs = this.collectSourceRefs(suggestionItem.sourceMessageIds);
+
+    // Collect context messages (all candidate source messages)
+    const allSources = this.getCandidateSourceMessages();
+    const contextMessages = this.getMessagesForTopic(
+      allSources,
+      candidate.sourceMessageIds
+    );
+
+    // Use the claim text itself as the primary source for formalization
+    const sourceText = suggestionItem.text;
+
+    this.claimReviewLoading = true;
+    this.notify();
+
+    try {
+      const result = await classifyMathSpeechAct(apiKey, {
+        sourceText,
+        contextMessages
+      });
+
+      if ("error" in result) {
+        this.claimReviewLoading = false;
+        this.notify();
+
+        if (result.error === "not_mathematical") {
+          return {
+            ok: false,
+            error: "The claim text does not contain a recognizable mathematical utterance."
+          };
+        }
+
+        return {
+          ok: false,
+          error: "Unable to formalize. " + result.error
+        };
+      }
+
+      const record = createFormalizationRecord({
+        claimId: suggestionId,
+        sourceRefs,
+        speechAct: result.speechAct,
+        objects: result.objects,
+        explicitAssumptions: result.explicitAssumptions,
+        implicitAssumptions: result.implicitAssumptions,
+        quantifiers: result.quantifiers,
+        conclusion: result.conclusion,
+        ambiguities: result.ambiguities,
+        missingConditions: result.missingConditions,
+        semanticChanges: result.semanticChanges,
+        aiNormalizedStatement: result.normalizedStatement,
+        latexStatement: result.latexStatement
+      });
+
+      // Store in ephemeral preview store — NOT in formalizationIndex.
+      // Drafts are never persisted to plugin data.
+      const preview: SuggestionFormalizationPreview = {
+        record: record as FormalizationRecord,
+        suggestionId,
+        sourceText: suggestionItem.text,
+        sourceKind: suggestionItem.kind
+      };
+
+      const existing = this.suggestionPreviews.get(suggestionId) ?? [];
+      existing.push(preview);
+      this.suggestionPreviews.set(suggestionId, existing);
+
+      this.claimReviewLoading = false;
+      this.notify();
+      // NOTE: notifyFormalizationChanged is deliberately NOT called here.
+      // Draft previews must not trigger persistence to data.json.
+
+      return { ok: true, record };
+    } catch (error) {
+      this.claimReviewLoading = false;
+      this.notify();
+
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? "Unable to formalize. " + error.message
+          : "Unable to formalize. Please try again."
+      };
+    }
+  }
+
+  /** Collect SourceRefs from message IDs shared by both suggestion and committed paths. */
+  private collectSourceRefs(messageIds: readonly string[]): SourceRef[] {
+    const sourceRefs: SourceRef[] = [];
+    const seenMessageIds = new Set<string>();
+
+    for (const messageId of messageIds) {
+      if (seenMessageIds.has(messageId)) {
+        continue;
+      }
+
+      seenMessageIds.add(messageId);
+
+      const message = this.messages.find((m) => m.id === messageId);
+
+      if (message === undefined) {
+        continue;
+      }
+
+      sourceRefs.push({
+        messageId: message.id,
+        snapshot: message.content
+      });
+    }
+
+    return sourceRefs;
+  }
+
+  applyFormalizationReview(
+    recordId: string,
+    reviewStatus: ReviewStatus,
+    reviewedStatement?: string,
+    rejectionReason?: string,
+    userNotes?: string
+  ): { ok: true; record: Readonly<FormalizationRecord> } | { ok: false; error: string } {
+    // Check committed formalization index first
+    const existing = this.formalizationIndex.records[recordId];
+
+    if (existing !== undefined) {
+      return this.applyCommittedFormalizationReview(
+        existing,
+        recordId,
+        reviewStatus,
+        reviewedStatement,
+        rejectionReason,
+        userNotes
+      );
+    }
+
+    // Check ephemeral suggestion previews
+    const preview = this.findPreviewByRecordId(recordId);
+
+    if (preview !== undefined) {
+      return this.applyPreviewFormalizationReview(
+        preview,
+        reviewStatus,
+        reviewedStatement,
+        rejectionReason,
+        userNotes
+      );
+    }
+
+    return {
+      ok: false,
+      error: "Formalization record not found."
+    };
+  }
+
+  /** Apply review to a committed (persisted) formalization record. */
+  private applyCommittedFormalizationReview(
+    existing: Readonly<FormalizationRecord>,
+    recordId: string,
+    reviewStatus: ReviewStatus,
+    reviewedStatement?: string,
+    rejectionReason?: string,
+    userNotes?: string
+  ): { ok: true; record: Readonly<FormalizationRecord> } | { ok: false; error: string } {
+
+    try {
+      const updated = applyFormalizationReviewUpdate(
+        existing,
+        reviewStatus,
+        reviewedStatement,
+        rejectionReason,
+        userNotes
+      );
+
+      this.formalizationIndex.records[recordId] = updated;
+
+      // Clear primary if the rejected record was primary
+      if (reviewStatus === "rejected") {
+        this.rejectAndClearPrimaryIfNeeded(updated);
+      }
+
+      // Update claim's knowledge status markdown if the claim exists
+      for (const candidate of this.candidates) {
+        const claim = candidate.claims.find(
+          (c) => c.formalizationIds?.includes(recordId)
+        );
+
+        if (claim !== undefined) {
+          const formalizations = this.getFormalizationsForClaim(claim.id);
+          const summaries = buildAllFormalizationSummaries(formalizations);
+
+          // Append formalization summaries to knowledge status if present
+          if (summaries !== "" && candidate.markdown.includes("## Knowledge status")) {
+            const formalizationStart =
+              "<!-- lain-brain:knowledge-status:start -->";
+            const formalizationEnd =
+              "<!-- lain-brain:knowledge-status:end -->";
+            const startIdx = candidate.markdown.indexOf(formalizationStart);
+            const endIdx = candidate.markdown.indexOf(formalizationEnd);
+
+            if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
+              const statusBlock = candidate.markdown.slice(
+                startIdx + formalizationStart.length,
+                endIdx
+              );
+              const hasFormalizations = statusBlock.includes("### Formalizations");
+              const updatedBlock = hasFormalizations
+                ? statusBlock.replace(
+                    /### Formalizations[\s\S]*?(?=###|$)/,
+                    summaries
+                  )
+                : statusBlock.trimEnd() + "\n\n" + summaries;
+
+              candidate.markdown =
+                candidate.markdown.slice(0, startIdx + formalizationStart.length) +
+                updatedBlock +
+                candidate.markdown.slice(endIdx);
+              candidate.revision += 1;
+            }
+          }
+
+          break;
+        }
+      }
+
+      this.notify();
+      this.notifyFormalizationChanged();
+      return { ok: true, record: updated };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? error.message
+          : "Unable to apply formalization review."
+      };
+    }
+  }
+
+  /** Apply review to an ephemeral suggestion formalization preview. */
+  private applyPreviewFormalizationReview(
+    preview: SuggestionFormalizationPreview,
+    reviewStatus: ReviewStatus,
+    reviewedStatement?: string,
+    rejectionReason?: string,
+    userNotes?: string
+  ): { ok: true; record: Readonly<FormalizationRecord> } | { ok: false; error: string } {
+    try {
+      const updated = applyFormalizationReviewUpdate(
+        preview.record,
+        reviewStatus,
+        reviewedStatement,
+        rejectionReason,
+        userNotes
+      );
+
+      // Replace the preview's record in-place within the ephemeral store.
+      // Find the preview in suggestionPreviews and update it.
+      for (const [suggestionId, previews] of this.suggestionPreviews) {
+        const index = previews.indexOf(preview);
+
+        if (index !== -1) {
+          const updatedPreview: SuggestionFormalizationPreview = {
+            ...preview,
+            record: updated as FormalizationRecord
+          };
+          previews[index] = updatedPreview;
+          break;
+        }
+      }
+
+      // NOTE: notifyFormalizationChanged is deliberately NOT called.
+      // Draft previews must not trigger persistence to data.json.
+
+      this.notify();
+      return { ok: true, record: updated };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? error.message
+          : "Unable to apply formalization review."
+      };
+    }
+  }
+
+  // ── Primary Formalization ────────────────────────────────────
+
+  setPrimaryFormalization(
+    claimId: string,
+    formalizationId: string
+  ): { ok: true } | { ok: false; error: string } {
+    const formalization =
+      this.formalizationIndex.records[formalizationId];
+
+    if (formalization === undefined) {
+      return {
+        ok: false,
+        error: "Formalization record not found."
+      };
+    }
+
+    // Find the claim
+    const candidate = this.findCandidateByClaimId(claimId);
+
+    if (candidate === undefined) {
+      return {
+        ok: false,
+        error: "Claim not found."
+      };
+    }
+
+    const claim = candidate.claims.find((c) => c.id === claimId);
+
+    if (claim === undefined) {
+      return {
+        ok: false,
+        error: "Claim not found."
+      };
+    }
+
+    claim.formalizationIds ??= [];
+
+    const allowed = canSetPrimaryFormalization(
+      formalization,
+      claim.formalizationIds
+    );
+
+    if (!allowed.allowed) {
+      return {
+        ok: false,
+        error: allowed.reason ?? "Cannot set as primary."
+      };
+    }
+
+    claim.primaryFormalizationId = formalizationId;
+    this.notify();
+    this.notifyFormalizationChanged();
+    return { ok: true };
+  }
+
+  getPrimaryFormalizationForClaim(
+    claimId: string
+  ): Readonly<FormalizationRecord> | undefined {
+    const candidate = this.findCandidateByClaimId(claimId);
+
+    if (candidate === undefined) {
+      return undefined;
+    }
+
+    const claim = candidate.claims.find((c) => c.id === claimId);
+
+    if (
+      claim === undefined ||
+      claim.primaryFormalizationId === undefined
+    ) {
+      return undefined;
+    }
+
+    return this.formalizationIndex.records[
+      claim.primaryFormalizationId
+    ];
+  }
+
+  private rejectAndClearPrimaryIfNeeded(
+    formalization: Readonly<FormalizationRecord>
+  ): void {
+    for (const candidate of this.candidates) {
+      for (const claim of candidate.claims) {
+        if (
+          shouldClearPrimaryOnRejection(
+            formalization,
+            claim.primaryFormalizationId
+          )
+        ) {
+          claim.primaryFormalizationId = undefined;
+          // Never silently select another record
+        }
+      }
+    }
+  }
+
+  private findCandidateByClaimId(
+    claimId: string
+  ): CandidateNote | undefined {
+    return this.candidates.find(
+      (c) => c.claims.some((claim) => claim.id === claimId)
+    );
+  }
+
+  // ── Lean Artifact Management ──────────────────────────────────
+
+  private generateLeanArtifactId(): string {
+    return (
+      "lean-artifact-" +
+      Date.now().toString(36) + "-" +
+      Math.random().toString(36).slice(2, 8)
+    );
+  }
+
+  async generateLeanArtifact(
+    claimId: string,
+    formalizationId: string
+  ): Promise<
+    | { ok: true; artifact: Readonly<LeanArtifact> }
+    | { ok: false; error: string; blockingReason?: string }
+  > {
+    const formalization =
+      this.formalizationIndex.records[formalizationId];
+
+    if (formalization === undefined) {
+      return {
+        ok: false,
+        error: "Formalization record not found."
+      };
+    }
+
+    const candidate = this.findCandidateByClaimId(claimId);
+
+    if (candidate === undefined) {
+      return {
+        ok: false,
+        error: "Claim not found."
+      };
+    }
+
+    const claim = candidate.claims.find((c) => c.id === claimId);
+
+    if (claim === undefined) {
+      return {
+        ok: false,
+        error: "Claim not found."
+      };
+    }
+
+    const isPrimary =
+      claim.primaryFormalizationId === formalizationId;
+
+    const eligibility = checkLeanEligibility(
+      formalization,
+      isPrimary
+    );
+
+    if (!eligibility.eligible) {
+      return {
+        ok: false,
+        error: "Not eligible for Lean statement generation.",
+        blockingReason: eligibility.reason
+      };
+    }
+
+    const apiKey = this.getApiKey().trim();
+
+    if (apiKey === "") {
+      return {
+        ok: false,
+        error:
+          "Please add your DeepSeek API key in Lain Brain settings."
+      };
+    }
+
+    this.claimReviewLoading = true;
+    this.notify();
+
+    try {
+      const result = await this.generateLean(apiKey, {
+        reviewedStatement: formalization.reviewedStatement,
+        speechAct: formalization.speechAct,
+        conclusion: formalization.conclusion,
+        quantifiers: formalization.quantifiers,
+        objects: formalization.objects
+      });
+
+      if ("error" in result) {
+        this.claimReviewLoading = false;
+        this.notify();
+
+        return {
+          ok: false,
+          error: "Unable to generate Lean statement. " + result.error
+        };
+      }
+
+      // Trust-boundary guard: the LLM body must not carry its own import
+      // directives.  Imports are owned exclusively by LeanArtifact.imports.
+      const bodyImportDiags = validateLeanBodyNoImports(
+        result.leanCode
+      );
+      if (bodyImportDiags.length > 0) {
+        this.claimReviewLoading = false;
+        this.notify();
+
+        return {
+          ok: false,
+          error:
+            "LLM generated import lines in the statement body — " +
+            "this violates the Lean body contract. " +
+            bodyImportDiags[0]!.message
+        };
+      }
+
+      const now = new Date().toISOString();
+      const imports = selectLeanImportsForFormalization(
+        formalization,
+        result.leanCode
+      );
+      const fullCode = buildLeanCode(imports, result.leanCode);
+
+      const artifact: LeanArtifact = {
+        id: this.generateLeanArtifactId(),
+        claimId,
+        formalizationId,
+        imports,
+        generatedCode: fullCode,
+        reviewedCode: fullCode,
+        status: "not_checked",
+        diagnostics: result.unresolvedMappings.map((m) => ({
+          severity: "warning" as const,
+          message: "Unresolved Mathlib mapping: " + m
+        })),
+        createdAt: now,
+        updatedAt: now
+      };
+
+      this.leanArtifactIndex.artifacts[artifact.id] = artifact;
+      this.claimReviewLoading = false;
+      this.notify();
+      this.notifyLeanArtifactsChanged();
+
+      return { ok: true, artifact };
+    } catch (error) {
+      this.claimReviewLoading = false;
+      this.notify();
+
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? "Unable to generate Lean statement. " + error.message
+          : "Unable to generate Lean statement. Please try again."
+      };
+    }
+  }
+
+  updateLeanReviewedCode(
+    artifactId: string,
+    reviewedCode: string
+  ): { ok: true; artifact: Readonly<LeanArtifact> } | { ok: false; error: string } {
+    const artifact =
+      this.leanArtifactIndex.artifacts[artifactId];
+
+    if (artifact === undefined) {
+      return {
+        ok: false,
+        error: "Lean artifact not found."
+      };
+    }
+
+    if (typeof reviewedCode !== "string" || reviewedCode.trim() === "") {
+      return {
+        ok: false,
+        error: "Reviewed code must be a non-empty string."
+      };
+    }
+
+    // generatedCode is immutable — only reviewedCode is updated
+    const updated: LeanArtifact = {
+      ...artifact,
+      reviewedCode,
+      status: "not_checked",
+      diagnostics: [],
+      updatedAt: new Date().toISOString()
+    };
+
+    this.leanArtifactIndex.artifacts[artifactId] = updated;
+
+    const formalization =
+      this.formalizationIndex.records[artifact.formalizationId];
+    if (formalization !== undefined) {
+      this.formalizationIndex.records[artifact.formalizationId] = {
+        ...formalization,
+        verificationStatus: "not_checked",
+        leanStatement: undefined,
+        updatedAt: new Date().toISOString()
+      };
+      this.notifyFormalizationChanged();
+    }
+
+    this.notify();
+    this.notifyLeanArtifactsChanged();
+    return { ok: true, artifact: updated };
+  }
+
+  async runLeanCheck(
+    artifactId: string
+  ): Promise<
+    | { ok: true; artifact: Readonly<LeanArtifact> }
+    | { ok: false; error: string; diagnostics: LeanDiagnostic[] }
+  > {
+    const artifact =
+      this.leanArtifactIndex.artifacts[artifactId];
+
+    if (artifact === undefined) {
+      return {
+        ok: false,
+        error: "Lean artifact not found.",
+        diagnostics: []
+      };
+    }
+
+    // Safety validate
+    const safetyDiagnostics = validateLeanCode(
+      artifact.reviewedCode
+    );
+
+    if (safetyDiagnostics.length > 0) {
+      const updated: LeanArtifact = {
+        ...artifact,
+        status: "error",
+        diagnostics: safetyDiagnostics,
+        updatedAt: new Date().toISOString()
+      };
+      this.leanArtifactIndex.artifacts[artifactId] = updated;
+      this.notify();
+      this.notifyLeanArtifactsChanged();
+
+      return {
+        ok: false,
+        error:
+          "Prohibited declarations or placeholders detected in reviewed code.",
+        diagnostics: safetyDiagnostics
+      };
+    }
+
+    if (this.leanRunner === null) {
+      return {
+        ok: false,
+        error: "Lean runner is not configured.",
+        diagnostics: []
+      };
+    }
+
+    try {
+      const result = await this.leanRunner.check({
+        code: artifact.reviewedCode
+      });
+
+      const status = result.status === "statement_typechecked"
+        ? "statement_typechecked"
+        : "error";
+
+      const updated: LeanArtifact = {
+        ...artifact,
+        status,
+        diagnostics: result.diagnostics,
+        updatedAt: new Date().toISOString()
+      };
+
+      this.leanArtifactIndex.artifacts[artifactId] = updated;
+      this.notify();
+      this.notifyLeanArtifactsChanged();
+
+      if (status === "statement_typechecked") {
+        const formalization =
+          this.formalizationIndex.records[
+            artifact.formalizationId
+          ];
+
+        if (formalization !== undefined) {
+          const updatedFormalization: FormalizationRecord = {
+            ...formalization,
+            verificationStatus: "statement_typechecked",
+            leanStatement: artifact.reviewedCode,
+            updatedAt: new Date().toISOString()
+          };
+          this.formalizationIndex.records[
+            artifact.formalizationId
+          ] = updatedFormalization;
+          this.notifyFormalizationChanged();
+        }
+      }
+
+      if (status !== "statement_typechecked") {
+        return {
+          ok: false,
+          error: "Lean statement check failed.",
+          diagnostics: result.diagnostics
+        };
+      }
+
+      return { ok: true, artifact: updated };
+    } catch {
+      const updated: LeanArtifact = {
+        ...artifact,
+        status: "error",
+        diagnostics: [
+          {
+            severity: "error",
+            message: "Lean check failed unexpectedly."
+          }
+        ],
+        updatedAt: new Date().toISOString()
+      };
+      this.leanArtifactIndex.artifacts[artifactId] = updated;
+      this.notify();
+      this.notifyLeanArtifactsChanged();
+
+      return {
+        ok: false,
+        error: "Lean check failed unexpectedly.",
+        diagnostics: updated.diagnostics
+      };
+    }
+  }
+
+  /**
+   * Connect the already-reviewed, committed formalization path to Lean.
+   * Generation and checking remain separate reusable primitives; this method
+   * only sequences them for the Review Claims workflow.
+   */
+  async generateAndRunLeanCheck(
+    claimId: string,
+    formalizationId: string
+  ): Promise<
+    | { ok: true; artifact: Readonly<LeanArtifact> }
+    | {
+        ok: false;
+        error: string;
+        diagnostics: LeanDiagnostic[];
+        blockingReason?: string;
+      }
+  > {
+    const generated = await this.generateLeanArtifact(
+      claimId,
+      formalizationId
+    );
+
+    if (!generated.ok) {
+      return {
+        ok: false,
+        error: generated.error,
+        blockingReason: generated.blockingReason,
+        diagnostics: []
+      };
+    }
+
+    const unresolved = generated.artifact.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.message.includes("Unresolved Mathlib mapping")
+    );
+
+    if (unresolved.length > 0) {
+      return {
+        ok: false,
+        error:
+          "Resolve the reported Mathlib mappings before running Lean.",
+        diagnostics: unresolved
+      };
+    }
+
+    return this.runLeanCheck(generated.artifact.id);
+  }
+
+  async testLeanEnvironment(): Promise<
+    | { ok: true }
+    | { ok: false; diagnostics: LeanDiagnostic[] }
+  > {
+    if (this.leanRunner === null) {
+      return {
+        ok: false,
+        diagnostics: [
+          {
+            severity: "error",
+            message: "Lean runner is not configured."
+          }
+        ]
+      };
+    }
+
+    const testCode = [
+      "import Mathlib.Data.Real.Basic",
+      "",
+      "set_option autoImplicit false",
+      "",
+      "#check (∀ value : ℝ, value + 0 = value)"
+    ].join("\n");
+
+    try {
+      const result = await this.leanRunner.check({
+        code: testCode
+      });
+
+      if (result.status === "statement_typechecked") {
+        return { ok: true };
+      }
+
+      return {
+        ok: false,
+        diagnostics: result.diagnostics
+      };
+    } catch {
+      return {
+        ok: false,
+        diagnostics: [
+          {
+            severity: "error",
+            message: "Lean environment test failed unexpectedly."
+          }
+        ]
+      };
+    }
   }
 
   async createCandidateNote(
@@ -1384,6 +3099,14 @@ export class LainBrainSession {
     candidate.markdown = value;
     candidate.userEdited = true;
     candidate.revision += 1;
+
+    if ((candidate.claims?.length ?? 0) > 0) {
+      candidate.claimStatusWarning =
+        hasSafelyLocatedKnowledgeStatus(value)
+          ? undefined
+          : "Knowledge status could not be located safely. Reviewed claims remain in this session.";
+    }
+
     this.notify();
   }
 
@@ -1984,9 +3707,21 @@ export class LainBrainSession {
       }
 
       if (topics.length === 0) {
-        this.candidateError =
-          "No substantive topics were found in the current chat.";
-        return "failed";
+        // ── Claim-driven fallback ──────────────────────────────
+        // If topic extraction returned nothing but the conversation
+        // contains an independently meaningful claim (e.g. a short
+        // mathematical statement), run the existing claim classifier
+        // and create atomic topics from any substantive claims found.
+        const fallbackTopics =
+          await this.tryAtomicClaimFallback(apiKey, sourceMessages);
+
+        if (fallbackTopics.length > 0) {
+          topics = fallbackTopics;
+        } else {
+          this.candidateError =
+            "No substantive topics were found in the current chat.";
+          return "failed";
+        }
       }
 
       const workItems = topics.flatMap((topic) => {
@@ -2064,7 +3799,11 @@ export class LainBrainSession {
           })),
           { ...item.topic, ...primaryConcept },
           relevantNoteContext,
-          item.existing?.markdown
+          item.existing === undefined
+            ? undefined
+            : removeManagedKnowledgeStatusBlock(
+                item.existing.markdown
+              )
         );
         const candidateBody = await this.reviewAndRepairLatex(
           apiKey,
@@ -2085,13 +3824,31 @@ export class LainBrainSession {
           parentGroup !== undefined &&
           parentPath !== undefined &&
           this.app.vault.getFileByPath(parentPath) !== null;
-        const markdown = parentAvailable
+        let markdown = parentAvailable
           ? setCandidateParentLink(
               baseMarkdown,
               getVaultPathLinkTarget(parentPath),
               parentGroup.parentDisplayTitle ?? parentGroup.title
             )
           : stripCandidateParentLinks(baseMarkdown);
+        const existingClaims = item.existing?.claims ?? [];
+        let claimStatusWarning =
+          item.existing?.claimStatusWarning;
+
+        if (existingClaims.length > 0) {
+          const statusUpdate = updateKnowledgeStatusMarkdown(
+            markdown,
+            existingClaims
+          );
+
+          if (statusUpdate.safe) {
+            markdown = statusUpdate.markdown;
+            claimStatusWarning = undefined;
+          } else {
+            claimStatusWarning = statusUpdate.warning;
+          }
+        }
+
         const candidate: CandidateNote = {
           id: item.existing?.id ?? this.createCandidateId(),
           title: normalizeCandidateTitle(
@@ -2107,6 +3864,10 @@ export class LainBrainSession {
           viewMode: item.existing?.viewMode ?? "preview",
           userEdited: false,
           revision: (item.existing?.revision ?? -1) + 1,
+          claims: existingClaims,
+          claimStatusWarning,
+          formalizationIds: item.existing?.formalizationIds ?? [],
+          primaryFormalizationId: item.existing?.primaryFormalizationId,
           createdVaultPath: item.existing?.createdVaultPath,
           createdRevision: item.existing?.createdRevision,
           groupId: item.existing?.groupId,
@@ -2334,6 +4095,136 @@ export class LainBrainSession {
     return mergeCandidateTopics(extracted, messages);
   }
 
+  /**
+   * Claim-driven fallback when topic extraction returns zero topics.
+   *
+   * Uses the existing claim classification path (classifyCandidateClaims)
+   * as the authoritative semantic classifier — NO ad-hoc regex or length
+   * heuristics.  An extra LLM call is made only when topic extraction
+   * already returned empty; it cannot be avoided because the topic-
+   * extraction prompt and the claim-classification prompt serve different
+   * semantic purposes and produce different output shapes.
+   *
+   * Eligible claim kinds:
+   *   - formal_statement  (must qualify)
+   *   - factual_claim     (when genuinely knowledge-bearing)
+   *   - open_question     (when substantive)
+   *   - personal_interpretation (tied to a concept)
+   *
+   * Does NOT create topics from greetings, chitchat, or empty content.
+   */
+  private async tryAtomicClaimFallback(
+    apiKey: string,
+    messages: CandidateSourceMessage[]
+  ): Promise<CandidateTopicSelection[]> {
+    const userMessages = messages.filter((m) => m.role === "user");
+    if (userMessages.length === 0) {
+      return [];
+    }
+
+    // Cheap pre-filter: skip obviously trivial messages to avoid
+    // wasting an LLM call.  The classifier is still the authoritative
+    // semantic decision — this only gates the call itself.
+    if (isTrivialMessages(userMessages)) {
+      return [];
+    }
+
+    // Build a minimal classification request from the raw user messages.
+    // No candidate note exists yet, so title/markdown are synthetic.
+    //
+    // The parser now accepts {claims:[]} as a valid zero-claim semantic
+    // result (returns [] without throwing).  Real errors (network, API
+    // failure, malformed JSON) still throw and propagate to the
+    // generateOrUpdateCandidateNotes catch block, which shows a system
+    // failure message rather than mislabeling it as non-substantive.
+    const claimResult = await this.classifyClaims(apiKey, {
+      title: "Atomic claim",
+      primaryConcept: userMessages[0]!.content.slice(0, 60),
+      markdown: userMessages.map((m) => m.content).join("\n\n"),
+      sourceMessages: userMessages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content
+      }))
+    });
+
+    // Filter for eligible claim kinds.
+    // The classifier itself determines semantic validity — no regex.
+    const eligibleKinds = new Set([
+      "formal_statement",
+      "factual_claim",
+      "open_question",
+      "personal_interpretation"
+    ]);
+
+    const substantiveClaims = claimResult.filter(
+      (c) => eligibleKinds.has(c.kind) && c.text.trim() !== ""
+    );
+
+    if (substantiveClaims.length === 0) {
+      return [];
+    }
+
+    // Create one atomic topic per substantive claim.
+    // Preserve the original claim text and source message IDs.
+    const results: CandidateTopicSelection[] = [];
+    const seenTitles = new Set<string>();
+
+    for (const claim of substantiveClaims) {
+      const title = claim.text.length <= 70
+        ? claim.text
+        : claim.text.slice(0, 67) + "...";
+      const conceptName = claim.text.length <= 60
+        ? claim.text
+        : claim.text.slice(0, 57) + "...";
+
+      // Deduplicate by normalized title
+      const titleKey = title.normalize("NFKC").toLocaleLowerCase().trim();
+      if (seenTitles.has(titleKey)) {
+        continue;
+      }
+      seenTitles.add(titleKey);
+
+      // ── Provenance boundary ────────────────────────────────
+      // Require valid sourceMessageIds from the classifier.
+      // Safe recovery: only when exactly one user message exists
+      // and the classifier returned no ids, we can infer the source.
+      // Multiple user messages + missing ids → skip (unresolved).
+      let resolvedSourceIds: string[] | null = null;
+
+      if (claim.sourceMessageIds.length > 0) {
+        // Verify ids exist in the source messages
+        const validIds = claim.sourceMessageIds.filter(
+          (id) => userMessages.some((m) => m.id === id)
+        );
+        if (validIds.length > 0) {
+          resolvedSourceIds = [...validIds];
+        }
+      }
+
+      if (resolvedSourceIds === null && userMessages.length === 1) {
+        // Safe recovery: only one possible source
+        resolvedSourceIds = [userMessages[0]!.id];
+      }
+
+      if (resolvedSourceIds === null) {
+        // Unresolved provenance — skip this claim
+        continue;
+      }
+
+      results.push({
+        title,
+        conversationTopic: claim.text,
+        name: conceptName,
+        aliases: [claim.text],
+        sourceMessageIds: resolvedSourceIds,
+        activeNoteRelevant: false
+      });
+    }
+
+    return results;
+  }
+
   private getMessagesForTopic(
     messages: CandidateSourceMessage[],
     sourceMessageIds: readonly string[]
@@ -2547,6 +4438,15 @@ export class LainBrainSession {
   private createMessageId(): string {
     this.nextMessageSequence += 1;
     return `message-${this.nextMessageSequence}`;
+  }
+
+  private createClaimId(candidateId: string): string {
+    this.nextClaimSequence += 1;
+    return (
+      "claim-" + candidateId + "-" +
+      Date.now().toString(36) + "-" +
+      this.nextClaimSequence
+    );
   }
 
   private createCandidateGroupId(): string {
@@ -2789,7 +4689,7 @@ function haveSameSourceMessages(
     left.every((id) => right.includes(id));
 }
 
-function isIgnoredCandidateTopic(
+export function isIgnoredCandidateTopic(
   messages: readonly CandidateSourceMessage[]
 ): boolean {
   const userTexts = messages
@@ -2798,7 +4698,24 @@ function isIgnoredCandidateTopic(
 
   return userTexts.length > 0 &&
     userTexts.every((text) =>
-      /^(?:1\+1=2|test|testing|测试|你好|hello|hi)$/.test(text)
+      /^(?:test|testing|测试|你好|hello|hi)$/.test(text)
+    );
+}
+
+/**
+ * Check whether a single message is trivial non-substantive input.
+ * Used by the atomic-claim fallback to exclude greetings/chitchat.
+ */
+export function isTrivialMessages(
+  messages: readonly CandidateSourceMessage[]
+): boolean {
+  const userTexts = messages
+    .filter((message) => message.role === "user")
+    .map((message) => normalizeTrivialText(message.content));
+
+  return userTexts.length > 0 &&
+    userTexts.every((text) =>
+      /^(?:test|testing|测试|你好|hello|hi|ok|okay|lol|喵|meow)$/.test(text)
     );
 }
 
@@ -2837,6 +4754,41 @@ function extractCandidateCoreConcept(
   );
 
   return link?.[1]?.trim() ?? null;
+}
+
+function containsSensitiveClaimData(
+  suggestion: ClaimSuggestion,
+  apiKey: string
+): boolean {
+  const values = [
+    suggestion.text,
+    suggestion.leanStatement ?? "",
+    ...suggestion.sourceReferences
+  ];
+  const combined = values.join("\n");
+
+  return (
+    (apiKey !== "" && combined.includes(apiKey)) ||
+    /data:image\/[a-z0-9.+-]+;base64,/i.test(combined)
+  );
+}
+
+function copyClaimSuggestion(
+  suggestion: ClaimSuggestion
+): ClaimSuggestion {
+  return {
+    ...suggestion,
+    sourceReferences: [...suggestion.sourceReferences],
+    sourceMessageIds: [...suggestion.sourceMessageIds]
+  };
+}
+
+function normalizeClaimIdentity(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeCandidateLabel(value: string): string {

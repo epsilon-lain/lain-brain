@@ -22,6 +22,8 @@ import {
   migrateLainBrainSettings
 } from "./settings";
 import { getActiveImageProvider } from "./ProviderProfiles";
+import type { FormalizationIndex, LeanArtifactIndex } from "./FormalizationProtocol";
+import { SpawnLeanRunner } from "./LeanRunner";
 import { LainBrainNamingModal } from "./LainBrainNamingModal";
 import {
   applyPersonalNames,
@@ -47,6 +49,32 @@ export default class LainBrainPlugin extends Plugin {
       )
     );
     this.session.setPersonalNamingProvider(() => this.settings);
+    this.session.setFormalizationIndex(this.settings.formalizationIndex);
+    this.session.setFormalizationSaveCallback(() => {
+      this.settings.formalizationIndex =
+        this.session.getFormalizationIndex() as FormalizationIndex;
+      void this.saveSettings();
+    });
+
+    // Lean integration
+    this.session.setLeanArtifactIndex(this.settings.leanArtifactIndex);
+    this.session.setLeanArtifactSaveCallback(() => {
+      this.settings.leanArtifactIndex =
+        this.session.getLeanArtifactIndex() as LeanArtifactIndex;
+      void this.saveSettings();
+    });
+    this.session.setLeanRunner(
+      new SpawnLeanRunner({
+        mode: this.settings.leanExecutionMode,
+        projectRoot: this.settings.leanProjectRoot,
+        executable: this.settings.leanExecutable,
+        args: this.settings.leanArgs,
+        timeoutSeconds: this.settings.leanTimeoutSeconds,
+        wslExecutable: this.settings.wslExecutable,
+        wslDistribution: this.settings.wslDistribution,
+        wslProjectRoot: this.settings.wslProjectRoot
+      })
+    );
     await this.session.setActiveFile(
       this.app.workspace.getActiveFile()
     );

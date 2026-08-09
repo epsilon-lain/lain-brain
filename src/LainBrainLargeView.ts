@@ -8,7 +8,9 @@ import { LainBrainChatPanel } from "./LainBrainChatPanel";
 import { CreateCandidateNoteModal } from "./CreateCandidateNoteModal";
 import { CreateCandidateGroupModal } from "./CreateCandidateGroupModal";
 import { DeleteCandidateNoteModal } from "./DeleteCandidateNoteModal";
+import { ReviewClaimsModal } from "./ReviewClaimsModal";
 import { LainBrainMarkdownRenderBatch } from "./LainBrainMarkdownRenderer";
+import { makeReadOnlyTextSelectable } from "./SelectableText";
 import type {
   CandidateNote,
   LainBrainCandidateViewMode,
@@ -26,9 +28,11 @@ export class LainBrainLargeView extends ItemView {
   private candidateCreationStatusEl?: HTMLElement;
   private candidateCreationErrorEl?: HTMLElement;
   private candidateParentStatusEl?: HTMLElement;
+  private candidateClaimStatusEl?: HTMLElement;
   private candidateGroupStatusEl?: HTMLElement;
   private candidateGroupErrorEl?: HTMLElement;
   private unsubscribe?: () => void;
+  private selectableCleanup?: () => void;
   private renderedMode?: LainBrainLargeViewMode;
   private renderedWorkspaceTitle = "";
   private renderedCandidateViewMode?: LainBrainCandidateViewMode;
@@ -77,11 +81,14 @@ export class LainBrainLargeView extends ItemView {
   async onClose(): Promise<void> {
     this.chatPanel?.destroy();
     this.chatPanel = undefined;
+    this.selectableCleanup?.();
+    this.selectableCleanup = undefined;
     this.candidateEditor = undefined;
     this.candidatePreviewEl = undefined;
     this.candidateCreationStatusEl = undefined;
     this.candidateCreationErrorEl = undefined;
     this.candidateParentStatusEl = undefined;
+    this.candidateClaimStatusEl = undefined;
     this.candidateGroupStatusEl = undefined;
     this.candidateGroupErrorEl = undefined;
     this.unsubscribe?.();
@@ -131,11 +138,14 @@ export class LainBrainLargeView extends ItemView {
   private prepareContent(titleText: string): HTMLDivElement {
     this.chatPanel?.destroy();
     this.chatPanel = undefined;
+    this.selectableCleanup?.();
+    this.selectableCleanup = undefined;
     this.candidateEditor = undefined;
     this.candidatePreviewEl = undefined;
     this.candidateCreationStatusEl = undefined;
     this.candidateCreationErrorEl = undefined;
     this.candidateParentStatusEl = undefined;
+    this.candidateClaimStatusEl = undefined;
     this.candidateGroupStatusEl = undefined;
     this.candidateGroupErrorEl = undefined;
     this.candidateMarkdownRenderer.destroy();
@@ -396,6 +406,20 @@ export class LainBrainLargeView extends ItemView {
     this.candidateCreationErrorEl = actions.createEl("small");
     this.candidateCreationErrorEl.style.color = "var(--text-error)";
     this.candidateParentStatusEl = actions.createEl("small");
+    this.candidateClaimStatusEl = actions.createEl("small");
+    this.candidateClaimStatusEl.style.color = "var(--text-error)";
+
+    const reviewClaimsButton = actions.createEl("button", {
+      text: "Review Claims"
+    });
+    reviewClaimsButton.disabled = this.session.loading;
+    reviewClaimsButton.addEventListener("click", () => {
+      new ReviewClaimsModal(
+        this.app,
+        this.session,
+        candidate.id
+      ).open();
+    });
 
     if (candidate.createdVaultPath === undefined) {
       const createButton = actions.createEl("button", {
@@ -440,6 +464,47 @@ export class LainBrainLargeView extends ItemView {
 
     this.syncCandidateCreatedState();
     this.syncCandidateParentStatus();
+    this.syncCandidateClaimStatus();
+  }
+
+   private syncCandidateClaimStatus(): void {
+    const candidate = this.session.getActiveCandidate();
+
+    if (
+      candidate === undefined ||
+      this.candidateClaimStatusEl === undefined
+    ) {
+      return;
+    }
+
+    const warning = this.session.getClaimStatusWarning(candidate.id);
+    const claims = this.session.getCandidateClaims(candidate.id);
+    const totalFormalizations = claims.reduce(
+      (sum, claim) =>
+        sum + (claim.formalizationIds?.length ?? 0),
+      0
+    );
+    const acceptedFormalizations = claims.reduce((sum, claim) => {
+      const formalizations =
+        this.session.getFormalizationsForClaim(claim.id);
+      return sum + formalizations.filter(
+        (f) => f.reviewStatus === "accepted"
+      ).length;
+    }, 0);
+
+    const parts: string[] = [];
+
+    if (warning !== "") {
+      parts.push(warning);
+    }
+
+    if (totalFormalizations > 0) {
+      parts.push(
+        `Formalizations: ${acceptedFormalizations}/${totalFormalizations} accepted`
+      );
+    }
+
+    this.candidateClaimStatusEl.setText(parts.join(" · "));
   }
 
   private syncCandidateParentStatus(): void {
@@ -611,6 +676,7 @@ export class LainBrainLargeView extends ItemView {
     previewEl.style.border =
       "1px solid var(--background-modifier-border)";
     previewEl.style.borderRadius = "4px";
+    this.selectableCleanup = makeReadOnlyTextSelectable(previewEl);
 
     if (this.session.candidateNoteMarkdown === "") {
       previewEl.setText("Candidate note is empty.");
@@ -658,6 +724,7 @@ export class LainBrainLargeView extends ItemView {
 
     this.syncCandidateCreatedState();
     this.syncCandidateParentStatus();
+    this.syncCandidateClaimStatus();
 
     if (this.session.candidateViewMode === "edit") {
       const editor = this.candidateEditor;

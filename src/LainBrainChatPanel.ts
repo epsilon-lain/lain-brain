@@ -1,6 +1,10 @@
 import type { App } from "obsidian";
 import { Modal, setIcon } from "obsidian";
 import { LainBrainMarkdownRenderBatch } from "./LainBrainMarkdownRenderer";
+import {
+  hasSelectedTextWithin,
+  makeReadOnlyTextSelectable
+} from "./SelectableText";
 import type {
   LainBrainImageAttachmentMetadata,
   LainBrainSession,
@@ -19,6 +23,7 @@ export class LainBrainChatPanel {
   private readonly clearButton: HTMLButtonElement;
   private readonly selectionContextEl: HTMLDivElement;
   private readonly unsubscribe: () => void;
+  private readonly selectableCleanup: () => void;
   private readonly markdownRenderer: LainBrainMarkdownRenderBatch;
   private renderedTranscriptKey = "";
   private renderedLoadingMode: string | null = null;
@@ -81,6 +86,9 @@ export class LainBrainChatPanel {
       ? "1px solid #333333"
       : "1px solid var(--background-modifier-border)";
     this.transcriptEl.style.borderRadius = "4px";
+    this.selectableCleanup = makeReadOnlyTextSelectable(
+      this.transcriptEl
+    );
 
     if (large) {
       this.transcriptEl.style.flex = "1";
@@ -172,7 +180,8 @@ export class LainBrainChatPanel {
       if (
         event.key === "Enter" &&
         !event.shiftKey &&
-        !event.isComposing
+        !event.isComposing &&
+        !hasSelectedTextWithin(this.transcriptEl)
       ) {
         event.preventDefault();
         void this.sendFromInput();
@@ -188,6 +197,7 @@ export class LainBrainChatPanel {
 
   destroy(): void {
     this.unsubscribe();
+    this.selectableCleanup();
     this.revokeAttachmentPreview();
     this.markdownRenderer.destroy();
   }

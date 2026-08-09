@@ -10,11 +10,20 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "test:parent-selector": "node tests/create-candidate-note-modal.test.mjs",
     "test:parent-persistence": "node tests/candidate-parent-persistence.test.mjs",
-    "test": "npm run test:parent-selector && npm run test:parent-persistence && npm run test:name-cleanup && npm run test:broken-links && npm run test:vision && npm run test:naming",
+    "test": "npm run test:parent-selector && npm run test:parent-persistence && npm run test:name-cleanup && npm run test:broken-links && npm run test:vision && npm run test:naming && npm run test:claims && npm run test:chat-workflow && npm run test:copying && npm run test:formalization && npm run test:lean && npm run test:lean-imports && npm run test:accepted-lean-e2e && npm run test:review-claims-ux",
     "test:vision": "node tests/openai-vision.test.mjs",
     "test:naming": "node tests/personal-naming.test.mjs",
+    "test:claims": "node tests/claim-classification.test.mjs",
+    "test:copying": "node tests/selectable-copy.test.mjs",
+    "test:chat-workflow": "node tests/chat-workflow.test.mjs",
+    "test:formalization": "node tests/formalization-protocol.test.mjs",
+    "test:lean": "node tests/lean-integration.test.mjs",
+    "test:lean-imports": "node tests/lean-imports.test.mjs",
+    "test:accepted-lean-e2e": "node tests/accepted-lean-e2e.test.mjs",
+    "test:review-claims-ux": "node tests/review-claims-modal-ux.test.mjs",
     "test:name-cleanup": "node tests/note-name-cleanup.test.mjs",
-    "test:broken-links": "node tests/broken-link-cleanup.test.mjs"
+    "test:broken-links": "node tests/broken-link-cleanup.test.mjs",
+    "deploy:dev": "npm run build && bash -c 'set -euo pipefail; T=/mnt/c/Users/elonl/Desktop/lain-brain-dev/.obsidian/plugins/lain-brain; if [ ! -d \"$T\" ]; then echo \"Error: $T does not exist\" >&2; exit 1; fi; cp -f main.js \"$T/main.js\"; cp -f manifest.json \"$T/manifest.json\"; if [ -f styles.css ]; then cp -f styles.css \"$T/styles.css\"; fi; echo \"Deployed to $T\"'"
   },
   "devDependencies": {
     "@types/node": "^22.15.17",

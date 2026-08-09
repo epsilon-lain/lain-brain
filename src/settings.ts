@@ -9,6 +9,16 @@ import {
   resolveDisplayName,
   validateDisplayName
 } from "./PersonalNaming";
+import {
+  deserializeFormalizationIndex,
+  deserializeLeanArtifactIndex
+} from "./FormalizationProtocol";
+import type {
+  FormalizationIndex,
+  LeanArtifactIndex
+} from "./FormalizationProtocol";
+
+export type LeanExecutionMode = "native" | "wsl";
 
 export interface LainBrainSettings {
   deepSeekApiKey: string;
@@ -17,6 +27,16 @@ export interface LainBrainSettings {
   userDisplayName: string;
   brainDisplayName: string;
   hasCompletedNamingOnboarding: boolean;
+  formalizationIndex?: FormalizationIndex;
+  leanArtifactIndex?: LeanArtifactIndex;
+  leanExecutionMode: LeanExecutionMode;
+  leanProjectRoot: string;
+  leanExecutable: string;
+  leanArgs: string[];
+  leanTimeoutSeconds: number;
+  wslExecutable: string;
+  wslDistribution: string;
+  wslProjectRoot: string;
 }
 
 export const DEFAULT_SETTINGS: LainBrainSettings = {
@@ -25,7 +45,15 @@ export const DEFAULT_SETTINGS: LainBrainSettings = {
   activeImageProviderId: null,
   userDisplayName: DEFAULT_USER_DISPLAY_NAME,
   brainDisplayName: DEFAULT_BRAIN_DISPLAY_NAME,
-  hasCompletedNamingOnboarding: false
+  hasCompletedNamingOnboarding: false,
+  leanExecutionMode: "native",
+  leanProjectRoot: "",
+  leanExecutable: "lake",
+  leanArgs: ["env", "lean"],
+  leanTimeoutSeconds: 30,
+  wslExecutable: "wsl.exe",
+  wslDistribution: "",
+  wslProjectRoot: "/mnt/c/Users/elonl/Desktop/lain_lean"
 };
 
 export function removeCustomProviderProfile(
@@ -90,6 +118,17 @@ export function migrateLainBrainSettings(
     typeof value.brainDisplayName === "string" &&
     validateDisplayName(value.brainDisplayName, "Brain name").ok;
 
+  const formalizationIndex =
+    deserializeFormalizationIndex(value.formalizationIndex) ?? undefined;
+
+  const leanArtifactIndex =
+    deserializeLeanArtifactIndex(value.leanArtifactIndex) ?? undefined;
+
+  const leanArgs = Array.isArray(value.leanArgs) &&
+    value.leanArgs.every((a: unknown) => typeof a === "string")
+    ? (value.leanArgs as string[])
+    : ["env", "lean"];
+
   return {
     deepSeekApiKey: typeof value.deepSeekApiKey === "string"
       ? value.deepSeekApiKey
@@ -101,6 +140,35 @@ export function migrateLainBrainSettings(
     hasCompletedNamingOnboarding:
       value.hasCompletedNamingOnboarding === true &&
       storedUserIsValid &&
-      storedBrainIsValid
+      storedBrainIsValid,
+    formalizationIndex,
+    leanArtifactIndex,
+    leanExecutionMode: value.leanExecutionMode === "wsl"
+      ? "wsl"
+      : "native",
+    leanProjectRoot: typeof value.leanProjectRoot === "string"
+      ? value.leanProjectRoot
+      : "",
+    leanExecutable: typeof value.leanExecutable === "string" &&
+      value.leanExecutable.trim() !== ""
+      ? value.leanExecutable.trim()
+      : "lake",
+    leanArgs,
+    leanTimeoutSeconds: typeof value.leanTimeoutSeconds === "number" &&
+      value.leanTimeoutSeconds >= 1 &&
+      value.leanTimeoutSeconds <= 300
+      ? Math.floor(value.leanTimeoutSeconds)
+      : 30,
+    wslExecutable: typeof value.wslExecutable === "string" &&
+      value.wslExecutable.trim() !== ""
+      ? value.wslExecutable.trim()
+      : "wsl.exe",
+    wslDistribution: typeof value.wslDistribution === "string"
+      ? value.wslDistribution.trim()
+      : "",
+    wslProjectRoot: typeof value.wslProjectRoot === "string" &&
+      value.wslProjectRoot.trim() !== ""
+      ? value.wslProjectRoot.trim()
+      : "/mnt/c/Users/elonl/Desktop/lain_lean"
   };
 }

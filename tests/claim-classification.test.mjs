@@ -535,7 +535,7 @@ const modalSource = fs.readFileSync(
 assert.match(largeViewSource, /text: "Review Claims"/);
 assert.match(modalSource, /Apply selected claims/);
 assert.match(modalSource, /Ready for Lean review/);
-assert.doesNotMatch(modalSource, /Lean-checked/);
+assert.match(modalSource, /Generate and check Lean statement/);
 
 // ── Preview rendering ───────────────────────────────────────────
 assert.match(modalSource, /LainBrainMarkdownRenderBatch/);

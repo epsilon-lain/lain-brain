@@ -588,19 +588,20 @@ async function formalizeThroughModal(modal) {
   const accept = findButton(modal.contentEl, "Accept");
   accept.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
+
+  // Accept on a not_checked formalization keeps it expanded so the
+  // Lean section remains visible (collapse-state bug fix).
+  // The collapsed preview marker must not appear.
   const collapsed = modal.contentEl.querySelector(
     `[data-rendered-formalization-preview="${modal.rows[0].item.id}"]`
   );
-  // Record IDs are independent of row IDs; locate by the presentation marker.
-  const collapsedPreview = allElements(modal.contentEl).find(
-    (element) => element.getAttribute("data-rendered-formalization-preview") !== null
+  assert.equal(collapsed, null, "not_checked formalization must stay expanded after Accept");
+
+  // The formalization section must still exist (not removed).
+  const formSection = modal.contentEl.querySelector(
+    '[data-section="formalizations"]'
   );
-  assert.ok(collapsedPreview);
-  assert.ok(
-    allElements(collapsedPreview).some((element) => element.classList.contains("math")),
-    "Collapsed formalization presentation must also render math"
-  );
-  assert.equal(collapsed, null);
+  assert.ok(formSection, "Formalization section must exist after Accept");
   modal.onClose();
   console.log("REVIEW-MATH PASS: raw editor source and rendered mathematical presentations stay distinct");
 }
@@ -689,7 +690,8 @@ async function formalizeThroughModal(modal) {
   await formalizeThroughModal(modal);
   findButton(modal.contentEl, "Accept").click();
   assert.equal(modal.rows[0].selected, true);
-  findButton(modal.contentEl, "Expand").click();
+  // not_checked formalizations stay expanded after Accept (collapse-state fix),
+  // so the Reject button is already visible — no Expand needed.
   findButton(modal.contentEl, "Reject").click();
   const include = findInclude(modal.contentEl, suggestion.id);
   assert.equal(include.checked, false);

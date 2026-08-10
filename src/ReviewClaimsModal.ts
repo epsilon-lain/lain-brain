@@ -1532,8 +1532,12 @@ export class ReviewClaimsModal extends Modal {
           this.setRowSelected(rowItem.id, true);
         }
 
-        // Collapse this accepted formalization
-        this.collapsedFormalizations.add(record.id);
+        // Collapse this accepted formalization only when the Lean
+        // statement has already been checked.  not_checked
+        // formalizations stay expanded so the action remains visible.
+        if (record.verificationStatus !== "not_checked") {
+          this.collapsedFormalizations.add(record.id);
+        }
 
         // Find the next pending formalization for scroll
         this.pendingScrollTarget = this.findNextPendingClaimId(
@@ -1593,9 +1597,10 @@ export class ReviewClaimsModal extends Modal {
         );
 
       if (result.ok) {
-        // Only collapse if reviewStatus changed to accepted/rejected.
-        // Save Edits while pending keeps card expanded.
-        if (!wasPending) {
+        // Only collapse if reviewStatus changed to accepted/rejected
+        // and the Lean statement has already been checked.  Save Edits
+        // while pending or not_checked keeps the card expanded.
+        if (!wasPending && record.verificationStatus !== "not_checked") {
           this.collapsedFormalizations.add(record.id);
         }
         this.render();
@@ -2302,6 +2307,28 @@ export class ReviewClaimsModal extends Modal {
             p.record.verificationStatus !== "not_checked"
           ) {
             this.collapsedFormalizations.add(p.record.id);
+          }
+        }
+
+        // ── Reconcile stale Accept collapse state ───────────────
+        // Accept unconditionally adds the record ID to the collapsed
+        // set.  Materialization preserves the same record ID, so an
+        // old Accept collapse entry can survive into the committed
+        // state and hide the Lean section even when the formalization
+        // is not_checked.
+        //
+        // After Apply, use the committed formalizations (not previews,
+        // which materialization may have already removed) and
+        // explicitly clear collapse for any not_checked accepted
+        // record so the Lean action is visible.
+        const committed =
+          this.session.getFormalizationsForClaim(item.id);
+        for (const record of committed) {
+          if (
+            record.reviewStatus === "accepted" &&
+            record.verificationStatus === "not_checked"
+          ) {
+            this.collapsedFormalizations.delete(record.id);
           }
         }
       }

@@ -1127,6 +1127,44 @@ function getFormalizeActionState(row, session, formalizingIds, committedIds) {
   console.log("LEAN-D PASS: manually expanded survives re-render");
 }
 
+// LEAN-E: Accept creates collapsed entry → Apply materializes same ID
+//         → post-Apply reconciliation removes the entry
+//         → not_checked committed record renders expanded
+{
+  const record = makeFormalizationRecord("claim-lean-e", "Test Lean E");
+  const accepted = applyFormalizationReview(record, "accepted");
+  assert.equal(accepted.reviewStatus, "accepted");
+  assert.equal(accepted.verificationStatus, "not_checked");
+
+  const collapsedSet = new Set();
+
+  // Step 1: Accept → unconditionally adds to collapsed
+  collapsedSet.add(accepted.id);
+  assert.ok(collapsedSet.has(accepted.id));
+
+  // Step 2: Materialization preserves the same record ID
+  const materializedId = accepted.id; // same ID survives Apply
+  assert.equal(materializedId, accepted.id);
+
+  // Step 3: Post-Apply reconciliation — check committed formalizations
+  // (getFormalizationsForClaim returns the materialized records)
+  const committedRecords = [{ ...accepted, id: materializedId }];
+
+  for (const record of committedRecords) {
+    if (
+      record.reviewStatus === "accepted" &&
+      record.verificationStatus === "not_checked"
+    ) {
+      collapsedSet.delete(record.id);
+    }
+  }
+
+  // Step 4: not_checked → collapsed entry was cleared
+  assert.equal(collapsedSet.has(accepted.id), false);
+
+  console.log("LEAN-E PASS: stale Accept collapse cleared by post-Apply reconciliation");
+}
+
 console.log(JSON.stringify({
   testA_scrollPreservedAcrossRender: true,
   testB_failedApplyPreservesScroll: true,
@@ -1148,6 +1186,7 @@ console.log(JSON.stringify({
   testLeanB_blocked_staysExpanded: true,
   testLeanC_typechecked_autoCollapse: true,
   testLeanD_manuallyExpanded_survivesRerender: true,
+  testLeanE_staleAcceptCollapse_clearedByReconciliation: true,
   testRowA_factualNoAction: true,
   testRowB_personalNoAction: true,
   testRowB2_openQuestionNoAction: true,

@@ -33,7 +33,7 @@ export interface VisionProviderClient {
   analyzeImage(
     profile: ProviderProfile,
     prompt: string,
-    image: VisionImageFile
+    image: VisionImageFile | VisionImageFile[]
   ): Promise<AssistantResult>;
 }
 
@@ -62,26 +62,27 @@ implements VisionProviderClient {
   async analyzeImage(
     profile: ProviderProfile,
     prompt: string,
-    image: VisionImageFile
+    image: VisionImageFile | VisionImageFile[]
   ): Promise<AssistantResult> {
-    validateRequest(profile, image, "openai-responses");
-    const imageUrl = await createImageDataUrl(image);
+    const images = Array.isArray(image) ? image : [image];
+    images.forEach((img) =>
+      validateRequest(profile, img, "openai-responses"));
+    const contentBlocks: Record<string, unknown>[] = [
+      { type: "input_text", text: prompt }
+    ];
+    for (const img of images) {
+      contentBlocks.push({
+        type: "input_image",
+        image_url: await createImageDataUrl(img),
+        detail: "auto"
+      });
+    }
     const response = await requestProvider(
       profile,
       profile.baseUrl,
       {
         model: profile.model,
-        input: [{
-          role: "user",
-          content: [
-            { type: "input_text", text: prompt },
-            {
-              type: "input_image",
-              image_url: imageUrl,
-              detail: "auto"
-            }
-          ]
-        }]
+        input: [{ role: "user", content: contentBlocks }]
       },
       this.fetchImpl
     );
@@ -103,27 +104,28 @@ implements VisionProviderClient {
   async analyzeImage(
     profile: ProviderProfile,
     prompt: string,
-    image: VisionImageFile
+    image: VisionImageFile | VisionImageFile[]
   ): Promise<AssistantResult> {
-    validateRequest(profile, image, "openai-chat-completions");
-    const imageUrl = await createImageDataUrl(image);
+    const images = Array.isArray(image) ? image : [image];
+    images.forEach((img) =>
+      validateRequest(profile, img, "openai-chat-completions"));
     const endpoint =
       `${profile.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    const contentBlocks: Record<string, unknown>[] = [
+      { type: "text", text: prompt }
+    ];
+    for (const img of images) {
+      contentBlocks.push({
+        type: "image_url",
+        image_url: { url: await createImageDataUrl(img) }
+      });
+    }
     const response = await requestProvider(
       profile,
       endpoint,
       {
         model: profile.model,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "text", text: prompt },
-            {
-              type: "image_url",
-              image_url: { url: imageUrl }
-            }
-          ]
-        }]
+        messages: [{ role: "user", content: contentBlocks }]
       },
       this.fetchImpl
     );
@@ -154,7 +156,7 @@ export class VisionProviderRouter implements VisionProviderClient {
   analyzeImage(
     profile: ProviderProfile,
     prompt: string,
-    image: VisionImageFile
+    image: VisionImageFile | VisionImageFile[]
   ): Promise<AssistantResult> {
     return this.adapters[profile.protocol].analyzeImage(
       profile,

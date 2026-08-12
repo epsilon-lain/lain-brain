@@ -23,12 +23,6 @@ import { makeReadOnlyTextSelectable } from "./SelectableText";
 
 interface ClaimReviewRow {
   item: ClaimReviewItem;
-  selected: boolean;
-}
-
-interface IncludeEligibility {
-  eligible: boolean;
-  explanation: string;
 }
 
 const KIND_LABELS: Record<ClaimKind, string> = {
@@ -62,7 +56,6 @@ export class ReviewClaimsModal extends Modal {
   private successMessage = "";
   private committedIds = new Set<string>();
   private pendingScrollTarget: string | null = null;
-  private applyBlockerClaimId: string | null = null;
 
   // ── Batch formalize state ────────────────────────────────────
   private batchFormalizing = false;
@@ -114,14 +107,8 @@ export class ReviewClaimsModal extends Modal {
     this.loading = false;
 
     if (result.ok) {
-      const selectedIds = new Set(
-        this.rows
-          .filter((row) => row.selected)
-          .map((row) => row.item.id)
-      );
       this.rows = result.items.map((item) => ({
-        item,
-        selected: selectedIds.has(item.id)
+        item
       }));
       this.error = "";
     } else {
@@ -145,86 +132,37 @@ export class ReviewClaimsModal extends Modal {
     this.markdownRenderer.reset();
   }
 
-  private setRowSelected(claimId: string, selected: boolean): boolean {
-    const currentRow = this.rows.find(
-      (row) => row.item.id === claimId
-    );
-
-    if (currentRow === undefined || this.committedIds.has(claimId)) {
-      return false;
-    }
-
-    const eligibility = this.getIncludeEligibility(currentRow.item);
-    if (selected && !eligibility.eligible) {
-      currentRow.selected = false;
-      return false;
-    }
-
-    currentRow.selected = selected;
-    return true;
-  }
-
-  private getIncludeEligibility(
-    item: ClaimReviewItem
-  ): IncludeEligibility {
-    if (item.kind !== "formal_statement") {
-      return { eligible: true, explanation: "" };
+  /**
+   * Returns true when a formal claim is ready for Apply:
+   * non-formal claims are always ready; formal claims need
+   * a current accepted formalization.
+   */
+  private isClaimApplyReady(row: ClaimReviewRow): boolean {
+    if (row.item.kind !== "formal_statement") {
+      return true;
     }
 
     const current =
       this.session.getCurrentFormalizationPreviewForSuggestion(
-        item.id,
-        item.text,
-        item.kind
+        row.item.id,
+        row.item.text,
+        row.item.kind
       );
 
-    if (current?.record.reviewStatus === "accepted") {
-      return { eligible: true, explanation: "" };
-    }
-
-    if (current?.record.reviewStatus === "pending") {
-      return {
-        eligible: false,
-        explanation: "Review formalization before selecting for Apply"
-      };
-    }
-
-    if (current?.record.reviewStatus === "rejected") {
-      return {
-        eligible: false,
-        explanation: "Re-formalize before selecting for Apply"
-      };
-    }
-
-    const previews =
-      this.session.getFormalizationPreviewsForSuggestion(item.id);
-    if (previews.length > 0) {
-      return {
-        eligible: false,
-        explanation: "Re-formalize stale claim before selecting for Apply"
-      };
-    }
-
-    return {
-      eligible: false,
-      explanation: "Formalize before selecting for Apply"
-    };
+    return current?.record.reviewStatus === "accepted";
   }
 
-  private enforceIncludeInvariant(row: ClaimReviewRow): IncludeEligibility {
-    const eligibility = this.getIncludeEligibility(row.item);
-    if (!eligibility.eligible) {
-      row.selected = false;
+  private countBlockedFormalClaims(): number {
+    let count = 0;
+    for (const row of this.rows) {
+      if (this.committedIds.has(row.item.id)) {
+        continue;
+      }
+      if (row.item.kind === "formal_statement" && !this.isClaimApplyReady(row)) {
+        count += 1;
+      }
     }
-    return eligibility;
-  }
-
-  private formatApplyBlockerError(row: ClaimReviewRow): string {
-    const compact = row.item.text.trim().replace(/\s+/g, " ");
-    const label = compact.length > 80
-      ? compact.slice(0, 77) + "..."
-      : compact;
-    return `Claim "${label}" must have an accepted current formalization before Apply.`;
+    return count;
   }
 
   private anchorModalScrollRoots(): void {
@@ -559,7 +497,7 @@ export class ReviewClaimsModal extends Modal {
     header.style.flex = "0 0 auto";
     header.createEl("p", {
       text:
-        "Review each classification suggestion. Nothing changes until you select rows and apply them."
+        "Review each suggestion. Edit or delete unwanted claims before applying."
     });
 
     if (this.loading) {
@@ -666,7 +604,7 @@ export class ReviewClaimsModal extends Modal {
         return;
       }
 
-      this.rows.push({ item, selected: false });
+      this.rows.push({ item });
       this.render();
     });
 
@@ -742,17 +680,10 @@ export class ReviewClaimsModal extends Modal {
     card.setAttr("data-claim-id", row.item.id);
     card.style.border =
       "1px solid var(--background-modifier-border)";
-    if (this.applyBlockerClaimId === row.item.id) {
-      card.setAttr("data-apply-blocker", "true");
-      card.style.border = "2px solid var(--text-error)";
-      card.style.boxShadow = "0 0 0 1px var(--text-error)";
-    }
     card.style.borderRadius = "4px";
     card.style.padding = "0.75rem";
 
     const isCommitted = this.committedIds.has(row.item.id);
-    let includeEligibility = this.enforceIncludeInvariant(row);
-    let refreshIncludeControl = (): void => {};
 
     if (isCommitted) {
       card.setAttr("data-applied", "true");
@@ -778,54 +709,6 @@ export class ReviewClaimsModal extends Modal {
       appliedBadge.style.fontWeight = "700";
       appliedBadge.style.fontSize = "0.85em";
       appliedBadge.setText("✓ Applied");
-    } else {
-      const includeLabel = leftActions.createEl("label");
-      includeLabel.style.display = "inline-flex";
-      includeLabel.style.alignItems = "center";
-      includeLabel.style.gap = "0.4rem";
-      const checkbox = includeLabel.createEl("input");
-      const claimId = row.item.id;
-      checkbox.type = "checkbox";
-      checkbox.setAttr("data-include-claim-id", claimId);
-      const includeHint = leftActions.createEl("small");
-      includeHint.style.color = "var(--text-muted)";
-      includeHint.style.fontSize = "0.78em";
-
-      refreshIncludeControl = (): void => {
-        const currentRow = this.rows.find(
-          (candidateRow) => candidateRow.item.id === claimId
-        );
-        if (currentRow === undefined) {
-          checkbox.checked = false;
-          checkbox.disabled = true;
-          includeHint.setText("");
-          return;
-        }
-
-        includeEligibility = this.enforceIncludeInvariant(currentRow);
-        checkbox.checked = currentRow.selected;
-        checkbox.disabled = !includeEligibility.eligible;
-        includeHint.setText(includeEligibility.explanation);
-      };
-      refreshIncludeControl();
-
-      const syncSelection = (): void => {
-        // Resolve the current row by stable ID instead of mutating the
-        // render-captured row object. Both native checkbox events converge on
-        // the same state that the Apply handler reads from this.rows.
-        const updated = this.setRowSelected(claimId, checkbox.checked);
-        const currentRow = this.rows.find(
-          (candidateRow) => candidateRow.item.id === claimId
-        );
-        checkbox.checked = updated && currentRow !== undefined
-          ? currentRow.selected
-          : false;
-        refreshIncludeControl();
-      };
-
-      checkbox.addEventListener("input", syncSelection);
-      checkbox.addEventListener("change", syncSelection);
-      includeLabel.createSpan({ text: "Include" });
     }
 
     const rightActions = header.createDiv();
@@ -921,7 +804,6 @@ export class ReviewClaimsModal extends Modal {
     claimText.addEventListener("input", () => {
       row.item.text = claimText.value;
       scheduleClaimPreview();
-      refreshIncludeControl();
 
       // Refresh both the compact status badge and the details. Previously
       // only the details changed, leaving a stale "Accepted ✓" badge visible
@@ -1513,44 +1395,45 @@ export class ReviewClaimsModal extends Modal {
     actions.style.gap = "0.4rem";
     actions.style.marginTop = "0.5rem";
 
-    const acceptBtn = actions.createEl("button", {
-      text: "Accept"
-    });
-    acceptBtn.style.padding = "2px 8px";
-    acceptBtn.addEventListener("click", () => {
-      const result = this.session.applyFormalizationReview(
-        record.id,
-        "accepted",
-        currentReviewed
-      );
-
-      if (result.ok) {
-        // Accept is semantic approval only. Selecting the owning suggestion
-        // is a local UI convenience; materialization still happens solely in
-        // the Apply handler below.
-        if (rowItem !== undefined) {
-          this.setRowSelected(rowItem.id, true);
-        }
-
-        // Collapse this accepted formalization only when the Lean
-        // statement has already been checked.  not_checked
-        // formalizations stay expanded so the action remains visible.
-        if (record.verificationStatus !== "not_checked") {
-          this.collapsedFormalizations.add(record.id);
-        }
-
-        // Find the next pending formalization for scroll
-        this.pendingScrollTarget = this.findNextPendingClaimId(
-          record,
-          rowItem
+    // Accept is only available when not already accepted.
+    // Once accepted, the record stays accepted unless the user
+    // edits the reviewed statement and saves (which preserves the
+    // existing review semantics — edits may be applied via Save Edits).
+    if (record.reviewStatus !== "accepted") {
+      const acceptBtn = actions.createEl("button", {
+        text: "Accept"
+      });
+      acceptBtn.style.padding = "2px 8px";
+      acceptBtn.addEventListener("click", () => {
+        const result = this.session.applyFormalizationReview(
+          record.id,
+          "accepted",
+          currentReviewed
         );
 
-        this.render();
-      } else {
-        this.formalizationError = result.error;
-        this.render();
-      }
-    });
+        if (result.ok) {
+          // Accept is semantic approval only. No selection-state mutation.
+
+          // Collapse this accepted formalization only when the Lean
+          // statement has already been checked.  not_checked
+          // formalizations stay expanded so the action remains visible.
+          if (record.verificationStatus !== "not_checked") {
+            this.collapsedFormalizations.add(record.id);
+          }
+
+          // Find the next pending formalization for scroll
+          this.pendingScrollTarget = this.findNextPendingClaimId(
+            record,
+            rowItem
+          );
+
+          this.render();
+        } else {
+          this.formalizationError = result.error;
+          this.render();
+        }
+      });
+    }
 
     const rejectBtn = actions.createEl("button", {
       text: "Reject"
@@ -2207,7 +2090,7 @@ export class ReviewClaimsModal extends Modal {
     cancelButton.addEventListener("click", () => this.close());
 
     const applyButton = actions.createEl("button", {
-      text: "Apply selected claims"
+      text: "Apply claims"
     });
     applyButton.addClass("mod-cta");
     applyButton.disabled = this.loading;
@@ -2216,14 +2099,22 @@ export class ReviewClaimsModal extends Modal {
       this.formalizationError = "";
       this.successMessage = "";
       this.pendingScrollTarget = null;
-      this.applyBlockerClaimId = null;
 
-      const selected = this.rows
-        .filter((row) => row.selected)
+      // ── Gate: count formal claims that still need review ──
+      const blockedCount = this.countBlockedFormalClaims();
+      if (blockedCount > 0) {
+        this.error =
+          `${blockedCount} formal claim${blockedCount !== 1 ? "s" : ""} still need${blockedCount === 1 ? "s" : ""} review before Apply.`;
+        this.render();
+        return;
+      }
+
+      const allItems = this.rows
+        .filter((row) => !this.committedIds.has(row.item.id))
         .map((row) => row.item);
 
-      if (selected.length === 0) {
-        this.error = "Select at least one claim to apply.";
+      if (allItems.length === 0) {
+        this.error = "No claims to apply.";
         this.render();
         return;
       }
@@ -2231,15 +2122,15 @@ export class ReviewClaimsModal extends Modal {
       // ── Diagnostic: enter Session ──────────────────────────
       console.log(JSON.stringify({
         event: "review-claims-apply-enter",
-        selectedIds: selected.map((item) => item.id),
-        selectedKinds: selected.map((item) => item.kind)
+        claimIds: allItems.map((item) => item.id),
+        claimKinds: allItems.map((item) => item.kind)
       }));
 
       let result: ReturnType<typeof this.session.applyReviewedClaims>;
       try {
         result = this.session.applyReviewedClaims(
           this.candidateId,
-          selected
+          allItems
         );
       } catch (error) {
         const message = error instanceof Error
@@ -2263,17 +2154,10 @@ export class ReviewClaimsModal extends Modal {
       if (!result.ok) {
         this.error = result.error;
 
-        // Use the precise offending claim ID from the defensive guard,
-        // highlight that card, and move only the claims-list scroll surface.
+        // Use the precise offending claim ID from the defensive guard
+        // and scroll the claims list to reveal it.
         if (result.offendingClaimId !== undefined) {
           this.pendingScrollTarget = result.offendingClaimId;
-          this.applyBlockerClaimId = result.offendingClaimId;
-          const blocker = this.rows.find(
-            (row) => row.item.id === result.offendingClaimId
-          );
-          if (blocker !== undefined) {
-            this.error = this.formatApplyBlockerError(blocker);
-          }
         }
 
         this.render();
@@ -2288,13 +2172,8 @@ export class ReviewClaimsModal extends Modal {
       }
 
       // Mark applied claims as committed
-      for (const item of selected) {
+      for (const item of allItems) {
         this.committedIds.add(item.id);
-        // Uncheck after commit
-        const row = this.rows.find((r) => r.item.id === item.id);
-        if (row !== undefined) {
-          row.selected = false;
-        }
         // Collapse accepted formalizations for applied claims,
         // but only when already Lean-checked.  Keep not_checked
         // expanded so "Generate and check Lean statement" is
@@ -2333,8 +2212,11 @@ export class ReviewClaimsModal extends Modal {
         }
       }
 
-      this.successMessage = `Applied ${result.appliedCount} claim${result.appliedCount !== 1 ? "s" : ""}.`;
-      this.render();
+      // Apply succeeded — the workflow is complete.  Close the modal.
+      // Bookkeeping (committedIds, collapse reconciliation) is already
+      // done above, so the session state is committed.
+      // Non-fatal warnings do not prevent close.
+      this.close();
     });
   }
 }

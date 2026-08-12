@@ -55,6 +55,7 @@ const built = await esbuild.build({
 
 const module = { exports: {} };
 vm.runInNewContext(built.outputFiles[0].text, {
+  DOMMatrix: class { constructor(){} },
   module,
   exports: module.exports,
   require,
@@ -287,20 +288,33 @@ assert.equal(edited.reviewStatus, "accepted");
 assert.equal(edited.wasEdited, true);
 console.log("T21 PASS: edited can still be accepted");
 
-// T22: revision increment
+// T22: idempotent — repeated Accept with same statement returns unchanged
 assert.equal(accepted.revision, 2);
 const doubleAccepted = applyFormalizationReview(accepted, "accepted");
-assert.equal(doubleAccepted.revision, 3);
-console.log("T22 PASS: revision increments");
+assert.equal(doubleAccepted, accepted,
+  "Repeated Accept with same statement must return the same record");
+assert.equal(doubleAccepted.revision, 2,
+  "Repeated Accept must not bump revision");
+console.log("T22 PASS: repeated Accept with unchanged statement is idempotent");
 
-// T23: history contains all revisions
-assert.equal(doubleAccepted.history.length, 3);
-assert.equal(doubleAccepted.history[0].actor, "ai");
-assert.equal(doubleAccepted.history[0].action, "created");
-assert.equal(doubleAccepted.history[1].actor, "user");
-assert.equal(doubleAccepted.history[1].action, "accepted");
-assert.equal(doubleAccepted.history[2].actor, "user");
-assert.equal(doubleAccepted.history[2].action, "accepted");
+// T22b: re-accept with a different statement does create a new revision
+const reacceptedEdited = applyFormalizationReview(
+  accepted, "accepted",
+  "A newly edited statement after first acceptance."
+);
+assert.notEqual(reacceptedEdited, accepted);
+assert.equal(reacceptedEdited.revision, 3,
+  "Re-accept with changed statement must bump revision");
+console.log("T22b PASS: re-accept with changed statement bumps revision");
+
+// T23: history contains all revisions (re-accepted with edit)
+assert.equal(reacceptedEdited.history.length, 3);
+assert.equal(reacceptedEdited.history[0].actor, "ai");
+assert.equal(reacceptedEdited.history[0].action, "created");
+assert.equal(reacceptedEdited.history[1].actor, "user");
+assert.equal(reacceptedEdited.history[1].action, "accepted");
+assert.equal(reacceptedEdited.history[2].actor, "user");
+assert.equal(reacceptedEdited.history[2].action, "accepted");
 console.log("T23 PASS: history preserves all revisions");
 
 // T24: full data preservation through review

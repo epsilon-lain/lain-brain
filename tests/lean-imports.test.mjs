@@ -58,6 +58,7 @@ const built = await esbuild.build({
 
 const module = { exports: {} };
 vm.runInNewContext(built.outputFiles[0].text, {
+  DOMMatrix: class { constructor(){} },
   module,
   exports: module.exports,
   require,

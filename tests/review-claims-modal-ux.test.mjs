@@ -323,6 +323,7 @@ const built = await esbuild.build({
 
 const module = { exports: {} };
 vm.runInNewContext(built.outputFiles[0].text, {
+  DOMMatrix: class { constructor(){} },
   module,
   exports: module.exports,
   require,
@@ -442,7 +443,7 @@ function makeHarness(suggestions, { injectPreviews = true } = {}) {
 
   const modal = new ReviewClaimsModal(app, session, candidate.id);
   modal.loading = false;
-  modal.rows = suggestions.map((item) => ({ item, selected: false }));
+  modal.rows = suggestions.map((item) => ({ item }));
   modal.render();
   return { modal, session, candidate };
 }
@@ -473,14 +474,6 @@ function findClaimTextarea(root, text) {
   );
 }
 
-function findInclude(root, claimId) {
-  return allElements(root).find(
-    (element) =>
-      element.tagName === "INPUT" &&
-      element.getAttribute("data-include-claim-id") === claimId
-  );
-}
-
 function findClaimCard(root, claimId) {
   return allElements(root).find(
     (element) => element.getAttribute("data-claim-id") === claimId
@@ -505,8 +498,53 @@ async function formalizeThroughModal(modal) {
   );
 }
 
-// A native-style checkbox click on a non-formal claim updates the exact
-// current row that Apply reads, then commits that selected claim.
+// ═══════════════════════════════════════════════════════════════════════
+// TEST A: Non-formal factual claim — no Include checkbox, auto-applies
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  const suggestion = {
+    ...makeSuggestion("candidate-review-ux", "factual"),
+    kind: "factual_claim",
+    verification: "source_pending",
+    text: "This factual claim needs a source."
+  };
+  const { modal, session, candidate } = makeHarness([suggestion]);
+
+  // No Include checkbox should exist
+  const include = allElements(modal.contentEl).find(
+    (element) =>
+      element.tagName === "INPUT" &&
+      element.type === "checkbox" &&
+      element.getAttribute("data-include-claim-id") === suggestion.id
+  );
+  assert.equal(include, undefined, "No Include checkbox should exist for factual claim");
+
+  // Apply button is renamed
+  const applyBtn = findButton(modal.contentEl, "Apply claims");
+  assert.ok(applyBtn, "Apply button must say 'Apply claims'");
+  assert.equal(findButton(modal.contentEl, "Apply selected claims"), undefined,
+    "Old 'Apply selected claims' button must not exist");
+
+  // Apply commits and closes
+  let receivedItems = null;
+  const originalApply = session.applyReviewedClaims.bind(session);
+  session.applyReviewedClaims = (candidateId, items) => {
+    receivedItems = items;
+    return originalApply(candidateId, items);
+  };
+
+  applyBtn.click();
+  assert.deepEqual(Array.from(receivedItems, (item) => item.id), [suggestion.id]);
+  assert.equal(candidate.claims.length, 1);
+  assert.equal(modal.closed, true, "Modal must close after successful Apply");
+  console.log("TEST-A PASS: non-formal factual claim auto-applies, no Include checkbox, modal closes");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEST B: Open question — no Include checkbox, auto-applies
+// ═══════════════════════════════════════════════════════════════════════
+
 {
   const suggestion = {
     ...makeSuggestion("candidate-review-ux", "open-question"),
@@ -514,48 +552,385 @@ async function formalizeThroughModal(modal) {
     verification: "source_pending",
     text: "Is this still an open question?"
   };
-  const { modal, session, candidate } = makeHarness([suggestion]);
-  let appliedItems = null;
-  const originalApply = session.applyReviewedClaims.bind(session);
-  session.applyReviewedClaims = (candidateId, items) => {
-    appliedItems = items;
-    return originalApply(candidateId, items);
-  };
+  const { modal, candidate } = makeHarness([suggestion]);
 
-  const checkbox = allElements(modal.contentEl).find(
+  // No Include checkbox
+  const include = allElements(modal.contentEl).find(
     (element) =>
       element.tagName === "INPUT" &&
       element.type === "checkbox" &&
       element.getAttribute("data-include-claim-id") === suggestion.id
   );
-  assert.ok(checkbox, "Open-question Include checkbox must render");
-  checkbox.click();
-  assert.equal(checkbox.checked, true);
-  assert.equal(modal.rows[0].selected, true);
+  assert.equal(include, undefined, "No Include checkbox for open question");
 
-  // Exercise the same rerender path used by modal status updates.
-  modal.render();
-  const rerenderedCheckbox = allElements(modal.contentEl).find(
+  // Apply commits
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(candidate.claims.length, 1);
+  assert.equal(modal.closed, true, "Modal must close after successful Apply");
+  console.log("TEST-B PASS: open question auto-applies, no Include checkbox");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEST C: Formal claim not formalized — Apply blocked with clear message
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  const suggestion = makeSuggestion("candidate-review-ux", "no-preview");
+  const { modal, candidate } = makeHarness([suggestion], { injectPreviews: false });
+
+  // No Include checkbox
+  const include = allElements(modal.contentEl).find(
     (element) =>
       element.tagName === "INPUT" &&
       element.getAttribute("data-include-claim-id") === suggestion.id
   );
-  assert.ok(rerenderedCheckbox);
-  assert.equal(rerenderedCheckbox.checked, true);
-  assert.equal(modal.rows[0].selected, true);
+  assert.equal(include, undefined, "No Include checkbox for unformalized formal claim");
 
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.equal(hasText(modal.contentEl, "Select at least one claim to apply."), false);
-  assert.deepEqual(Array.from(appliedItems, (item) => item.id), [suggestion.id]);
-  assert.equal(candidate.claims.length, 1);
-  assert.equal(hasText(modal.contentEl, "Applied 1 claim."), true);
-  assert.equal(hasText(modal.contentEl, "✓ Applied"), true);
+  // Apply is blocked
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(candidate.claims.length, 0, "Apply must not commit unformalized formal claim");
+  assert.equal(hasText(modal.contentEl, "1 formal claim still needs review before Apply."), true,
+    "Clear blocker message must exist");
+  // Modal remains open
+  assert.equal(modal.closed || false, false, "Modal must not close on blocked Apply");
   modal.onClose();
-  console.log("REVIEW-UX-A PASS: open-question native checkbox click survives rerender and Apply");
+  console.log("TEST-C PASS: unformalized formal claim blocks Apply with clear message");
 }
 
-// Editable source remains raw while its explicitly rendered presentation goes
-// through the shared Obsidian Markdown/math path.
+// ═══════════════════════════════════════════════════════════════════════
+// TEST D: Formalized but pending review — Apply blocked
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  const suggestion = makeSuggestion("candidate-review-ux", "pending");
+  const { modal, candidate } = makeHarness([suggestion], { injectPreviews: false });
+  await formalizeThroughModal(modal);
+
+  // Review button exists, no Include checkbox
+  const reviewBtn = findButton(modal.contentEl, "Review");
+  assert.ok(reviewBtn, "Review button must exist for pending formalization");
+
+  const include = allElements(modal.contentEl).find(
+    (element) =>
+      element.tagName === "INPUT" &&
+      element.getAttribute("data-include-claim-id") === suggestion.id
+  );
+  assert.equal(include, undefined, "No Include checkbox for pending formal preview");
+
+  // Apply blocked
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(candidate.claims.length, 0);
+  assert.equal(hasText(modal.contentEl, "1 formal claim still needs review before Apply."), true);
+  modal.onClose();
+  console.log("TEST-D PASS: pending formal preview blocks Apply");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEST E: Formal claim → Accept → reviewStatus=accepted, no selection, Apply commits
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  formalizationRequestCount = 0;
+  const suggestion = makeSuggestion("candidate-review-ux", "accept-flow");
+  const { modal, session, candidate } = makeHarness(
+    [suggestion],
+    { injectPreviews: false }
+  );
+  await formalizeThroughModal(modal);
+
+  // Accept the formalization
+  const acceptBtn = findButton(modal.contentEl, "Accept");
+  assert.ok(acceptBtn, "Accept button must exist");
+  acceptBtn.click();
+
+  // Verify reviewStatus is accepted
+  const current = session.getCurrentFormalizationPreviewForSuggestion(
+    suggestion.id,
+    suggestion.text,
+    suggestion.kind
+  );
+  assert.ok(current, "Current preview must exist after Accept");
+  assert.equal(current.record.reviewStatus, "accepted");
+
+  // No Include checkbox appears
+  const include = allElements(modal.contentEl).find(
+    (element) =>
+      element.tagName === "INPUT" &&
+      element.getAttribute("data-include-claim-id") === suggestion.id
+  );
+  assert.equal(include, undefined, "No Include checkbox after Accept");
+
+  // Has Accepted badge
+  assert.equal(hasText(modal.contentEl, "Accepted ✓"), true);
+
+  // Apply commits the formal claim
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(candidate.claims.length, 1);
+  assert.equal(modal.closed, true, "Modal must close after successful Apply");
+  console.log("TEST-E PASS: Accept sets reviewStatus=accepted, no selection mutation, Apply commits");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEST F: Accepted formal + factual together — both applied
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  formalizationRequestCount = 0;
+  const factual = {
+    ...makeSuggestion("candidate-review-ux", "mixed-factual"),
+    kind: "factual_claim",
+    verification: "source_pending",
+    text: "A factual claim in mixed batch."
+  };
+  const formal = makeSuggestion("candidate-review-ux", "mixed-formal");
+  const { modal, session, candidate } = makeHarness(
+    [factual, formal],
+    { injectPreviews: false }
+  );
+  await formalizeThroughModal(modal);
+  findButton(modal.contentEl, "Accept").click();
+
+  // Apply commits both
+  let receivedIds = [];
+  const originalApply = session.applyReviewedClaims.bind(session);
+  session.applyReviewedClaims = (candidateId, items) => {
+    receivedIds = Array.from(items, (item) => item.id);
+    return originalApply(candidateId, items);
+  };
+
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.deepEqual(new Set(receivedIds), new Set([factual.id, formal.id]));
+  assert.equal(candidate.claims.length, 2);
+  assert.equal(Object.keys(session.getFormalizationIndex().records).length, 1);
+  assert.equal(formalizationRequestCount, 1, "Apply must not call LLM again");
+  assert.equal(modal.closed, true, "Modal must close after successful Apply");
+  console.log("TEST-F PASS: accepted formal + factual both applied, modal closes");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEST G: Rejected formal — not silently applied, Apply blocked
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  const suggestion = makeSuggestion("candidate-review-ux", "rejected");
+  const { modal, candidate } = makeHarness([suggestion], { injectPreviews: false });
+  await formalizeThroughModal(modal);
+
+  // Reject the formalization
+  findButton(modal.contentEl, "Reject").click();
+
+  // Apply is blocked
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(candidate.claims.length, 0);
+  assert.equal(hasText(modal.contentEl, "1 formal claim still needs review before Apply."), true);
+
+  // Delete the rejected claim → blocker removed
+  findButton(modal.contentEl, "Delete suggestion").click();
+
+  // After deletion, zero claims → "No claims to apply"
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(hasText(modal.contentEl, "No claims to apply."), true);
+  assert.equal(candidate.claims.length, 0);
+
+  modal.onClose();
+  console.log("TEST-G PASS: rejected formal blocks Apply, delete removes blocker");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEST H: Delete suggestion removes from Apply set
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  const factual = {
+    ...makeSuggestion("candidate-review-ux", "delete-factual"),
+    kind: "factual_claim",
+    verification: "source_pending",
+    text: "A factual claim to delete."
+  };
+  const { modal, candidate } = makeHarness([factual]);
+
+  // Delete it
+  findButton(modal.contentEl, "Delete suggestion").click();
+
+  // Zero claims remaining
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(hasText(modal.contentEl, "No claims to apply."), true);
+  assert.equal(candidate.claims.length, 0);
+  modal.onClose();
+  console.log("TEST-H PASS: delete removes claim from Apply set, zero claims shows feedback");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEST I: Legacy warning — successful Apply still closes modal
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  const suggestion = {
+    ...makeSuggestion("candidate-review-ux", "legacy-warning"),
+    kind: "factual_claim",
+    verification: "source_pending",
+    text: "A factual claim in a legacy candidate."
+  };
+  const { modal, session, candidate } = makeHarness([suggestion]);
+  candidate.markdown =
+    "# Review UX\n\n## Knowledge status\n\nLegacy unmanaged status.";
+
+  let applyResult = null;
+  const originalApply = session.applyReviewedClaims.bind(session);
+  session.applyReviewedClaims = (candidateId, items) => {
+    applyResult = originalApply(candidateId, items);
+    return applyResult;
+  };
+
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(applyResult.ok, true);
+  assert.equal(applyResult.appliedCount, 1);
+  assert.equal(typeof applyResult.warning, "string");
+  assert.equal(candidate.claims.length, 1);
+  assert.equal(modal.closed, true, "Modal must close after successful Apply even with non-fatal warning");
+  console.log("TEST-I PASS: legacy warning does not block Apply-close");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEST J: Zero remaining claims — sensible feedback
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  const { modal, candidate } = makeHarness([]);
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(hasText(modal.contentEl, "No claims to apply."), true);
+  assert.equal(candidate.claims.length, 0);
+  modal.onClose();
+  console.log("TEST-J PASS: zero claims shows 'No claims to apply.'");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Preserved: Formalize → Accept → Apply materializes the same preview once
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  formalizationRequestCount = 0;
+  const suggestion = makeSuggestion("candidate-review-ux", "identity");
+  const { modal, session, candidate } = makeHarness(
+    [suggestion],
+    { injectPreviews: false }
+  );
+
+  await formalizeThroughModal(modal);
+  const pending = session.getFormalizationPreviewsForSuggestion(suggestion.id);
+  assert.equal(pending.length, 1);
+  const previewId = pending[0].record.id;
+  assert.equal(pending[0].record.reviewStatus, "pending");
+
+  findButton(modal.contentEl, "Accept").click();
+  const accepted = session.getCurrentFormalizationPreviewForSuggestion(
+    suggestion.id,
+    suggestion.text,
+    suggestion.kind,
+    "accepted"
+  );
+  assert.ok(accepted);
+  assert.equal(accepted.record.id, previewId);
+  assert.equal(hasText(modal.contentEl, "Accepted ✓"), true);
+
+  // No Include checkbox
+  const include = allElements(modal.contentEl).find(
+    (element) =>
+      element.tagName === "INPUT" &&
+      element.getAttribute("data-include-claim-id") === suggestion.id
+  );
+  assert.equal(include, undefined, "No Include checkbox after Accept");
+
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(candidate.claims.length, 1);
+  assert.equal(candidate.claims[0].formalizationIds.length, 1);
+  assert.equal(candidate.claims[0].formalizationIds[0], previewId);
+  assert.equal(session.getFormalizationIndex().records[previewId].reviewStatus, "accepted");
+  assert.equal(formalizationRequestCount, 1, "Apply must not call the LLM again");
+  modal.onClose();
+  console.log("REVIEW-IDENTITY-A PASS: Formalize → Accept → Apply materializes the same preview once");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Preserved: Stale formalization blocks Apply
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  formalizationRequestCount = 0;
+  const suggestion = makeSuggestion("candidate-review-ux", "stale");
+  const { modal, session, candidate } = makeHarness(
+    [suggestion],
+    { injectPreviews: false }
+  );
+  await formalizeThroughModal(modal);
+  findButton(modal.contentEl, "Accept").click();
+
+  // Edit claim text to make it stale
+  const claimText = findClaimTextarea(modal.contentEl, suggestion.text);
+  assert.ok(claimText);
+  claimText.value = suggestion.text + " Changed after review.";
+  claimText.dispatch("input");
+  assert.equal(hasText(modal.contentEl, "Accepted ✓"), false);
+  assert.equal(hasText(modal.contentEl, "⚠ Stale"), true);
+
+  // Apply blocked
+  findButton(modal.contentEl, "Apply claims").click();
+  assert.equal(hasText(modal.contentEl, "1 formal claim still needs review before Apply."), true);
+  assert.equal(candidate.claims.length, 0);
+  assert.equal(formalizationRequestCount, 1);
+  modal.onClose();
+  console.log("REVIEW-IDENTITY-B PASS: edited source makes accepted stale, blocks Apply");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Preserved: Repeated Accept is blocked at UI and protocol layers
+// ═══════════════════════════════════════════════════════════════════════
+
+{
+  const suggestion = makeSuggestion("candidate-review-ux", "accept-once");
+  const { modal } = makeHarness([suggestion], { injectPreviews: false });
+  await formalizeThroughModal(modal);
+
+  const acceptBtn = findButton(modal.contentEl, "Accept");
+  assert.ok(acceptBtn, "Accept button must exist for pending formalization");
+  acceptBtn.click();
+
+  const previews = modal.session.getFormalizationPreviewsForSuggestion(suggestion.id);
+  assert.equal(previews.length, 1);
+  const acceptedRecord = previews[0].record;
+  assert.equal(acceptedRecord.reviewStatus, "accepted");
+  const revisionAfterFirstAccept = acceptedRecord.revision;
+
+  // Accept button gone after accept
+  const acceptBtnAfter = findButton(modal.contentEl, "Accept");
+  assert.equal(acceptBtnAfter, undefined, "Accept button must not exist after acceptance");
+
+  // Defensive re-accept at session layer with same status/statement
+  const result = modal.session.applyFormalizationReview(
+    acceptedRecord.id,
+    "accepted",
+    acceptedRecord.reviewedStatement
+  );
+  assert.ok(result.ok, "Defensive re-accept must succeed (return unchanged)");
+
+  const previewsAfter = modal.session.getFormalizationPreviewsForSuggestion(suggestion.id);
+  const recordAfter = previewsAfter[0].record;
+  assert.equal(recordAfter.revision, revisionAfterFirstAccept, "Repeated Accept must not bump revision");
+  assert.equal(recordAfter.reviewStatus, "accepted");
+
+  const acceptedEntries = recordAfter.history.filter(
+    (rev) => rev.action === "accepted"
+  );
+  assert.equal(acceptedEntries.length, 1, "History must contain exactly one accepted entry");
+
+  modal.onClose();
+  console.log("REVIEW-ACCEPT-ONCE PASS: repeated Accept blocked at UI and protocol layers");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Preserved: Math presentation is rendered distinctly from raw source
+// ═══════════════════════════════════════════════════════════════════════
+
 {
   const raw = "对任意实数 $a$，有 $a + 0 = 0 + a = a$。";
   const suggestion = {
@@ -589,548 +964,20 @@ async function formalizeThroughModal(modal) {
   accept.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  // Accept on a not_checked formalization keeps it expanded so the
-  // Lean section remains visible (collapse-state bug fix).
-  // The collapsed preview marker must not appear.
+  // Accept on not_checked formalization keeps it expanded (collapse-state bug fix)
   const collapsed = modal.contentEl.querySelector(
     `[data-rendered-formalization-preview="${modal.rows[0].item.id}"]`
   );
   assert.equal(collapsed, null, "not_checked formalization must stay expanded after Accept");
 
-  // The formalization section must still exist (not removed).
-  const formSection = modal.contentEl.querySelector(
-    '[data-section="formalizations"]'
-  );
-  assert.ok(formSection, "Formalization section must exist after Accept");
   modal.onClose();
-  console.log("REVIEW-MATH PASS: raw editor source and rendered mathematical presentations stay distinct");
-}
-// Formal Include eligibility is enforced by the actual row DOM.
-{
-  const suggestion = makeSuggestion("candidate-review-ux", "no-preview");
-  const { modal } = makeHarness([suggestion], { injectPreviews: false });
-  const include = findInclude(modal.contentEl, suggestion.id);
-  assert.ok(include);
-  assert.equal(include.disabled, true);
-  assert.equal(include.checked, false);
-  assert.equal(modal.rows[0].selected, false);
-  assert.equal(hasText(modal.contentEl, "Formalize before selecting for Apply"), true);
-  modal.onClose();
-  console.log("REVIEW-INVARIANT-A PASS: no-preview formal row cannot remain selected");
+  console.log("REVIEW-MATH PASS: raw editor source and rendered math stay distinct");
 }
 
-{
-  const suggestion = makeSuggestion("candidate-review-ux", "pending-include");
-  const { modal } = makeHarness([suggestion], { injectPreviews: false });
-  await formalizeThroughModal(modal);
-  const include = findInclude(modal.contentEl, suggestion.id);
-  assert.equal(include.disabled, true);
-  assert.equal(include.checked, false);
-  assert.equal(modal.rows[0].selected, false);
-  assert.equal(hasText(modal.contentEl, "Review formalization before selecting for Apply"), true);
-  modal.onClose();
-  console.log("REVIEW-INVARIANT-B PASS: pending formal preview cannot be selected");
-}
+// ═══════════════════════════════════════════════════════════════════════
+// Preserved: three-part layout with footer outside scrolling list
+// ═══════════════════════════════════════════════════════════════════════
 
-{
-  const suggestion = makeSuggestion("candidate-review-ux", "accepted-include");
-  const { modal, candidate } = makeHarness([suggestion], { injectPreviews: false });
-  await formalizeThroughModal(modal);
-  findButton(modal.contentEl, "Accept").click();
-  const include = findInclude(modal.contentEl, suggestion.id);
-  assert.equal(include.disabled, false);
-  assert.equal(include.checked, true);
-  assert.equal(modal.rows[0].selected, true);
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.equal(candidate.claims.length, 1);
-  assert.equal(hasText(modal.contentEl, "Applied 1 claim."), true);
-  modal.onClose();
-  console.log("REVIEW-INVARIANT-C PASS: accepted current preview enables and selects Include");
-}
-
-// Editing an accepted formal row clears its real selected state immediately;
-// an independently selected factual row can still Apply.
-{
-  const formal = makeSuggestion("candidate-review-ux", "stale-clear");
-  const factual = {
-    ...makeSuggestion("candidate-review-ux", "stale-factual"),
-    kind: "factual_claim",
-    verification: "source_pending",
-    text: "This factual row should still Apply."
-  };
-  const { modal, candidate } = makeHarness(
-    [formal, factual],
-    { injectPreviews: false }
-  );
-  await formalizeThroughModal(modal);
-  findButton(modal.contentEl, "Accept").click();
-  findInclude(modal.contentEl, factual.id).click();
-
-  const claimText = findClaimTextarea(modal.contentEl, formal.text);
-  claimText.value = formal.text + " Changed.";
-  claimText.dispatch("input");
-  const formalInclude = findInclude(modal.contentEl, formal.id);
-  assert.equal(formalInclude.checked, false);
-  assert.equal(formalInclude.disabled, true);
-  assert.equal(modal.rows.find((row) => row.item.id === formal.id).selected, false);
-  assert.equal(hasText(modal.contentEl, "⚠ Stale"), true);
-
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.equal(candidate.claims.length, 1);
-  assert.equal(candidate.claims[0].id, factual.id);
-  assert.equal(hasText(modal.contentEl, "Applied 1 claim."), true);
-  modal.onClose();
-  console.log("REVIEW-INVARIANT-D PASS: stale transition clears actual selection and factual still applies");
-}
-
-// Rejecting an accepted preview clears Include on rerender.
-{
-  const suggestion = makeSuggestion("candidate-review-ux", "reject-clear");
-  const { modal } = makeHarness([suggestion], { injectPreviews: false });
-  await formalizeThroughModal(modal);
-  findButton(modal.contentEl, "Accept").click();
-  assert.equal(modal.rows[0].selected, true);
-  // not_checked formalizations stay expanded after Accept (collapse-state fix),
-  // so the Reject button is already visible — no Expand needed.
-  findButton(modal.contentEl, "Reject").click();
-  const include = findInclude(modal.contentEl, suggestion.id);
-  assert.equal(include.checked, false);
-  assert.equal(include.disabled, true);
-  assert.equal(modal.rows[0].selected, false);
-  modal.onClose();
-  console.log("REVIEW-INVARIANT-E PASS: rejected transition clears actual selection");
-}
-
-// A non-ready formal row is disabled and cannot block a selected factual row.
-{
-  const factual = {
-    ...makeSuggestion("candidate-review-ux", "ready-factual"),
-    kind: "factual_claim",
-    verification: "source_pending",
-    text: "A selectable factual row."
-  };
-  const formal = makeSuggestion("candidate-review-ux", "not-ready-formal");
-  const { modal, candidate } = makeHarness(
-    [factual, formal],
-    { injectPreviews: false }
-  );
-  assert.equal(findInclude(modal.contentEl, formal.id).disabled, true);
-  assert.equal(modal.rows.find((row) => row.item.id === formal.id).selected, false);
-  findInclude(modal.contentEl, factual.id).click();
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.deepEqual(Array.from(candidate.claims, (claim) => claim.id), [factual.id]);
-  assert.equal(hasText(modal.contentEl, "Applied 1 claim."), true);
-  modal.onClose();
-  console.log("REVIEW-INVARIANT-F PASS: non-ready formal cannot block factual batch");
-}
-
-// The Session guard remains defensive if invalid selected state is forced
-// after render; the exact card is marked and the claims list reveals it.
-{
-  const fillers = Array.from({ length: 4 }, (_, index) => ({
-    ...makeSuggestion("candidate-review-ux", `blocker-fill-${index}`),
-    kind: "factual_claim",
-    verification: "source_pending",
-    text: `Unselected filler ${index}.`
-  }));
-  const blocker = makeSuggestion("candidate-review-ux", "forced-blocker");
-  const { modal, candidate } = makeHarness(
-    [...fillers, blocker],
-    { injectPreviews: false }
-  );
-  modal.rows.find((row) => row.item.id === blocker.id).selected = true;
-  findButton(modal.contentEl, "Apply selected claims").click();
-
-  const blockerCard = findClaimCard(modal.contentEl, blocker.id);
-  const list = modal.contentEl.querySelector("[data-scroll-container]");
-  assert.equal(candidate.claims.length, 0);
-  assert.equal(blockerCard.getAttribute("data-apply-blocker"), "true");
-  assert.equal(
-    hasText(
-      modal.contentEl,
-      `Claim "${blocker.text}" must have an accepted current formalization before Apply.`
-    ),
-    true
-  );
-  assert.ok(list.scrollTop > 0, "Claims list must reveal the exact blocker");
-  assert.equal(modal.contentEl.scrollTop, 0);
-  modal.onClose();
-  console.log("REVIEW-INVARIANT-G PASS: defensive failure highlights and reveals exact blocker");
-}
-// Simplest factual claim: the actual checkbox and Apply button pass the
-// current row object through Session and leave the modal open as Applied.
-{
-  const suggestion = {
-    ...makeSuggestion("candidate-review-ux", "factual-click"),
-    kind: "factual_claim",
-    verification: "source_pending",
-    text: "This factual claim still needs a source."
-  };
-  const { modal, session, candidate } = makeHarness([suggestion]);
-  let applyCalls = 0;
-  let receivedItems = null;
-  const originalApply = session.applyReviewedClaims.bind(session);
-  session.applyReviewedClaims = (candidateId, items) => {
-    applyCalls += 1;
-    receivedItems = items;
-    return originalApply(candidateId, items);
-  };
-
-  const include = allElements(modal.contentEl).find(
-    (element) => element.getAttribute("data-include-claim-id") === suggestion.id
-  );
-  include.click();
-  findButton(modal.contentEl, "Apply selected claims").click();
-
-  assert.equal(applyCalls, 1, "Actual Apply handler must call Session once");
-  assert.deepEqual(Array.from(receivedItems, (item) => item.id), [suggestion.id]);
-  assert.equal(receivedItems[0].kind, "factual_claim");
-  assert.equal(candidate.claims.length, 1);
-  assert.equal(hasText(modal.contentEl, "Applied 1 claim."), true);
-  assert.equal(hasText(modal.contentEl, "✓ Applied"), true);
-  modal.onClose();
-  console.log("REVIEW-NONFORMAL-A PASS: factual checkbox → actual Apply commits and renders success");
-}
-
-// A factual row that is already selected in modal state uses the same actual
-// button path without requiring another checkbox event.
-{
-  const suggestion = {
-    ...makeSuggestion("candidate-review-ux", "factual-selected"),
-    kind: "factual_claim",
-    verification: "source_pending",
-    text: "An already-selected factual claim."
-  };
-  const { modal, session, candidate } = makeHarness([suggestion]);
-  modal.rows[0].selected = true;
-  modal.render();
-  let receivedIds = [];
-  const originalApply = session.applyReviewedClaims.bind(session);
-  session.applyReviewedClaims = (candidateId, items) => {
-    receivedIds = Array.from(items, (item) => item.id);
-    return originalApply(candidateId, items);
-  };
-
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.deepEqual(receivedIds, [suggestion.id]);
-  assert.equal(candidate.claims.length, 1);
-  assert.equal(hasText(modal.contentEl, "Applied 1 claim."), true);
-  assert.equal(hasText(modal.contentEl, "✓ Applied"), true);
-  modal.onClose();
-  console.log("REVIEW-NONFORMAL-B PASS: preselected factual row applies through actual button");
-}
-
-// An unselected formal row cannot block a selected factual row.
-{
-  const factual = {
-    ...makeSuggestion("candidate-review-ux", "mixed-factual"),
-    kind: "factual_claim",
-    verification: "source_pending",
-    text: "Only this factual row is selected."
-  };
-  const formal = makeSuggestion("candidate-review-ux", "mixed-formal");
-  const { modal, session, candidate } = makeHarness([factual, formal]);
-  let receivedItems = null;
-  const originalApply = session.applyReviewedClaims.bind(session);
-  session.applyReviewedClaims = (candidateId, items) => {
-    receivedItems = items;
-    return originalApply(candidateId, items);
-  };
-
-  const factualInclude = allElements(modal.contentEl).find(
-    (element) => element.getAttribute("data-include-claim-id") === factual.id
-  );
-  factualInclude.click();
-  findButton(modal.contentEl, "Apply selected claims").click();
-
-  assert.deepEqual(Array.from(receivedItems, (item) => item.id), [factual.id]);
-  assert.equal(candidate.claims.length, 1);
-  assert.equal(candidate.claims[0].id, factual.id);
-  assert.equal(hasText(modal.contentEl, "Applied 1 claim."), true);
-  assert.equal(hasText(modal.contentEl, "✓ Applied"), true);
-  modal.onClose();
-  console.log("REVIEW-NONFORMAL-C PASS: unselected formal row does not block factual Apply");
-}
-
-// A factual row and a current accepted formal row travel through one actual
-// Apply click and commit exactly once each. The captured trace covers stages
-// 1-13 without introducing production logging.
-{
-  formalizationRequestCount = 0;
-  const factual = {
-    ...makeSuggestion("candidate-review-ux", "e2e-factual"),
-    kind: "factual_claim",
-    verification: "source_pending",
-    text: "A factual claim selected in the mixed batch."
-  };
-  const formal = makeSuggestion("candidate-review-ux", "e2e-formal");
-  const { modal, session, candidate } = makeHarness(
-    [factual, formal],
-    { injectPreviews: false }
-  );
-  await formalizeThroughModal(modal);
-  findButton(modal.contentEl, "Accept").click();
-  findInclude(modal.contentEl, factual.id).click();
-
-  const trace = {
-    clickFired: false,
-    rowsBefore: modal.rows.map((row) => ({
-      id: row.item.id,
-      kind: row.item.kind,
-      selected: row.selected
-    })),
-    selectedIds: [],
-    payloadIds: [],
-    applyResult: null,
-    successMessage: "",
-    errorMessage: "",
-    committedIds: [],
-    renderedAppliedCount: 0
-  };
-  const originalApply = session.applyReviewedClaims.bind(session);
-  session.applyReviewedClaims = (candidateId, items) => {
-    trace.clickFired = true;
-    trace.selectedIds = modal.rows.filter((row) => row.selected).map((row) => row.item.id);
-    trace.payloadIds = Array.from(items, (item) => item.id);
-    trace.applyResult = originalApply(candidateId, items);
-    return trace.applyResult;
-  };
-
-  findButton(modal.contentEl, "Apply selected claims").click();
-  trace.successMessage = modal.successMessage;
-  trace.errorMessage = modal.error;
-  trace.committedIds = Array.from(modal.committedIds);
-  trace.renderedAppliedCount = allElements(modal.contentEl).filter(
-    (element) => element.textContent === "✓ Applied"
-  ).length;
-
-  assert.equal(trace.clickFired, true);
-  assert.deepEqual(new Set(trace.selectedIds), new Set([factual.id, formal.id]));
-  assert.deepEqual(new Set(trace.payloadIds), new Set([factual.id, formal.id]));
-  assert.equal(trace.applyResult.ok, true);
-  assert.equal(trace.applyResult.appliedCount, 2);
-  assert.equal(trace.successMessage, "Applied 2 claims.");
-  assert.equal(trace.errorMessage, "");
-  assert.deepEqual(new Set(trace.committedIds), new Set([factual.id, formal.id]));
-  assert.equal(trace.renderedAppliedCount, 2);
-  assert.equal(hasText(modal.contentEl, "Applied 2 claims."), true);
-  assert.equal(candidate.claims.length, 2);
-  assert.equal(Object.keys(session.getFormalizationIndex().records).length, 1);
-  assert.equal(formalizationRequestCount, 1);
-  modal.onClose();
-  console.log("REVIEW-APPLY-E2E-C PASS: factual + accepted formal commit once through actual DOM click");
-}
-// A successful Apply with a non-fatal legacy Knowledge-status warning must
-// still transition the modal row to Applied and show success.
-{
-  const suggestion = {
-    ...makeSuggestion("candidate-review-ux", "legacy-warning"),
-    kind: "factual_claim",
-    verification: "source_pending",
-    text: "A factual claim in a legacy candidate."
-  };
-  const { modal, session, candidate } = makeHarness([suggestion]);
-  candidate.markdown =
-    "# Review UX\n\n## Knowledge status\n\nLegacy unmanaged status.";
-  modal.rows[0].selected = true;
-  modal.render();
-  let applyResult = null;
-  const originalApply = session.applyReviewedClaims.bind(session);
-  session.applyReviewedClaims = (candidateId, items) => {
-    applyResult = originalApply(candidateId, items);
-    return applyResult;
-  };
-
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.equal(applyResult.ok, true);
-  assert.equal(applyResult.appliedCount, 1);
-  assert.equal(typeof applyResult.warning, "string");
-  assert.equal(candidate.claims.length, 1);
-  assert.equal(hasText(modal.contentEl, "Applied 1 claim."), true);
-  assert.equal(hasText(modal.contentEl, "✓ Applied"), true);
-  assert.equal(
-    hasText(
-      modal.contentEl,
-      "Knowledge status could not be updated safely. Review the candidate Markdown manually."
-    ),
-    true,
-    "Non-fatal warning remains visible alongside successful Apply state"
-  );
-  modal.onClose();
-  console.log("REVIEW-NONFORMAL-WARNING PASS: warning no longer hides successful Apply state");
-}
-// Real Formalize → Accept → Apply wiring recognizes the same current preview.
-{
-  formalizationRequestCount = 0;
-  const suggestion = makeSuggestion("candidate-review-ux", "real-path");
-  const { modal, session, candidate } = makeHarness(
-    [suggestion],
-    { injectPreviews: false }
-  );
-
-  await formalizeThroughModal(modal);
-  const pending = session.getFormalizationPreviewsForSuggestion(suggestion.id);
-  assert.equal(pending.length, 1);
-  const previewId = pending[0].record.id;
-  assert.equal(pending[0].record.reviewStatus, "pending");
-
-  findButton(modal.contentEl, "Accept").click();
-  const accepted = session.getCurrentFormalizationPreviewForSuggestion(
-    suggestion.id,
-    suggestion.text,
-    suggestion.kind,
-    "accepted"
-  );
-  assert.ok(accepted);
-  assert.equal(accepted.record.id, previewId);
-  assert.equal(hasText(modal.contentEl, "Accepted ✓"), true);
-  const include = allElements(modal.contentEl).find(
-    (element) =>
-      element.tagName === "INPUT" &&
-      element.getAttribute("data-include-claim-id") === suggestion.id
-  );
-  assert.equal(include.checked, true);
-
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.equal(hasText(modal.contentEl, "Formalize and review this formal statement before applying it."), false);
-  assert.equal(candidate.claims.length, 1);
-  assert.equal(candidate.claims[0].formalizationIds.length, 1);
-  assert.equal(candidate.claims[0].formalizationIds[0], previewId);
-  assert.equal(session.getFormalizationIndex().records[previewId].reviewStatus, "accepted");
-  assert.equal(formalizationRequestCount, 1, "Apply must not call the LLM again");
-  modal.onClose();
-  console.log("REVIEW-IDENTITY-A PASS: actual Formalize → Accept → Apply materializes the same preview once");
-}
-
-// Editing the claim source after Accept immediately changes the visible badge
-// to stale and removes it from the pending Apply selection.
-{
-  formalizationRequestCount = 0;
-  const suggestion = makeSuggestion("candidate-review-ux", "stale-path");
-  const { modal, session, candidate } = makeHarness(
-    [suggestion],
-    { injectPreviews: false }
-  );
-  await formalizeThroughModal(modal);
-  findButton(modal.contentEl, "Accept").click();
-
-  const claimText = findClaimTextarea(modal.contentEl, suggestion.text);
-  assert.ok(claimText);
-  claimText.value = suggestion.text + " Changed after review.";
-  claimText.dispatch("input");
-  assert.equal(hasText(modal.contentEl, "Accepted ✓"), false);
-  assert.equal(hasText(modal.contentEl, "⚠ Stale"), true);
-
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.equal(hasText(modal.contentEl, "Select at least one claim to apply."), true);
-  assert.equal(candidate.claims.length, 0);
-  assert.equal(session.getFormalizationIndex().records && Object.keys(session.getFormalizationIndex().records).length, 0);
-  assert.equal(formalizationRequestCount, 1);
-  modal.onClose();
-  console.log("REVIEW-IDENTITY-B PASS: edited source makes accepted preview visibly stale and blocks Apply");
-}
-
-// Pending previews remain unselected and do not satisfy Apply.
-{
-  formalizationRequestCount = 0;
-  const suggestion = makeSuggestion("candidate-review-ux", "pending-path");
-  const { modal, candidate } = makeHarness(
-    [suggestion],
-    { injectPreviews: false }
-  );
-  await formalizeThroughModal(modal);
-  const include = allElements(modal.contentEl).find(
-    (element) => element.getAttribute("data-include-claim-id") === suggestion.id
-  );
-  include.click();
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.equal(hasText(modal.contentEl, "Select at least one claim to apply."), true);
-  assert.equal(candidate.claims.length, 0);
-  assert.equal(formalizationRequestCount, 1);
-  modal.onClose();
-  console.log("REVIEW-IDENTITY-C PASS: pending preview blocks Apply");
-}
-
-// Rejected previews remain unselected and do not satisfy Apply.
-{
-  formalizationRequestCount = 0;
-  const suggestion = makeSuggestion("candidate-review-ux", "rejected-path");
-  const { modal, candidate } = makeHarness(
-    [suggestion],
-    { injectPreviews: false }
-  );
-  await formalizeThroughModal(modal);
-  findButton(modal.contentEl, "Reject").click();
-  const include = allElements(modal.contentEl).find(
-    (element) => element.getAttribute("data-include-claim-id") === suggestion.id
-  );
-  include.click();
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.equal(hasText(modal.contentEl, "Select at least one claim to apply."), true);
-  assert.equal(candidate.claims.length, 0);
-  assert.equal(formalizationRequestCount, 1);
-  modal.onClose();
-  console.log("REVIEW-IDENTITY-D PASS: rejected preview blocks Apply");
-}
-// Actual modal Accept wiring auto-selects Include but does not cross Apply.
-{
-  const suggestion = makeSuggestion("candidate-review-ux", "accepted");
-  const { modal, session, candidate } = makeHarness([suggestion]);
-  const accept = findButton(modal.contentEl, "Accept");
-  assert.ok(accept, "Accept button must be rendered by the actual modal");
-
-  accept.click();
-
-  assert.equal(modal.rows[0].selected, true);
-  const checkbox = allElements(modal.contentEl).find(
-    (element) => element.tagName === "INPUT" && element.type === "checkbox"
-  );
-  assert.ok(checkbox);
-  assert.equal(checkbox.checked, true);
-  assert.equal(candidate.claims.length, 0);
-  assert.equal(Object.keys(session.formalizationIndex.records).length, 0);
-
-  const apply = findButton(modal.contentEl, "Apply selected claims");
-  assert.ok(apply);
-  apply.click();
-
-  assert.equal(candidate.claims.length, 1);
-  assert.equal(Object.keys(session.formalizationIndex.records).length, 1);
-  assert.equal(hasText(modal.contentEl, "Applied 1 claim."), true);
-  assert.equal(hasText(modal.contentEl, "✓ Applied"), true);
-  assert.equal(
-    allElements(modal.contentEl).filter(
-      (element) => element.tagName === "INPUT" && element.type === "checkbox"
-    ).length,
-    0,
-    "Committed row must not render Include"
-  );
-
-  // Re-clicking Apply has no local selection and must not materialize again.
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.equal(hasText(modal.contentEl, "Select at least one claim to apply."), true);
-  assert.equal(candidate.claims.length, 1);
-  assert.equal(Object.keys(session.formalizationIndex.records).length, 1);
-  modal.onClose();
-
-  console.log("REVIEW-UX-1 PASS: Accept selects Include locally; Apply materializes exactly once");
-}
-
-// Zero-selection feedback is rendered by the actual Apply handler.
-{
-  const suggestion = makeSuggestion("candidate-review-ux", "zero");
-  const { modal, session, candidate } = makeHarness([suggestion]);
-  findButton(modal.contentEl, "Apply selected claims").click();
-  assert.equal(hasText(modal.contentEl, "Select at least one claim to apply."), true);
-  assert.equal(candidate.claims.length, 0);
-  assert.equal(Object.keys(session.formalizationIndex.records).length, 0);
-  modal.onClose();
-  console.log("REVIEW-UX-2 PASS: zero-selection Apply shows visible feedback");
-}
-
-// The real modal DOM is a constrained three-part column. Enough rows to
-// overflow remain inside the sole scroll owner while the footer stays a
-// non-scrolling sibling across rerenders.
 {
   const suggestions = Array.from({ length: 14 }, (_, index) => ({
     ...makeSuggestion("candidate-review-layout", `row-${index}`),
@@ -1143,11 +990,11 @@ async function formalizeThroughModal(modal) {
   const assertThreePartLayout = () => {
     const list = modal.contentEl.querySelector("[data-scroll-container]");
     const footer = modal.contentEl.querySelector("[data-review-claims-footer]");
-    const apply = findButton(modal.contentEl, "Apply selected claims");
+    const apply = findButton(modal.contentEl, "Apply claims");
 
     assert.ok(list, "Claims scroll container must exist");
     assert.ok(footer, "Fixed footer must exist");
-    assert.ok(apply, "Apply action must remain rendered");
+    assert.ok(apply, "Apply claims button must remain rendered");
     assert.equal(list.contains(footer), false, "Footer must be outside the scrolling list");
     assert.equal(footer.parentElement, modal.contentEl);
     assert.equal(apply.parentElement.parentElement, footer);
@@ -1165,25 +1012,25 @@ async function formalizeThroughModal(modal) {
   const before = assertThreePartLayout();
   before.list.scrollTop = 900;
   assert.equal(before.footer.parentElement, modal.contentEl);
-  assert.ok(findButton(modal.contentEl, "Apply selected claims"));
+  assert.ok(findButton(modal.contentEl, "Apply claims"));
 
-  // Formalize/Accept status changes use this same render path. A rerender may
-  // replace nodes, but it must recreate the footer outside the list.
   modal.batchFormalizeMessage = "Formalized 1 claim.";
   modal.render();
   const after = assertThreePartLayout();
   assert.equal(after.list.scrollTop, 900);
-  assert.ok(findButton(modal.contentEl, "Apply selected claims"));
+  assert.ok(findButton(modal.contentEl, "Apply claims"));
   modal.onClose();
-  console.log("REVIEW-UX-4 PASS: overflowing actual modal DOM keeps footer outside sole scroll owner");
+  console.log("REVIEW-UX-LAYOUT PASS: three-part column layout preserved");
 }
-// Accept may reveal the next pending row, but only by changing the designated
-// list's scrollTop. The modal content root remains anchored and scrollIntoView
-// is never invoked.
+
+// ═══════════════════════════════════════════════════════════════════════
+// Preserved: Accept scrolls only the designated claims list
+// ═══════════════════════════════════════════════════════════════════════
+
 {
   FakeElement.scrollIntoViewCalls = 0;
-  const first = makeSuggestion("candidate-review-ux", "first");
-  const second = makeSuggestion("candidate-review-ux", "second");
+  const first = makeSuggestion("candidate-review-ux", "scroll-first");
+  const second = makeSuggestion("candidate-review-ux", "scroll-second");
   const { modal } = makeHarness([first, second]);
   modal.contentEl.scrollTop = 45;
   modal.modalEl.scrollTop = 55;
@@ -1204,31 +1051,32 @@ async function formalizeThroughModal(modal) {
   assert.ok(newList.scrollTop > 10, "Only the claims list should reveal the next row");
   assert.equal(FakeElement.scrollIntoViewCalls, 0);
   modal.onClose();
-  console.log("REVIEW-UX-3 PASS: Accept scrolls only the designated claims list");
+  console.log("REVIEW-UX-SCROLL PASS: Accept scrolls only the designated claims list");
 }
 
 console.log(JSON.stringify({
-  nonFormalNativeCheckboxApply: true,
-  selectionSurvivesRerender: true,
-  acceptAutoSelectsInclude: true,
-  acceptDoesNotPersist: true,
-  applyMaterializesExactlyOnce: true,
-  appliedFeedbackAndRowState: true,
-  zeroSelectionFeedback: true,
-  modalRootAnchored: true,
-  designatedListOnlyScroll: true,
-  overflowingFooterFixed: true,
-  currentPreviewIdentityShared: true,
-  stalePendingRejectedBlocked: true,
-  factualActualDomApply: true,
-  preselectedFactualApply: true,
-  mixedUnselectedFormalDoesNotBlock: true,
-  openQuestionWithoutFormalization: true,
-  nonFatalWarningPreservesAppliedUi: true,
-  formalIncludeEligibilityInvariant: true,
-  staleAndRejectedClearSelection: true,
-  exactApplyBlockerRevealed: true,
-  reviewMathPresentationRendered: true,
-  mixedApplyStagesOneThroughThirteen: true,
+  nonFormalNoCheckbox: true,
+  nonFormalAutoApply: true,
+  openQuestionNoCheckbox: true,
+  openQuestionAutoApply: true,
+  unformalizedBlocksApply: true,
+  clearBlockerMessage: true,
+  pendingBlocksApply: true,
+  acceptSetsReviewStatus: true,
+  acceptNoSelectionMutation: true,
+  acceptThenApplyCommits: true,
+  mixedFactualFormalBothApplied: true,
+  rejectedBlocksApply: true,
+  deleteRemovesBlocker: true,
+  deleteRemovesFromApply: true,
+  zeroClaimsFeedback: true,
+  legacyWarningDoesNotBlockClose: true,
+  applyButtonRenamed: true,
+  formalizationIdentity: true,
+  staleBlocksApply: true,
+  repeatAcceptBlocked: true,
+  mathPresentation: true,
+  threePartLayout: true,
+  scrollOnlyDesignatedList: true,
   result: "PASS"
 }, null, 2));

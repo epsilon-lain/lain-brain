@@ -17,6 +17,12 @@ import type {
   FormalizationIndex,
   LeanArtifactIndex
 } from "./FormalizationProtocol";
+import {
+  migrateSemanticPriorState
+} from "./SemanticPrior";
+import type {
+  SemanticPriorState
+} from "./SemanticPrior";
 
 export type LeanExecutionMode = "native" | "wsl";
 
@@ -29,6 +35,7 @@ export interface LainBrainSettings {
   hasCompletedNamingOnboarding: boolean;
   formalizationIndex?: FormalizationIndex;
   leanArtifactIndex?: LeanArtifactIndex;
+  semanticPriorState?: SemanticPriorState;
   leanExecutionMode: LeanExecutionMode;
   leanProjectRoot: string;
   leanExecutable: string;
@@ -124,6 +131,9 @@ export function migrateLainBrainSettings(
   const leanArtifactIndex =
     deserializeLeanArtifactIndex(value.leanArtifactIndex) ?? undefined;
 
+  const semanticPriorState =
+    migrateSemanticPriorState(value.semanticPriorState);
+
   const leanArgs = Array.isArray(value.leanArgs) &&
     value.leanArgs.every((a: unknown) => typeof a === "string")
     ? (value.leanArgs as string[])
@@ -143,6 +153,7 @@ export function migrateLainBrainSettings(
       storedBrainIsValid,
     formalizationIndex,
     leanArtifactIndex,
+    semanticPriorState,
     leanExecutionMode: value.leanExecutionMode === "wsl"
       ? "wsl"
       : "native",

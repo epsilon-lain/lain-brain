@@ -23,6 +23,7 @@ import {
 } from "./settings";
 import { getActiveImageProvider } from "./ProviderProfiles";
 import type { FormalizationIndex, LeanArtifactIndex } from "./FormalizationProtocol";
+import type { SemanticPriorState } from "./SemanticPrior";
 import { SpawnLeanRunner } from "./LeanRunner";
 import { LainBrainNamingModal } from "./LainBrainNamingModal";
 import {
@@ -53,6 +54,14 @@ export default class LainBrainPlugin extends Plugin {
     this.session.setFormalizationSaveCallback(() => {
       this.settings.formalizationIndex =
         this.session.getFormalizationIndex() as FormalizationIndex;
+      void this.saveSettings();
+    });
+
+    // Semantic prior integration
+    this.session.setSemanticPriorState(this.settings.semanticPriorState);
+    this.session.setSemanticPriorSaveCallback(() => {
+      this.settings.semanticPriorState =
+        this.session.getSemanticPriorState() as SemanticPriorState;
       void this.saveSettings();
     });
 

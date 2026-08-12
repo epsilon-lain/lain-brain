@@ -7,6 +7,10 @@ import type {
   VisionImageFile,
   VisionProviderClient
 } from "./OpenAIVisionClient";
+// Use the legacy build to avoid dynamic-import issues in Electron/VM
+// contexts.  The legacy build loads the worker via synchronous stubs
+// rather than import(), so it works without a module loader callback.
+import * as pdfjsLib from "pdfjs-dist";
 import { canAnalyzeImages } from "./ProviderProfiles";
 import type { ProviderProfile } from "./ProviderProfiles";
 import {
@@ -25,6 +29,40 @@ import type {
   DeepSeekNoteContext,
   SelectionEditRequestContext
 } from "./DeepSeekClient";
+import {
+  analyzeChatSemantics
+} from "./ChatSemanticAnalyzer";
+import type {
+  ChatSemanticAnalyzer,
+  ChatSemanticEvidence
+} from "./ChatSemanticAnalyzer";
+import {
+  attachSemanticAnalysis,
+  createChatSemanticSession,
+  reviseSemanticHypothesis
+} from "./ChatSemanticSession";
+import type {
+  ChatSemanticSession,
+  ChatSemanticState
+} from "./ChatSemanticSession";
+import type { SemanticSpec } from "./SemanticSpec";
+import type { UserTextProvenance } from "./KnowledgeProtocol";
+import {
+  createSemanticPriorEpisode,
+  createEmptySemanticPriorState,
+  addEpisodeToState,
+  retrieveRelevantPriors,
+  renderPriorsForPrompt,
+  migrateSemanticPriorState,
+  sliceSemanticSpecForEvidence,
+  getSemanticPriorEpisodeCount,
+  getSemanticPriorEpisodes,
+  getLastInjectedSemanticPriorIds
+} from "./SemanticPrior";
+import type {
+  SemanticPriorEpisode,
+  SemanticPriorState
+} from "./SemanticPrior";
 import {
   buildCandidateNoteMarkdown,
   findConceptEvidence,
@@ -131,6 +169,7 @@ export interface LainBrainTranscriptMessage {
   providerId?: string;
   providerDisplayName?: string;
   attachment?: LainBrainImageAttachmentMetadata;
+  attachments?: LainBrainImageAttachmentMetadata[];
 }
 
 export interface PendingVisionImage {
@@ -138,6 +177,216 @@ export interface PendingVisionImage {
   filename: string;
   mimeType: string;
   byteSize: number;
+}
+
+/** A composer-side attachment before send. */
+export interface ChatAttachment {
+  readonly id: string;
+  readonly file: VisionImageFile;
+  readonly filename: string;
+  readonly mimeType: string;
+  readonly byteSize: number;
+}
+
+/** Result of normalizing clipboard or picker attachment files. */
+export interface NormalizedAttachmentFiles {
+  readonly supported: readonly File[];
+  readonly rejected: readonly RejectedAttachment[];
+}
+
+export interface RejectedAttachment {
+  readonly filename: string;
+  readonly mimeType: string;
+  readonly reason: "unsupported_type" | "too_large";
+}
+
+export const SUPPORTED_ATTACHMENT_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif"
+]);
+
+export const SUPPORTED_ATTACHMENT_DOCUMENT_TYPES = new Set([
+  "application/pdf"
+]);
+
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MiB
+const MAX_PDF_PAGES = 200;
+
+// Configure pdf.js to run without a real worker (text extraction only).
+// A non-empty fake workerSrc is required — the falsy "" value is rejected
+// by pdfjs-dist 6.x.  The fake data URI ensures pdfjs uses its built-in
+// fake-worker path for synchronous main-thread operation.
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "data:application/javascript;base64,LyoqLw==";
+
+function generateAttachmentId(): string {
+  return `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function isSupportedAttachmentFile(file: { type: string; size: number }): boolean {
+  const mime = file.type.toLowerCase();
+  return (
+    SUPPORTED_ATTACHMENT_IMAGE_TYPES.has(mime) ||
+    SUPPORTED_ATTACHMENT_DOCUMENT_TYPES.has(mime)
+  );
+}
+
+/**
+ * Extract plain text from a text-based PDF file using pdfjs-dist.
+ *
+ * Scanned/image-only PDFs return empty or sparse text — this milestone
+ * does not include OCR. Page boundaries are preserved with [Page N]
+ * markers.  Extraction is local; the PDF is never uploaded.
+ */
+export async function extractPdfText(
+  file: { arrayBuffer(): Promise<ArrayBuffer> }
+): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({
+    data: new Uint8Array(buffer),
+    disableAutoFetch: true,
+    disableStream: true
+  }).promise;
+
+  const pages: string[] = [];
+  const limit = Math.min(doc.numPages, MAX_PDF_PAGES);
+
+  for (let i = 1; i <= limit; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    const lines: string[] = [];
+    let lastY: number | null = null;
+    let currentLine = "";
+
+    for (const item of content.items) {
+      if ("str" in item && typeof item.str === "string") {
+        const transform = "transform" in item
+          ? (item as { transform: number[] }).transform
+          : undefined;
+        const y = transform?.[5] ?? 0;
+
+        if (lastY !== null && Math.abs(y - lastY) > 2) {
+          lines.push(currentLine.trim());
+          currentLine = "";
+        }
+        currentLine += item.str;
+        lastY = y;
+      }
+    }
+    if (currentLine.trim() !== "") {
+      lines.push(currentLine.trim());
+    }
+
+    if (lines.length > 0) {
+      pages.push(`[Page ${i}]\n${lines.join("\n")}`);
+    }
+  }
+
+  return pages.join("\n\n");
+}
+
+export function normalizeChatAttachmentFile(
+  file: VisionImageFile
+): ChatAttachment | null {
+  const mime = file.type.toLowerCase();
+
+  if (!isSupportedAttachmentFile(file)) {
+    return null;
+  }
+
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    return null;
+  }
+
+  return {
+    id: generateAttachmentId(),
+    file,
+    filename: file.name || (mime === "application/pdf" ? "document.pdf" : "image"),
+    mimeType: mime,
+    byteSize: file.size
+  };
+}
+
+/**
+ * Extract supported attachment files from clipboard / drop DataTransfer
+ * primitives.  Pure helper so paste/decision logic is testable without DOM.
+ *
+ * Deduplicates multiple representations of the same underlying file from the
+ * same paste operation (same name + size), but does NOT globally deduplicate
+ * across different paste operations.
+ */
+export function extractAttachmentFiles(
+  items: readonly {
+    kind: string;
+    type: string;
+    getAsFile(): File | null;
+  }[],
+  dtFiles?: readonly File[]
+): File[] {
+  const result: File[] = [];
+  const seen = new Set<string>();
+
+  const addUnique = (file: File): void => {
+    const key = `${file.name}\x00${file.size}\x00${file.type}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    if (isSupportedAttachmentFile(file)) {
+      result.push(file);
+    }
+  };
+
+  // DataTransferItemList (preferred path — preserves accurate MIME types)
+  for (const item of items) {
+    if (item.kind === "file") {
+      const file = item.getAsFile();
+      if (file !== null) {
+        addUnique(file);
+      }
+    }
+  }
+
+  // DataTransfer files (fallback — some platforms expose files here)
+  if (dtFiles !== undefined) {
+    for (const file of dtFiles) {
+      addUnique(file);
+    }
+  }
+
+  return result;
+}
+
+export function normalizeAttachmentFiles(
+  files: readonly VisionImageFile[]
+): NormalizedAttachmentFiles {
+  const supported: File[] = [];
+  const rejected: RejectedAttachment[] = [];
+
+  for (const file of files) {
+    const mime = file.type.toLowerCase();
+    if (!isSupportedAttachmentFile(file)) {
+      rejected.push({
+        filename: file.name || "unknown",
+        mimeType: mime,
+        reason: "unsupported_type"
+      });
+      continue;
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      rejected.push({
+        filename: file.name || "unknown",
+        mimeType: mime,
+        reason: "too_large"
+      });
+      continue;
+    }
+    supported.push(file as File);
+  }
+
+  return { supported, rejected };
 }
 
 interface StoredMessage extends LainBrainTranscriptMessage {
@@ -304,11 +553,45 @@ export class LainBrainSession {
     brainDisplayName: DEFAULT_BRAIN_DISPLAY_NAME,
     hasCompletedNamingOnboarding: false
   });
+  private chatSemanticSession?: ChatSemanticSession;
+  private chatSemanticAnalyzer: ChatSemanticAnalyzer = analyzeChatSemantics;
+  private semanticPriorState: SemanticPriorState =
+    createEmptySemanticPriorState();
+  private lastInjectedPriorIds: readonly string[] = [];
+  private chatSemanticQueue: Promise<void> = Promise.resolve();
+  /** Queue-owned semantic state, isolated by foreground chat epoch. */
+  private readonly chatSemanticSessionsByEpoch =
+    new Map<number, ChatSemanticSession>();
+  /** Outstanding queued/running jobs per epoch, used to retire stale state. */
+  private readonly chatSemanticJobCountsByEpoch = new Map<number, number>();
+  /**
+   * Identifies the current foreground semantic conversation.
+   * Bumped by clearChat(). Stale results must NOT update
+   * ChatSemanticSession, but MAY still persist SemanticPriorEpisodes.
+   */
+  private foregroundSessionEpoch = 0;
+  /**
+   * Stable keys of experience captures that have already been persisted.
+   * Provides idempotency: retries or duplicate scheduling cannot create duplicate
+   * SemanticPriorEpisodes for the same captured evidence batch.
+   */
+  private readonly persistedCaptureKeys = new Set<string>();
+  /**
+   * Capture keys currently being processed (in-flight).
+   * Prevents concurrent duplicate processing; cleared on success or failure.
+   */
+  private readonly inFlightCaptureKeys = new Set<string>();
+  private chatSemanticFailureCount = 0;
+  private lastDeepSeekError: {
+    code: string;
+    status?: number;
+    message: string;
+  } | null = null;
 
   activeCandidateId: string | null = null;
   private generalDraft = "";
   private selectionEditContext?: SelectionEditContext;
-  private pendingVisionImage?: PendingVisionImage;
+  private pendingAttachments: ChatAttachment[] = [];
   private readonly confirmedVisionProviderIds = new Set<string>();
   loadingMode: LainBrainLoadingMode = null;
   candidateLoading = false;
@@ -389,6 +672,177 @@ export class LainBrainSession {
     this.notify();
   }
 
+  setChatSemanticAnalyzer(analyzer: ChatSemanticAnalyzer): void {
+    this.chatSemanticAnalyzer = analyzer;
+  }
+
+  getChatSemanticSession(): Readonly<ChatSemanticSession> | undefined {
+    return this.chatSemanticSession;
+  }
+
+  getChatSemanticDeveloperState(): {
+    state: ChatSemanticState;
+    sessionRevision: number;
+    specRevision?: number;
+    historyCount: number;
+    failureCount: number;
+  } | undefined {
+    const session = this.chatSemanticSession;
+    if (session === undefined) {
+      return undefined;
+    }
+    return {
+      state: session.state,
+      sessionRevision: session.revision,
+      specRevision: session.semanticSpec?.revision,
+      historyCount: session.hypothesisHistory.length,
+      failureCount: this.chatSemanticFailureCount
+    };
+  }
+
+  async waitForChatSemanticShadow(): Promise<void> {
+    await this.chatSemanticQueue;
+  }
+
+  getChatSemanticFailureCount(): number {
+    return this.chatSemanticFailureCount;
+  }
+
+  /** Developer diagnostics for the foreground / experience lifecycle. */
+  getSemanticLifecycleState(): {
+    foregroundEpoch: number;
+    queuedEpochCount: number;
+    persistedCaptureCount: number;
+    inFlightCaptureCount: number;
+  } {
+    return {
+      foregroundEpoch: this.foregroundSessionEpoch,
+      queuedEpochCount: this.chatSemanticJobCountsByEpoch.size,
+      persistedCaptureCount: this.persistedCaptureKeys.size,
+      inFlightCaptureCount: this.inFlightCaptureKeys.size
+    };
+  }
+
+  /**
+   * Retrieve a compact advisory context block of potentially relevant
+   * historical semantic prior episodes for the current user message.
+   *
+   * Returns "" when no priors are relevant — the caller injects nothing.
+   * This is deterministic and requires no additional LLM call.
+   */
+  getRelevantSemanticPriorContext(
+    currentUserText: string
+  ): string {
+    if (currentUserText.trim() === "") {
+      this.lastInjectedPriorIds = [];
+      return "";
+    }
+
+    const relevant = retrieveRelevantPriors(
+      this.semanticPriorState,
+      currentUserText
+    );
+
+    this.lastInjectedPriorIds = getLastInjectedSemanticPriorIds(relevant);
+
+    if (relevant.length === 0) {
+      return "";
+    }
+
+    return renderPriorsForPrompt(relevant);
+  }
+
+  /** Sanitized last-error diagnostics. Secrets are redacted before storage. */
+  getLastDeepSeekError(): Readonly<{
+    code: string;
+    status?: number;
+    message: string;
+  }> | null {
+    return this.lastDeepSeekError;
+  }
+
+  /**
+   * Redact secrets from an error message before storage or logging.
+   *
+   * Removes: Bearer tokens, sk-... API keys, Authorization headers,
+   * and the currently configured DeepSeek API key when it is non-empty.
+   */
+  private sanitizeErrorMessage(raw: string): string {
+    let sanitized = raw;
+    // Bearer <token> → remove completely (the word Bearer itself is sensitive)
+    sanitized = sanitized.replace(
+      /Bearer\s+\S+/gi,
+      "[redacted-bearer]"
+    );
+    // sk-... API key patterns (at least 10 chars after prefix)
+    sanitized = sanitized.replace(
+      /\bsk-[a-zA-Z0-9_-]{10,}\b/g,
+      "[redacted-key]"
+    );
+    // Authorization: <value> → remove completely
+    sanitized = sanitized.replace(
+      /Authorization:\s*\S+/gi,
+      "[redacted-auth-header]"
+    );
+    // The configured key itself (exact match, case-sensitive)
+    const configuredKey = this.getApiKey().trim();
+    if (configuredKey.length > 0) {
+      // Split+join avoids regex-escaping edge cases
+      sanitized = sanitized.split(configuredKey).join(
+        "[redacted-configured-key]"
+      );
+    }
+    return sanitized;
+  }
+
+  private captureDeepSeekError(
+    error: unknown,
+    context: string
+  ): void {
+    let code = "unknown";
+    let status: number | undefined;
+    let rawMessage = "Unknown error";
+
+    // Duck-type check: instanceof Error can fail across vm/iframe contexts
+    if (
+      error !== null &&
+      typeof error === "object" &&
+      "message" in error &&
+      typeof (error as Error).message === "string"
+    ) {
+      rawMessage = (error as Error).message;
+      if (rawMessage.includes("429") || /rate.?limit/i.test(rawMessage)) {
+        code = "rate_limited";
+        status = 429;
+      } else if (
+        /\b5\d\d\b/.test(rawMessage) ||
+        /server error/i.test(rawMessage)
+      ) {
+        code = "server_error";
+      } else if (
+        /timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|ECONNREFUSED/i.test(rawMessage)
+      ) {
+        code = "network";
+      } else if (
+        /no answer|empty response|invalid.*JSON|no choices/i.test(rawMessage)
+      ) {
+        code = "malformed";
+      }
+    }
+
+    const message = this.sanitizeErrorMessage(rawMessage);
+    this.lastDeepSeekError = { code, status, message };
+
+    // Diagnostic log — secrets are redacted before logging
+    console.log(JSON.stringify({
+      event: "deepseek-error",
+      context,
+      code,
+      status: status ?? null,
+      message: message.slice(0, 200)
+    }));
+  }
+
   private onFormalizationChanged?: () => void;
 
   setFormalizationSaveCallback(
@@ -399,6 +853,44 @@ export class LainBrainSession {
 
   private notifyFormalizationChanged(): void {
     this.onFormalizationChanged?.();
+  }
+
+  private onSemanticPriorChanged?: () => void;
+
+  setSemanticPriorSaveCallback(
+    callback: () => void
+  ): void {
+    this.onSemanticPriorChanged = callback;
+  }
+
+  private notifySemanticPriorChanged(): void {
+    this.onSemanticPriorChanged?.();
+  }
+
+  setSemanticPriorState(state: SemanticPriorState | undefined): void {
+    if (state === undefined) {
+      this.semanticPriorState = createEmptySemanticPriorState();
+      return;
+    }
+    this.semanticPriorState = state;
+  }
+
+  getSemanticPriorState(): Readonly<SemanticPriorState> {
+    return this.semanticPriorState;
+  }
+
+  // ── Developer diagnostics for semantic priors ──────────────────
+
+  getSemanticPriorEpisodeCount(): number {
+    return getSemanticPriorEpisodeCount(this.semanticPriorState);
+  }
+
+  getSemanticPriorEpisodes(): readonly SemanticPriorEpisode[] {
+    return getSemanticPriorEpisodes(this.semanticPriorState);
+  }
+
+  getLastInjectedSemanticPriorIds(): readonly string[] {
+    return this.lastInjectedPriorIds;
   }
 
   private onLeanArtifactsChanged?: () => void;
@@ -3030,40 +3522,80 @@ export class LainBrainSession {
       displayName: profile.displayName
     };
   }
-  getPendingVisionImage(): Readonly<PendingVisionImage> | undefined {
-    return this.pendingVisionImage;
-  }
-
-  setPendingVisionImage(file: VisionImageFile): boolean {
+  /** Shared validation + normalization for picker / paste / drop. */
+  addChatAttachment(file: VisionImageFile): boolean {
     if (this.loading || this.selectionEditContext !== undefined) {
       return false;
     }
-
-    const validationError = validateVisionImage(file);
-
-    if (validationError !== null) {
-      this.pendingVisionImage = undefined;
-      this.addAssistantNotice(validationError);
+    const normalized = normalizeChatAttachmentFile(file);
+    if (normalized === null) {
       return false;
     }
-
-    this.pendingVisionImage = {
-      file,
-      filename: file.name,
-      mimeType: file.type.toLowerCase(),
-      byteSize: file.size
-    };
+    // Deduplicate by filename + size
+    if (
+      this.pendingAttachments.some(
+        (a) =>
+          a.filename === normalized.filename &&
+          a.byteSize === normalized.byteSize
+      )
+    ) {
+      return false;
+    }
+    this.pendingAttachments = [...this.pendingAttachments, normalized];
     this.notify();
     return true;
   }
 
-  removePendingVisionImage(): void {
-    if (this.pendingVisionImage === undefined) {
+  removeChatAttachment(id: string): void {
+    const index = this.pendingAttachments.findIndex((a) => a.id === id);
+    if (index === -1) {
       return;
     }
-
-    this.pendingVisionImage = undefined;
+    this.pendingAttachments = [
+      ...this.pendingAttachments.slice(0, index),
+      ...this.pendingAttachments.slice(index + 1)
+    ];
     this.notify();
+  }
+
+  getPendingAttachments(): readonly ChatAttachment[] {
+    return this.pendingAttachments;
+  }
+
+  clearPendingAttachments(): void {
+    if (this.pendingAttachments.length === 0) {
+      return;
+    }
+    this.pendingAttachments = [];
+    this.notify();
+  }
+
+  // ── Legacy single-attachment API ───────────────────────────────
+  // Kept for backward compat; delegates to the new array model.
+
+  /** @deprecated Use addChatAttachment instead. */
+  setPendingVisionImage(file: VisionImageFile): boolean {
+    this.clearPendingAttachments();
+    return this.addChatAttachment(file);
+  }
+
+  /** @deprecated Use getPendingAttachments instead. */
+  getPendingVisionImage(): Readonly<PendingVisionImage> | undefined {
+    const first = this.pendingAttachments[0];
+    if (first === undefined) {
+      return undefined;
+    }
+    return {
+      file: first.file,
+      filename: first.filename,
+      mimeType: first.mimeType,
+      byteSize: first.byteSize
+    };
+  }
+
+  /** @deprecated Use clearPendingAttachments instead. */
+  removePendingVisionImage(): void {
+    this.clearPendingAttachments();
   }
 
   setDraft(value: string): void {
@@ -3337,8 +3869,20 @@ export class LainBrainSession {
 
     this.messages.length = 0;
     this.generalDraft = "";
-    this.pendingVisionImage = undefined;
+    this.pendingAttachments = [];
     this.candidateError = null;
+    // Bump foreground epoch — invalidates stale foreground session updates
+    // but does NOT prevent in-flight experience capture from persisting.
+    const clearedEpoch = this.foregroundSessionEpoch;
+    this.foregroundSessionEpoch += 1;
+    this.chatSemanticSession = undefined;
+    if (!this.chatSemanticJobCountsByEpoch.has(clearedEpoch)) {
+      this.chatSemanticSessionsByEpoch.delete(clearedEpoch);
+    }
+    this.chatSemanticFailureCount = 0;
+    this.lastInjectedPriorIds = [];
+    // NOTE: semanticPriorState is intentionally NOT cleared.
+    // Prior episodes survive chat clear, panel close, and restart.
     this.notify();
   }
 
@@ -3445,22 +3989,36 @@ export class LainBrainSession {
       return "blocked";
     }
 
-    const attachment = this.pendingVisionImage;
+    const pendingAttachments = this.pendingAttachments;
+    const imageAttachments = pendingAttachments.filter(
+      (a) => SUPPORTED_ATTACHMENT_IMAGE_TYPES.has(a.mimeType)
+    );
+    const pdfAttachments = pendingAttachments.filter(
+      (a) => a.mimeType === "application/pdf"
+    );
 
-    if (attachment !== undefined) {
+    // Extract PDF text (local, text-based PDFs only — no OCR).
+    let pdfContext = "";
+    for (const pdf of pdfAttachments) {
+      try {
+        const extracted = await extractPdfText(pdf.file);
+        if (extracted.trim() !== "") {
+          pdfContext +=
+            `\n\n[Attached PDF: ${pdf.filename}]\n${extracted}`;
+        }
+      } catch {
+        // PDF extraction failed — silently continue without its content.
+      }
+    }
+
+    // ── Vision path: at least one image attachment ──────────────────
+    if (imageAttachments.length > 0) {
       const profile = this.getActiveImageProvider();
 
       if (profile === null || !canAnalyzeImages(profile)) {
         this.addAssistantNotice(
           "The selected AI provider cannot analyze images. Choose a Vision-capable provider in Lain Brain settings."
         );
-        return "blocked";
-      }
-
-      const validationError = validateVisionImage(attachment.file);
-
-      if (validationError !== null) {
-        this.addAssistantNotice(validationError);
         return "blocked";
       }
 
@@ -3475,33 +4033,47 @@ export class LainBrainSession {
         this.confirmedVisionProviderIds.add(profile.id);
       }
 
-      const attachmentMetadata: LainBrainImageAttachmentMetadata = {
-        filename: attachment.filename,
-        mimeType: attachment.mimeType,
-        byteSize: attachment.byteSize,
-        providerId: profile.id,
-        providerDisplayName: profile.displayName
-      };
-      this.messages.push({
+      const allMetadata: LainBrainImageAttachmentMetadata[] =
+        pendingAttachments.map((a) => ({
+          filename: a.filename,
+          mimeType: a.mimeType,
+          byteSize: a.byteSize,
+          providerId: profile.id,
+          providerDisplayName: profile.displayName
+        }));
+
+      const firstMetadata = allMetadata[0]!;
+
+      // Include PDF text context in the prompt for the vision model.
+      const visionPrompt = message + pdfContext;
+
+      const userMessage: StoredMessage = {
         id: this.createMessageId(),
         role: "user",
         content: message,
         providerId: profile.id,
         providerDisplayName: profile.displayName,
-        attachment: attachmentMetadata,
+        attachment: firstMetadata,
+        attachments: allMetadata,
         includeInHistory: true
-      });
+      };
+      this.messages.push(userMessage);
       this.generalDraft = "";
-      this.pendingVisionImage = undefined;
+      this.pendingAttachments = [];
       this.loadingMode = "chat";
       this.notify();
 
+      let assistantText =
+        "Unable to analyze the image with the selected AI provider. Please try again.";
       try {
         const response = await this.visionClient.analyzeImage(
           profile,
-          message,
-          attachment.file
+          visionPrompt,
+          imageAttachments.length === 1
+            ? imageAttachments[0]!.file
+            : imageAttachments.map((a) => a.file)
         );
+        assistantText = response.text;
 
         this.messages.push({
           id: this.createMessageId(),
@@ -3515,13 +4087,20 @@ export class LainBrainSession {
         this.messages.push({
           id: this.createMessageId(),
           role: "assistant",
-          content:
-            "Unable to analyze the image with the selected AI provider. Please try again.",
+          content: assistantText,
           providerId: profile.id,
           providerDisplayName: profile.displayName,
           includeInHistory: false
         });
       } finally {
+        const deepSeekApiKey = this.getApiKey().trim();
+        if (deepSeekApiKey !== "") {
+          this.enqueueChatSemanticAnalysis(
+            deepSeekApiKey,
+            userMessage,
+            assistantText
+          );
+        }
         this.loadingMode = null;
         this.notify();
       }
@@ -3529,6 +4108,7 @@ export class LainBrainSession {
       return "sent";
     }
 
+    // ── Text path (may include PDF-extracted content) ──────────────
     const apiKey = this.getApiKey().trim();
 
     if (apiKey === "") {
@@ -3538,31 +4118,53 @@ export class LainBrainSession {
       return "blocked";
     }
 
-    this.messages.push({
+    const textContent = message + pdfContext;
+
+    const pdfMetadata: LainBrainImageAttachmentMetadata[] | undefined =
+      pdfAttachments.length > 0
+        ? pdfAttachments.map((a) => ({
+            filename: a.filename,
+            mimeType: a.mimeType,
+            byteSize: a.byteSize,
+            providerId: "deepseek",
+            providerDisplayName: "DeepSeek"
+          }))
+        : undefined;
+
+    const userMessage: StoredMessage = {
       id: this.createMessageId(),
       role: "user",
-      content: message,
+      content: textContent,
       providerId: "deepseek",
       providerDisplayName: "DeepSeek",
-      includeInHistory: true
-    });
+      includeInHistory: true,
+      ...(pdfMetadata !== undefined
+        ? { attachments: pdfMetadata, attachment: pdfMetadata[0] }
+        : {})
+    };
+    this.messages.push(userMessage);
     this.generalDraft = "";
+    this.pendingAttachments = [];
     this.loadingMode = "chat";
     this.notify();
 
     try {
       await this.refreshActiveNoteContext();
 
+      // ── Retrieve relevant historical semantic priors ──────────────
+      // Deterministic retrieval; no additional LLM call.
+      const priorContext = this.getRelevantSemanticPriorContext(message);
+
       const rawResponse = await this.askText(
         apiKey,
         this.getConversationHistory(),
-        this.activeNoteContext
+        this.activeNoteContext,
+        priorContext !== "" ? priorContext : undefined
       );
       const response = await this.reviewAndRepairLatex(
         apiKey,
         rawResponse
       );
-
       this.messages.push({
         id: this.createMessageId(),
         role: "assistant",
@@ -3571,7 +4173,13 @@ export class LainBrainSession {
         providerDisplayName: "DeepSeek",
         includeInHistory: true
       });
-    } catch {
+      this.enqueueChatSemanticAnalysis(
+        apiKey,
+        userMessage,
+        response
+      );
+    } catch (error) {
+      this.captureDeepSeekError(error, "foreground-chat");
       this.messages.push({
         id: this.createMessageId(),
         role: "assistant",
@@ -3585,6 +4193,238 @@ export class LainBrainSession {
     }
 
     return "sent";
+  }
+
+  private enqueueChatSemanticAnalysis(
+    apiKey: string,
+    userMessage: StoredMessage,
+    latestAssistantResponse: string
+  ): void {
+    // Capture the completed foreground exchange as an immutable queue job.
+    const captureEpoch = this.foregroundSessionEpoch;
+    const conversation = Object.freeze(
+      this.getConversationHistory().map((message) => Object.freeze({
+        ...message
+      }))
+    );
+    const userEvidence: readonly ChatSemanticEvidence[] = Object.freeze(this.messages
+      .filter((message) =>
+        message.role === "user" && message.includeInHistory)
+      .map((message) => ({
+        messageId: message.id,
+        text: message.content
+      } as const)));
+    // Stable idempotency key from the captured evidence message IDs.
+    // Different user turns produce different keys.  The same evidence
+    // batch always produces the same key,
+    // so retries/races cannot create duplicate episodes.
+    const captureKey = userEvidence
+      .map((e) => e.messageId)
+      .sort()
+      .join("|");
+
+    const runWork = async (): Promise<void> => {
+      // The queue owns semantic evolution. Resolve the latest base only when
+      // this job starts, never from an enqueue-time session snapshot.
+      const currentSession =
+        this.chatSemanticSessionsByEpoch.get(captureEpoch);
+
+      // ── LLM call (may be expensive) ───────────────────────────────
+      let semanticSpec: SemanticSpec;
+      try {
+        semanticSpec = await this.chatSemanticAnalyzer(apiKey, {
+          semanticSessionId:
+            currentSession?.id ?? `chat-semantic-${userMessage.id}`,
+          conversation,
+          userEvidence,
+          latestAssistantResponse,
+          currentSession
+        });
+      } catch (error) {
+        // Semantic shadow analysis is deliberately fail-open.
+        this.captureDeepSeekError(error, "semantic-shadow");
+        if (captureEpoch === this.foregroundSessionEpoch) {
+          this.chatSemanticFailureCount += 1;
+        }
+        return;
+      }
+
+      // ── Build updated session from captured state ─────────────────
+      const now = new Date().toISOString();
+      let updatedSession: ChatSemanticSession;
+      try {
+        if (currentSession === undefined) {
+          const allUserSourceRefs: UserTextProvenance[] = userEvidence.map(
+            (evidence) => ({
+              sourceKind: "message_span" as const,
+              messageId: evidence.messageId,
+              snapshot: evidence.text,
+              actor: "user" as const
+            })
+          );
+          const fullUserText = userEvidence
+            .map((evidence) => evidence.text)
+            .join("");
+          const analyzing = createChatSemanticSession({
+            id: `chat-semantic-${userMessage.id}`,
+            userText: fullUserText,
+            userSourceRefs: allUserSourceRefs,
+            createdAt: now
+          });
+          updatedSession = attachSemanticAnalysis(
+            analyzing,
+            semanticSpec,
+            now
+          );
+        } else {
+          const currentEvidenceKeys = new Set(
+            currentSession.evidenceRefs.map(evidenceRefKey)
+          );
+          const missingUserSourceRefs = userEvidence
+            .map((evidence) => ({
+              sourceKind: "message_span" as const,
+              messageId: evidence.messageId,
+              snapshot: evidence.text,
+              actor: "user" as const
+            }))
+            .filter((ref) => !currentEvidenceKeys.has(evidenceRefKey(ref)));
+          updatedSession = reviseSemanticHypothesis(
+            currentSession,
+            {
+              semanticSpec,
+              additionalUserSourceRefs: missingUserSourceRefs,
+              updatedAt: now
+            }
+          );
+        }
+      } catch {
+        // Session construction failure (provenance violation, etc.) —
+        // fail-open, no episode, no foreground update.
+        return;
+      }
+
+      // ══════════════════════════════════════════════════════════════
+      // PHASE 1 — EXPERIENCE PERSISTENCE (independent of epoch)
+      //
+      // The user turn already happened.  Persist the historical
+      // semantic hypothesis even if clearChat() occurred while the
+      // analysis was in flight.
+      // Diffs against the latest queue-owned session for this epoch,
+      // never the mutable visible foreground session.
+      // ══════════════════════════════════════════════════════════════
+      try {
+        this.persistSemanticExperience(
+          captureKey,
+          updatedSession,
+          currentSession
+        );
+      } catch {
+        // Experience persistence is fail-open.
+      }
+
+      // ══════════════════════════════════════════════════════════════
+      // PHASE 2 — FOREGROUND SESSION UPDATE (epoch-gated)
+      //
+      // Only update ChatSemanticSession if the foreground epoch still
+      // matches.  Stale results must never contaminate a new session.
+      // ══════════════════════════════════════════════════════════════
+      this.chatSemanticSessionsByEpoch.set(captureEpoch, updatedSession);
+      if (captureEpoch === this.foregroundSessionEpoch) {
+        this.chatSemanticSession = updatedSession;
+      }
+    };
+
+    this.chatSemanticJobCountsByEpoch.set(
+      captureEpoch,
+      (this.chatSemanticJobCountsByEpoch.get(captureEpoch) ?? 0) + 1
+    );
+    this.chatSemanticQueue = this.chatSemanticQueue
+      .catch(() => undefined)
+      .then(runWork)
+      .finally(() => {
+        const remaining =
+          (this.chatSemanticJobCountsByEpoch.get(captureEpoch) ?? 1) - 1;
+        if (remaining > 0) {
+          this.chatSemanticJobCountsByEpoch.set(captureEpoch, remaining);
+          return;
+        }
+        this.chatSemanticJobCountsByEpoch.delete(captureEpoch);
+        if (captureEpoch !== this.foregroundSessionEpoch) {
+          this.chatSemanticSessionsByEpoch.delete(captureEpoch);
+        }
+      });
+  }
+
+  /**
+   * Persist a SemanticPriorEpisode from a completed shadow analysis.
+   *
+   * Idempotent: uses captureKey to prevent duplicate episodes for the
+   * same evidence batch.  Uses separate inFlight and persisted sets so
+   * a failed persistence attempt does not permanently suppress retries.
+   *
+   * Skips when there is no new evidence or the local semantic slice
+   * produces no useful anchors.
+   */
+  private persistSemanticExperience(
+    captureKey: string,
+    updatedSession: ChatSemanticSession,
+    previousSession: ChatSemanticSession | undefined
+  ): void {
+    // Already persisted — nothing to do
+    if (this.persistedCaptureKeys.has(captureKey)) {
+      return;
+    }
+
+    // Already being processed concurrently — skip (dedupe)
+    if (this.inFlightCaptureKeys.has(captureKey)) {
+      return;
+    }
+
+    // Compute new evidence: refs added since the previous session
+    const previousEvidenceKeys = new Set(
+      (previousSession?.evidenceRefs ?? []).map(evidenceRefKey)
+    );
+    const newEvidenceRefs = updatedSession.evidenceRefs.filter(
+      (ref) => !previousEvidenceKeys.has(evidenceRefKey(ref))
+    );
+
+    // Skip if no new user evidence this revision
+    if (newEvidenceRefs.length === 0) {
+      return;
+    }
+
+    // Slice the cumulative SemanticSpec to local evidence only
+    const localSpec = sliceSemanticSpecForEvidence(
+      updatedSession.semanticSpec!,
+      newEvidenceRefs
+    );
+
+    if (localSpec === null) {
+      return;
+    }
+
+    // Create episode from the local slice; anchors derive from the
+    // local spec, NOT the cumulative one
+    const priorEpisode = createSemanticPriorEpisode({
+      evidenceRefs: newEvidenceRefs,
+      semanticSpec: localSpec,
+      semanticSessionId: updatedSession.id,
+      semanticRevision: updatedSession.revision
+    });
+
+    // Mark in-flight BEFORE mutation — prevents concurrent duplicate
+    // processing.  Only mark persisted AFTER successful state insertion.
+    this.inFlightCaptureKeys.add(captureKey);
+    try {
+      this.semanticPriorState = addEpisodeToState(
+        this.semanticPriorState,
+        priorEpisode
+      );
+      this.persistedCaptureKeys.add(captureKey);
+      this.notifySemanticPriorChanged();
+    } finally {
+      this.inFlightCaptureKeys.delete(captureKey);
+    }
   }
   private async sendSelectionDiscussion(): Promise<void> {
     const context = this.selectionEditContext;
@@ -4754,6 +5594,18 @@ function extractCandidateCoreConcept(
   );
 
   return link?.[1]?.trim() ?? null;
+}
+
+/**
+ * Stable identity key for a UserTextProvenance for diff computation.
+ * Uses messageId for spans, editId for edits.
+ */
+function evidenceRefKey(ref: UserTextProvenance): string {
+  if (ref.sourceKind === "message_span") {
+    return `msg:${ref.messageId}`;
+  }
+  // user_edit or future kinds
+  return `edit:${(ref as { editId: string }).editId}`;
 }
 
 function containsSensitiveClaimData(

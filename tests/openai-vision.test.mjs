@@ -24,6 +24,7 @@ const built = await esbuild.build({
         removeCustomProviderProfile
       } from "./src/settings";
       export { LainBrainSession } from "./src/LainBrainSession";
+      export { createSemanticSpec } from "./src/SemanticSpec";
     `,
     resolveDir: process.cwd(),
     sourcefile: "vision-providers-entry.ts",
@@ -54,11 +55,13 @@ const built = await esbuild.build({
 });
 const module = { exports: {} };
 const capturedLogs = [];
+class DOMMatrixStub { constructor(_init) { /* no-op */ } }
 vm.runInNewContext(built.outputFiles[0].text, {
   module,
   exports: module.exports,
   require,
   URL,
+  DOMMatrix: DOMMatrixStub,
   crypto: { randomUUID: () => "test-profile-id" },
   btoa: (value) => Buffer.from(value, "binary").toString("base64"),
   console: {
@@ -71,6 +74,7 @@ vm.runInNewContext(built.outputFiles[0].text, {
 });
 const {
   createCustomProviderProfile,
+  createSemanticSpec,
   createImageDataUrl,
   LainBrainSession,
   MAX_VISION_IMAGE_BYTES,
@@ -82,6 +86,36 @@ const {
   removeCustomProviderProfile,
   VisionProviderRouter
 } = module.exports;
+
+function semanticSpecFor(request) {
+  const sourceRefs = request.userEvidence.map((item, index) => ({
+    id: `vision-semantic-source-${index + 1}`,
+    messageId: item.messageId,
+    snapshot: item.text
+  }));
+  return createSemanticSpec({
+    claimId: request.semanticSessionId,
+    sourceRefs,
+    symbols: sourceRefs.map((sourceRef, index) => ({
+      id: `vision-semantic-symbol-${index + 1}`,
+      surface: request.userEvidence[index].text,
+      role: "concept",
+      userDefined: true,
+      sourceRefIds: [sourceRef.id]
+    })),
+    expressions: sourceRefs.map((_, index) => ({
+      id: `vision-semantic-expression-${index + 1}`,
+      kind: "symbol_ref",
+      symbolId: `vision-semantic-symbol-${index + 1}`
+    })),
+    statements: sourceRefs.map((_, index) => ({
+      id: `vision-semantic-statement-${index + 1}`,
+      kind: "assertion",
+      exprId: `vision-semantic-expression-${index + 1}`
+    })),
+    ambiguities: []
+  });
+}
 
 function makeImage({
   name = "diagram.png",
@@ -372,6 +406,99 @@ textSession.setDraft("Text-only question");
 assert.equal(await textSession.send(), "sent");
 assert.equal(textDeepSeekCalls, 1);
 assert.equal(textVisionCalls, 0);
+
+// Image foreground success schedules exactly one semantic capture. The job
+// survives an immediate Clear Chat, while its old epoch cannot restore the
+// visible semantic session.
+{
+  const exactText = "lain 最喜欢素子姐姐";
+  let analyzerCalls = 0;
+  let capturedRequest = null;
+  let releaseAnalyzer;
+  let signalAnalyzerStarted;
+  const analyzerStarted = new Promise((resolve) => {
+    signalAnalyzerStarted = resolve;
+  });
+  const analyzerGate = new Promise((resolve) => {
+    releaseAnalyzer = resolve;
+  });
+  const captureSession = new LainBrainSession(
+    makeApp(),
+    () => "deepseek-key",
+    () => openAIProfile,
+    {
+      analyzeImage: async () => ({
+        text: "Vision foreground answer",
+        providerId: openAIProfile.id,
+        providerDisplayName: openAIProfile.displayName
+      })
+    }
+  );
+  captureSession.setChatSemanticAnalyzer(async (_key, request) => {
+    analyzerCalls += 1;
+    capturedRequest = request;
+    signalAnalyzerStarted();
+    await analyzerGate;
+    return semanticSpecFor(request);
+  });
+  captureSession.setDraft(exactText);
+  captureSession.addChatAttachment(makeImage({
+    bytes: [115, 101, 99, 114, 101, 116, 45, 105, 109, 97, 103, 101]
+  }));
+  captureSession.addChatAttachment(makeImage({
+    name: "second.png",
+    bytes: [98, 97, 115, 101, 54, 52, 45, 112, 97, 121, 108, 111, 97, 100]
+  }));
+  assert.equal(await captureSession.send(openAIProfile.id), "sent");
+  await analyzerStarted;
+  const originalMessage = captureSession.getTranscriptMessages().find(
+    (message) => message.role === "user" && message.content === exactText
+  );
+  captureSession.clearChat();
+  releaseAnalyzer();
+  await captureSession.waitForChatSemanticShadow();
+
+  assert.equal(analyzerCalls, 1);
+  assert.equal(capturedRequest.userEvidence.length, 1);
+  assert.equal(capturedRequest.userEvidence[0].text, exactText);
+  assert.equal(capturedRequest.userEvidence[0].messageId, originalMessage.id);
+  assert.equal(/base64|data:image|secret-image|base64-payload/i.test(
+    JSON.stringify(capturedRequest.userEvidence)), false);
+  const matchingEpisodes = captureSession.getSemanticPriorEpisodes().filter(
+    (episode) => episode.evidenceRefs.some((ref) => ref.snapshot === exactText)
+  );
+  assert.equal(matchingEpisodes.length, 1);
+  assert.equal(matchingEpisodes[0].evidenceRefs[0].messageId, originalMessage.id);
+  assert.equal(captureSession.getChatSemanticSession(), undefined);
+}
+
+// A fail-open vision error still captures the already-appended user turn once.
+{
+  const exactText = "image failure still captures this text";
+  let analyzerCalls = 0;
+  const failureSession = new LainBrainSession(
+    makeApp(),
+    () => "deepseek-key",
+    () => openAIProfile,
+    { analyzeImage: async () => { throw new Error("vision failed"); } }
+  );
+  failureSession.setChatSemanticAnalyzer(async (_key, request) => {
+    analyzerCalls += 1;
+    return semanticSpecFor(request);
+  });
+  failureSession.setDraft(exactText);
+  failureSession.addChatAttachment(makeImage());
+  assert.equal(await failureSession.send(openAIProfile.id), "sent");
+  await failureSession.waitForChatSemanticShadow();
+  assert.equal(analyzerCalls, 1);
+  assert.equal(
+    failureSession.getTranscriptMessages().at(-1).content,
+    "Unable to analyze the image with the selected AI provider. Please try again."
+  );
+  assert.equal(failureSession.getSemanticPriorEpisodes().filter(
+    (episode) => episode.evidenceRefs.some((ref) => ref.snapshot === exactText)
+  ).length, 1);
+}
 
 const exactConfigurationError =
   "The selected AI provider cannot analyze images. Choose a Vision-capable provider in Lain Brain settings.";

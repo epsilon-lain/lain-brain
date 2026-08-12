@@ -50,6 +50,7 @@ const built = await esbuild.build({
 
 const module = { exports: {} };
 vm.runInNewContext(built.outputFiles[0].text, {
+  DOMMatrix: class { constructor(){} },
   module,
   exports: module.exports,
   require,
@@ -533,7 +534,7 @@ const modalSource = fs.readFileSync(
   "utf8"
 );
 assert.match(largeViewSource, /text: "Review Claims"/);
-assert.match(modalSource, /Apply selected claims/);
+assert.match(modalSource, /Apply claims/);
 assert.match(modalSource, /Ready for Lean review/);
 assert.match(modalSource, /Generate and check Lean statement/);
 

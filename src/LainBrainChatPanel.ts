@@ -5,10 +5,14 @@ import {
   hasSelectedTextWithin,
   makeReadOnlyTextSelectable
 } from "./SelectableText";
+import type { VisionImageFile } from "./OpenAIVisionClient";
+import {
+  extractAttachmentFiles
+} from "./LainBrainSession";
 import type {
+  ChatAttachment,
   LainBrainImageAttachmentMetadata,
-  LainBrainSession,
-  PendingVisionImage
+  LainBrainSession
 } from "./LainBrainSession";
 
 export class LainBrainChatPanel {
@@ -28,8 +32,8 @@ export class LainBrainChatPanel {
   private renderedTranscriptKey = "";
   private renderedLoadingMode: string | null = null;
   private renderedCandidateLoading = false;
-  private renderedAttachmentFile?: PendingVisionImage["file"];
-  private attachmentObjectUrl?: string;
+  private renderedAttachmentIds: string = "";
+  private attachmentObjectUrls: string[] = [];
 
   constructor(
     private app: App,
@@ -162,11 +166,13 @@ export class LainBrainChatPanel {
     });
 
     this.fileInput.addEventListener("change", () => {
-      const file = this.fileInput.files?.[0];
+      const files = this.fileInput.files;
       this.fileInput.value = "";
 
-      if (file !== undefined) {
-        this.session.setPendingVisionImage(file);
+      if (files !== null && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          this.session.addChatAttachment(files[i] as VisionImageFile);
+        }
         this.input.focus();
       }
     });
@@ -188,6 +194,19 @@ export class LainBrainChatPanel {
       }
     });
 
+    this.input.addEventListener("paste", (event) => {
+      const files = this.extractSupportedFilesFromClipboard(event);
+      if (files.length === 0) {
+        // Normal text paste — let the browser handle it unchanged.
+        return;
+      }
+      event.preventDefault();
+      for (const file of files) {
+        this.session.addChatAttachment(file as VisionImageFile);
+      }
+      this.input.focus();
+    });
+
     this.unsubscribe = this.session.subscribe(() => {
       this.render();
     });
@@ -195,10 +214,23 @@ export class LainBrainChatPanel {
     this.render();
   }
 
+  private extractSupportedFilesFromClipboard(
+    event: ClipboardEvent
+  ): File[] {
+    const cd = event.clipboardData;
+    if (cd === null) {
+      return [];
+    }
+    return extractAttachmentFiles(
+      Array.from(cd.items),
+      cd.files.length > 0 ? Array.from(cd.files) : undefined
+    );
+  }
+
   destroy(): void {
     this.unsubscribe();
     this.selectableCleanup();
-    this.revokeAttachmentPreview();
+    this.revokeAttachmentPreviews();
     this.markdownRenderer.destroy();
   }
 
@@ -222,7 +254,10 @@ export class LainBrainChatPanel {
           (message) =>
             `${message.role}:${message.content}:` +
             `${message.attachment?.filename ?? ""}:` +
-            `${message.attachment?.byteSize ?? ""}`
+            `${message.attachment?.byteSize ?? ""}:` +
+            `${(message.attachments ?? [])
+              .map((a) => `${a.filename}:${a.byteSize}`)
+              .join(",")}`
         )
         .join("\u0000");
 
@@ -248,7 +283,8 @@ export class LainBrainChatPanel {
         this.addTranscriptLine(
           message.role,
           message.content,
-          message.attachment
+          message.attachment,
+          message.attachments
         );
       }
 
@@ -300,7 +336,7 @@ export class LainBrainChatPanel {
         if (confirmed) {
           await this.session.send(provider.id);
         } else {
-          this.session.removePendingVisionImage();
+          this.session.clearPendingAttachments();
         }
       }
     } finally {
@@ -309,44 +345,75 @@ export class LainBrainChatPanel {
   }
 
   private renderAttachment(): void {
-    const attachment = this.session.getSelectionEditContext() === undefined
-      ? this.session.getPendingVisionImage()
-      : undefined;
+    const attachments = this.session.getSelectionEditContext() === undefined
+      ? this.session.getPendingAttachments()
+      : [];
 
-    if (attachment?.file === this.renderedAttachmentFile) {
+    const attachmentKey = attachments
+      .map((a) => `${a.id}:${a.filename}`)
+      .join("\x00");
+
+    if (this.renderedAttachmentIds === attachmentKey) {
       return;
     }
 
-    this.revokeAttachmentPreview();
+    this.revokeAttachmentPreviews();
     this.attachmentPreviewEl.empty();
-    this.renderedAttachmentFile = attachment?.file;
+    this.renderedAttachmentIds = attachmentKey;
 
-    if (attachment === undefined) {
+    if (attachments.length === 0) {
       this.attachmentPreviewEl.style.display = "none";
       return;
     }
 
     this.attachmentPreviewEl.style.display = "flex";
-    this.attachmentPreviewEl.style.alignItems = "center";
-    this.attachmentPreviewEl.style.gap = "0.5rem";
+    this.attachmentPreviewEl.style.flexDirection = "column";
+    this.attachmentPreviewEl.style.gap = "0.35rem";
     this.attachmentPreviewEl.style.padding = "0.45rem";
     this.attachmentPreviewEl.style.margin = "0.35rem 0";
     this.attachmentPreviewEl.style.border =
       "1px solid var(--background-modifier-border)";
     this.attachmentPreviewEl.style.borderRadius = "4px";
 
-    this.attachmentObjectUrl = URL.createObjectURL(
-      attachment.file as Blob
-    );
-    const preview = this.attachmentPreviewEl.createEl("img");
-    preview.src = this.attachmentObjectUrl;
-    preview.alt = "Pending image preview";
-    preview.style.width = "48px";
-    preview.style.height = "48px";
-    preview.style.objectFit = "cover";
-    preview.style.borderRadius = "3px";
+    for (const attachment of attachments) {
+      this.renderAttachmentRow(attachment);
+    }
+  }
 
-    const details = this.attachmentPreviewEl.createDiv();
+  private renderAttachmentRow(attachment: ChatAttachment): void {
+    const isImage = attachment.mimeType.startsWith("image/");
+
+    const row = this.attachmentPreviewEl.createDiv();
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.gap = "0.5rem";
+
+    if (isImage) {
+      const url = URL.createObjectURL(attachment.file as Blob);
+      this.attachmentObjectUrls.push(url);
+      const preview = row.createEl("img");
+      preview.src = url;
+      preview.alt = attachment.filename;
+      preview.style.width = "48px";
+      preview.style.height = "48px";
+      preview.style.objectFit = "cover";
+      preview.style.borderRadius = "3px";
+    } else {
+      // PDF compact chip
+      const icon = row.createSpan();
+      icon.style.flexShrink = "0";
+      icon.style.width = "48px";
+      icon.style.height = "48px";
+      icon.style.display = "inline-flex";
+      icon.style.alignItems = "center";
+      icon.style.justifyContent = "center";
+      icon.style.fontSize = "1.25rem";
+      icon.style.backgroundColor = "var(--background-secondary)";
+      icon.style.borderRadius = "3px";
+      icon.setText("PDF");
+    }
+
+    const details = row.createDiv();
     details.style.flex = "1";
     details.style.minWidth = "0";
     details.createDiv({ text: attachment.filename });
@@ -354,22 +421,24 @@ export class LainBrainChatPanel {
       text: `${attachment.mimeType} · ${formatByteSize(attachment.byteSize)}`
     });
 
-    const removeButton = this.attachmentPreviewEl.createEl("button", {
-      text: "Remove image"
-    });
+    const removeButton = row.createEl("button", { text: "×" });
     removeButton.type = "button";
-    removeButton.style.padding = "2px 6px";
+    removeButton.setAttr("aria-label", `Remove ${attachment.filename}`);
+    removeButton.style.padding = "0 4px";
+    removeButton.style.fontSize = "1rem";
+    removeButton.style.lineHeight = "1";
+    removeButton.style.flexShrink = "0";
     removeButton.addEventListener("click", () => {
-      this.session.removePendingVisionImage();
+      this.session.removeChatAttachment(attachment.id);
       this.input.focus();
     });
   }
 
-  private revokeAttachmentPreview(): void {
-    if (this.attachmentObjectUrl !== undefined) {
-      URL.revokeObjectURL(this.attachmentObjectUrl);
-      this.attachmentObjectUrl = undefined;
+  private revokeAttachmentPreviews(): void {
+    for (const url of this.attachmentObjectUrls) {
+      URL.revokeObjectURL(url);
     }
+    this.attachmentObjectUrls = [];
   }
   private renderSelectionContext(): void {
     const context = this.session.getSelectionEditContext();
@@ -526,7 +595,8 @@ export class LainBrainChatPanel {
   private addTranscriptLine(
     role: "user" | "assistant",
     content: string,
-    attachment?: LainBrainImageAttachmentMetadata
+    attachment?: LainBrainImageAttachmentMetadata,
+    attachments?: LainBrainImageAttachmentMetadata[]
   ): void {
     const prefix = role === "user"
       ? this.session.userDisplayName
@@ -557,6 +627,21 @@ export class LainBrainChatPanel {
         });
         attachmentLabel.style.display = "block";
         attachmentLabel.style.color = "var(--text-muted)";
+      }
+
+      // Multi-attachment labels
+      const allAttachments = attachments ?? [];
+      if (allAttachments.length > 0) {
+        for (const att of allAttachments) {
+          const isImg = att.mimeType.startsWith("image/");
+          const label = userContainer.createEl("small", {
+            text:
+              `${isImg ? "Image" : "File"}: ${att.filename} (` +
+              `${formatByteSize(att.byteSize)})`
+          });
+          label.style.display = "block";
+          label.style.color = "var(--text-muted)";
+        }
       }
 
       return;

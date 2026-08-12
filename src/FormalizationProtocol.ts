@@ -819,6 +819,17 @@ export function applyFormalizationReview(
 
   const now = new Date().toISOString();
   const nextReviewedStatement = reviewedStatement ?? record.reviewedStatement;
+
+  // Idempotent: if already in the target review status and the reviewed
+  // statement hasn't changed, return the record unchanged.  This prevents
+  // duplicate history entries from repeated Accept / Reject calls.
+  if (
+    record.reviewStatus === reviewStatus &&
+    nextReviewedStatement === record.reviewedStatement
+  ) {
+    return record as unknown as FormalizationRecord;
+  }
+
   const wasEdited = nextReviewedStatement !== record.aiNormalizedStatement;
   const nextRevision = record.revision + 1;
 

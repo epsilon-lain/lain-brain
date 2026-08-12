@@ -10,7 +10,7 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "test:parent-selector": "node tests/create-candidate-note-modal.test.mjs",
     "test:parent-persistence": "node tests/candidate-parent-persistence.test.mjs",
-    "test": "npm run test:parent-selector && npm run test:parent-persistence && npm run test:name-cleanup && npm run test:broken-links && npm run test:vision && npm run test:naming && npm run test:claims && npm run test:chat-workflow && npm run test:copying && npm run test:formalization && npm run test:lean && npm run test:lean-imports && npm run test:accepted-lean-e2e && npm run test:review-claims-ux && npm run test:semantic-spec && npm run test:knowledge-protocol && npm run test:chat-semantic-session && npm run test:chat-semantic-shadow && npm run test:chat-semantic-concurrency && npm run test:semantic-prior-lifecycle && npm run test:activation-seed && npm run test:obsidian-activation-context && npm run test:obsidian-activation-topology && npm run test:semantic-prior-activation-bridge && npm run test:bounded-activation-traversal",
+    "test": "npm run test:parent-selector && npm run test:parent-persistence && npm run test:name-cleanup && npm run test:broken-links && npm run test:vision && npm run test:naming && npm run test:claims && npm run test:chat-workflow && npm run test:copying && npm run test:formalization && npm run test:lean && npm run test:lean-imports && npm run test:accepted-lean-e2e && npm run test:review-claims-ux && npm run test:semantic-spec && npm run test:knowledge-protocol && npm run test:chat-semantic-session && npm run test:chat-semantic-shadow && npm run test:chat-semantic-concurrency && npm run test:semantic-prior-lifecycle && npm run test:activation-seed && npm run test:obsidian-activation-context && npm run test:obsidian-activation-topology && npm run test:semantic-prior-activation-bridge && npm run test:bounded-activation-traversal && npm run test:obsidian-activation-adjacency",
     "test:vision": "node tests/openai-vision.test.mjs",
     "test:naming": "node tests/personal-naming.test.mjs",
     "test:claims": "node tests/claim-classification.test.mjs",
@@ -32,6 +32,7 @@
     "test:obsidian-activation-topology": "node tests/obsidian-activation-topology.test.mjs",
     "test:semantic-prior-activation-bridge": "node tests/semantic-prior-activation-bridge.test.mjs",
     "test:bounded-activation-traversal": "node tests/bounded-activation-traversal.test.mjs",
+    "test:obsidian-activation-adjacency": "node tests/obsidian-activation-adjacency.test.mjs",
     "test:name-cleanup": "node tests/note-name-cleanup.test.mjs",
     "test:broken-links": "node tests/broken-link-cleanup.test.mjs",
     "deploy:dev": "npm run build && bash -c 'set -euo pipefail; T=/mnt/c/Users/elonl/Desktop/lain-brain-dev/.obsidian/plugins/lain-brain; if [ ! -d \"$T\" ]; then echo \"Error: $T does not exist\" >&2; exit 1; fi; cp -f main.js \"$T/main.js\"; cp -f manifest.json \"$T/manifest.json\"; if [ -f styles.css ]; then cp -f styles.css \"$T/styles.css\"; fi; echo \"Deployed to $T\"'"

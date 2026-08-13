@@ -27,8 +27,12 @@ import type {
   CandidateTopicSelection,
   DeepSeekConversationMessage,
   DeepSeekNoteContext,
+  NormalChatForegroundContext,
   SelectionEditRequestContext
 } from "./DeepSeekClient";
+import {
+  prepareForegroundActivatedContext
+} from "./ForegroundActivatedContext";
 import {
   analyzeChatSemantics
 } from "./ChatSemanticAnalyzer";
@@ -733,23 +737,35 @@ export class LainBrainSession {
   getRelevantSemanticPriorContext(
     currentUserText: string
   ): string {
-    if (currentUserText.trim() === "") {
-      this.lastInjectedPriorIds = [];
-      return "";
-    }
-
-    const relevant = retrieveRelevantPriors(
-      this.semanticPriorState,
+    const relevant = this.selectRelevantSemanticPriorEpisodes(
       currentUserText
     );
-
-    this.lastInjectedPriorIds = getLastInjectedSemanticPriorIds(relevant);
 
     if (relevant.length === 0) {
       return "";
     }
 
     return renderPriorsForPrompt(relevant);
+  }
+
+  /**
+   * Preserve the established deterministic prior selection and bookkeeping
+   * while allowing the foreground adapter to consume exact episode objects.
+   */
+  private selectRelevantSemanticPriorEpisodes(
+    currentUserText: string
+  ): readonly SemanticPriorEpisode[] {
+    if (currentUserText.trim() === "") {
+      this.lastInjectedPriorIds = [];
+      return Object.freeze([]);
+    }
+
+    const relevant = retrieveRelevantPriors(
+      this.semanticPriorState,
+      currentUserText
+    );
+    this.lastInjectedPriorIds = getLastInjectedSemanticPriorIds(relevant);
+    return relevant;
   }
 
   /** Sanitized last-error diagnostics. Secrets are redacted before storage. */
@@ -4149,18 +4165,70 @@ export class LainBrainSession {
     this.notify();
 
     try {
-      await this.refreshActiveNoteContext();
+      try {
+        await this.refreshActiveNoteContext();
+      } catch {
+        // A transient note read is context failure, not foreground-chat
+        // failure. Clear any stale snapshot and continue through the same
+        // activated/legacy fail-open boundary below.
+        this.activeNoteContext = undefined;
+      }
 
-      // ── Retrieve relevant historical semantic priors ──────────────
-      // Deterministic retrieval; no additional LLM call.
-      const priorContext = this.getRelevantSemanticPriorContext(message);
+      // Reuse the established deterministic selection exactly once. Stage 4D
+      // changes only representation/injection, never retrieval policy.
+      const selectedPriorEpisodes =
+        this.selectRelevantSemanticPriorEpisodes(message);
+      const priorContext = selectedPriorEpisodes.length === 0
+        ? ""
+        : renderPriorsForPrompt(selectedPriorEpisodes);
 
-      const rawResponse = await this.askText(
-        apiKey,
-        this.getConversationHistory(),
-        this.activeNoteContext,
-        priorContext !== "" ? priorContext : undefined
-      );
+      let foregroundContext: Readonly<NormalChatForegroundContext> = {
+        mode: "legacy_fallback"
+      };
+      try {
+        const prepared = await prepareForegroundActivatedContext({
+          app: this.app,
+          currentUtterance: {
+            text: userMessage.content,
+            messageId: userMessage.id
+          },
+          selectedSemanticPriorEpisodes: selectedPriorEpisodes
+        });
+        const expectedExternalContext =
+          this.activeFile !== null ||
+          selectedPriorEpisodes.length > 0;
+        if (
+          expectedExternalContext &&
+          prepared.promptSection.items.length === 0
+        ) {
+          // Expected external context materialized nothing: keep the
+          // explicit legacy fallback.
+        } else {
+          foregroundContext = {
+            mode: "activated",
+            activatedContext: prepared.promptSection.serializedText
+          };
+        }
+      } catch {
+        // Migration is deliberately fail-open. Never combine a partial
+        // activated section with the complete legacy representation.
+      }
+
+      const rawResponse = foregroundContext.mode === "activated"
+        ? await this.askText(
+            apiKey,
+            this.getConversationHistory(),
+            undefined,
+            undefined,
+            foregroundContext
+          )
+        : await this.askText(
+            apiKey,
+            this.getConversationHistory(),
+            this.activeNoteContext,
+            priorContext !== "" ? priorContext : undefined,
+            foregroundContext
+          );
       const response = await this.reviewAndRepairLatex(
         apiKey,
         rawResponse

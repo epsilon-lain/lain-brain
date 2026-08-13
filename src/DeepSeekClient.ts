@@ -91,6 +91,15 @@ export interface DeepSeekNoteContext {
   content: string;
 }
 
+export type NormalChatForegroundContext =
+  | {
+      readonly mode: "activated";
+      readonly activatedContext: string;
+    }
+  | {
+      readonly mode: "legacy_fallback";
+    };
+
 export interface CandidateTopicContext
   extends CandidatePrimaryConcept {
   conversationTopic: string;
@@ -493,7 +502,10 @@ export const USER_SEMANTIC_CONVERSATION_RULES = [
 
 export function createNormalChatSystemPrompt(
   noteContext?: DeepSeekNoteContext,
-  semanticPriorContext?: string
+  semanticPriorContext?: string,
+  foregroundContext: Readonly<NormalChatForegroundContext> = {
+    mode: "legacy_fallback"
+  }
 ): string {
   const parts: string[] = [
     "This request is ordinary Lain Brain conversation, not candidate-note " +
@@ -513,20 +525,27 @@ export function createNormalChatSystemPrompt(
     "when they help answer naturally."
   ];
 
-  // Inject historical semantic priors as an advisory section before the
-  // main conversation rules, when relevant priors are available.
-  if (
-    semanticPriorContext !== undefined &&
-    semanticPriorContext.trim() !== ""
-  ) {
-    parts.push("");
-    parts.push(semanticPriorContext);
-  }
+  if (foregroundContext.mode === "legacy_fallback") {
+    // Keep the pre-Stage-4D representation byte-equivalent for fail-open
+    // requests. Activated mode is deliberately mutually exclusive with it.
+    if (
+      semanticPriorContext !== undefined &&
+      semanticPriorContext.trim() !== ""
+    ) {
+      parts.push("");
+      parts.push(semanticPriorContext);
+    }
 
-  parts.push("");
-  parts.push(USER_SEMANTIC_CONVERSATION_RULES);
-  parts.push("");
-  parts.push(createContextMessage(noteContext));
+    parts.push("");
+    parts.push(USER_SEMANTIC_CONVERSATION_RULES);
+    parts.push("");
+    parts.push(createContextMessage(noteContext));
+  } else {
+    parts.push("");
+    parts.push(USER_SEMANTIC_CONVERSATION_RULES);
+    parts.push("");
+    parts.push(foregroundContext.activatedContext);
+  }
   parts.push("");
   parts.push(COMPLETE_LATEX_FORMAT_RULES);
 
@@ -537,14 +556,18 @@ export async function askDeepSeek(
   apiKey: string,
   conversationHistory: DeepSeekConversationMessage[],
   noteContext?: DeepSeekNoteContext,
-  semanticPriorContext?: string
+  semanticPriorContext?: string,
+  foregroundContext: Readonly<NormalChatForegroundContext> = {
+    mode: "legacy_fallback"
+  }
 ): Promise<string> {
   return requestDeepSeek(apiKey, [
     {
       role: "system",
       content: createNormalChatSystemPrompt(
         noteContext,
-        semanticPriorContext
+        semanticPriorContext,
+        foregroundContext
       )
     },
     ...conversationHistory

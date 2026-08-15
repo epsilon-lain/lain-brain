@@ -23,6 +23,10 @@ import {
 import type {
   SemanticPriorState
 } from "./SemanticPrior";
+import {
+  migrateSemanticDeltaState
+} from "./SemanticDeltaState";
+import type { SemanticDeltaState } from "./SemanticDeltaState";
 
 export type LeanExecutionMode = "native" | "wsl";
 
@@ -36,6 +40,8 @@ export interface LainBrainSettings {
   formalizationIndex?: FormalizationIndex;
   leanArtifactIndex?: LeanArtifactIndex;
   semanticPriorState?: SemanticPriorState;
+  semanticDeltaState?: SemanticDeltaState;
+  chatSemanticDeltaAnalysisEnabled: boolean;
   leanExecutionMode: LeanExecutionMode;
   leanProjectRoot: string;
   leanExecutable: string;
@@ -53,6 +59,7 @@ export const DEFAULT_SETTINGS: LainBrainSettings = {
   userDisplayName: DEFAULT_USER_DISPLAY_NAME,
   brainDisplayName: DEFAULT_BRAIN_DISPLAY_NAME,
   hasCompletedNamingOnboarding: false,
+  chatSemanticDeltaAnalysisEnabled: true,
   leanExecutionMode: "native",
   leanProjectRoot: "",
   leanExecutable: "lake",
@@ -133,6 +140,8 @@ export function migrateLainBrainSettings(
 
   const semanticPriorState =
     migrateSemanticPriorState(value.semanticPriorState);
+  const semanticDeltaState =
+    migrateSemanticDeltaState(value.semanticDeltaState);
 
   const leanArgs = Array.isArray(value.leanArgs) &&
     value.leanArgs.every((a: unknown) => typeof a === "string")
@@ -154,6 +163,9 @@ export function migrateLainBrainSettings(
     formalizationIndex,
     leanArtifactIndex,
     semanticPriorState,
+    semanticDeltaState,
+    chatSemanticDeltaAnalysisEnabled:
+      value.chatSemanticDeltaAnalysisEnabled !== false,
     leanExecutionMode: value.leanExecutionMode === "wsl"
       ? "wsl"
       : "native",

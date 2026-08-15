@@ -180,6 +180,23 @@ export class LainBrainSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("Detect semantic changes in chat")
+      .setDesc(
+        "After a successful normal text reply, send at most three recent " +
+        "text-only turns to the configured DeepSeek provider to look for " +
+        "one possible semantic change. Analysis is non-authoritative, " +
+        "never includes attachments or Vault contents, and can be disabled."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.chatSemanticDeltaAnalysisEnabled)
+          .onChange(async (value) => {
+            this.plugin.settings.chatSemanticDeltaAnalysisEnabled = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
       .setName("Lean Environment")
       .setHeading();
 

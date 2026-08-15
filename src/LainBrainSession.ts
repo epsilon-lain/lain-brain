@@ -52,6 +52,28 @@ import type {
 import type { SemanticSpec } from "./SemanticSpec";
 import type { UserTextProvenance } from "./KnowledgeProtocol";
 import {
+  analyzeChatSemanticDelta
+} from "./ChatSemanticDeltaAnalyzer";
+import {
+  createChatSemanticDeltaProposal,
+  selectChatSemanticDeltaConcept,
+  selectChatSemanticDeltaParticipant,
+  setChatSemanticDeltaRelationType,
+  transitionChatSemanticDeltaProposal
+} from "./ChatSemanticDelta";
+import type {
+  ChatSemanticDeltaAnalyzer,
+  ChatSemanticDeltaConversationMessage,
+  ChatSemanticDeltaProposal
+} from "./ChatSemanticDelta";
+import {
+  confirmChatSemanticDelta
+} from "./ChatSemanticDeltaConfirmation";
+import type {
+  ChatSemanticDeltaPropagationPort,
+  ConfirmChatSemanticDeltaResult
+} from "./ChatSemanticDeltaConfirmation";
+import {
   createSemanticPriorEpisode,
   createEmptySemanticPriorState,
   addEpisodeToState,
@@ -78,6 +100,17 @@ import type {
   CandidatePrimaryConcept,
   VerifiedCandidateRelation
 } from "./CandidateNoteRelations";
+import {
+  createConceptIdForCandidate,
+  createConceptNodeFromApprovedCandidate
+} from "./BrainGrowthCandidateAdapter";
+import type {
+  CandidateConceptSourceMessage
+} from "./BrainGrowthCandidateAdapter";
+import {
+  serializeConceptNodeIntoMarkdown
+} from "./BrainGrowthPersistence";
+import { loadObsidianConceptIndex } from "./ObsidianConceptIndex";
 import {
   appendLatexFormatWarning,
   reviewLatexFormatting
@@ -396,6 +429,8 @@ export function normalizeAttachmentFiles(
 interface StoredMessage extends LainBrainTranscriptMessage {
   id: string;
   includeInHistory: boolean;
+  /** Eligible for the bounded text-only semantic-delta analyzer. */
+  semanticDeltaEligible?: boolean;
 }
 
 export interface CandidateNote {
@@ -404,9 +439,11 @@ export interface CandidateNote {
   primaryConcept: CandidatePrimaryConcept;
   markdown: string;
   sourceMessageIds: string[];
+  sourceMessages?: CandidateConceptSourceMessage[];
   viewMode: LainBrainCandidateViewMode;
   userEdited: boolean;
   revision: number;
+  conceptId?: string;
   createdVaultPath?: string;
   createdRevision?: number;
   groupId?: string;
@@ -586,6 +623,22 @@ export class LainBrainSession {
    */
   private readonly inFlightCaptureKeys = new Set<string>();
   private chatSemanticFailureCount = 0;
+  private chatSemanticDeltaAnalyzer: ChatSemanticDeltaAnalyzer =
+    analyzeChatSemanticDelta;
+  // Plugin startup explicitly supplies the persisted setting. Keeping the
+  // standalone Session default off prevents an unconfigured embedding or test
+  // harness from silently issuing the supplemental analysis request.
+  private getChatSemanticDeltaAnalysisEnabled: () => boolean = () => false;
+  private semanticPropagation?: ChatSemanticDeltaPropagationPort;
+  private activeChatSemanticDeltaProposal?: ChatSemanticDeltaProposal;
+  private chatSemanticDeltaDraft = "";
+  private chatSemanticDeltaEditing = false;
+  private chatSemanticDeltaQueue: Promise<void> = Promise.resolve();
+  private chatSemanticDeltaEpoch = 0;
+  private chatSemanticDeltaPendingJobs = 0;
+  private chatSemanticDeltaFailureCount = 0;
+  private userTurnSequence = 0;
+  private readonly seenChatSemanticDeltaFingerprints = new Set<string>();
   private lastDeepSeekError: {
     code: string;
     status?: number;
@@ -603,6 +656,8 @@ export class LainBrainSession {
   claimReviewLoading = false;
   claimReviewError: string | null = null;
   candidateError: string | null = null;
+  chatSemanticDeltaError: string | null = null;
+  chatSemanticDeltaConfirming = false;
   largeViewMode: LainBrainLargeViewMode = "chat";
   private formalizationIndex: FormalizationIndex = {
     schemaVersion: 1,
@@ -641,7 +696,12 @@ export class LainBrainSession {
     return this.loadingMode !== null ||
       this.candidateLoading ||
       this.selectionReplacementLoading ||
-      this.claimReviewLoading;
+      this.claimReviewLoading ||
+      this.chatSemanticDeltaConfirming;
+  }
+
+  get chatSemanticDeltaAnalyzing(): boolean {
+    return this.chatSemanticDeltaPendingJobs > 0;
   }
 
   get userDisplayName(): string {
@@ -678,6 +738,43 @@ export class LainBrainSession {
 
   setChatSemanticAnalyzer(analyzer: ChatSemanticAnalyzer): void {
     this.chatSemanticAnalyzer = analyzer;
+  }
+
+  setChatSemanticDeltaAnalyzer(analyzer: ChatSemanticDeltaAnalyzer): void {
+    this.chatSemanticDeltaAnalyzer = analyzer;
+  }
+
+  setChatSemanticDeltaAnalysisEnabledProvider(
+    provider: () => boolean
+  ): void {
+    this.getChatSemanticDeltaAnalysisEnabled = provider;
+  }
+
+  setSemanticPropagationCoordinator(
+    coordinator: ChatSemanticDeltaPropagationPort
+  ): void {
+    this.semanticPropagation = coordinator;
+  }
+
+  async waitForChatSemanticDelta(): Promise<void> {
+    await this.chatSemanticDeltaQueue;
+  }
+
+  getChatSemanticDeltaFailureCount(): number {
+    return this.chatSemanticDeltaFailureCount;
+  }
+
+  getActiveChatSemanticDeltaProposal():
+  Readonly<ChatSemanticDeltaProposal> | undefined {
+    return this.activeChatSemanticDeltaProposal;
+  }
+
+  get chatSemanticDeltaMeaningDraft(): string {
+    return this.chatSemanticDeltaDraft;
+  }
+
+  get isEditingChatSemanticDelta(): boolean {
+    return this.chatSemanticDeltaEditing;
   }
 
   getChatSemanticSession(): Readonly<ChatSemanticSession> | undefined {
@@ -1348,6 +1445,9 @@ export class LainBrainSession {
       markdown,
       sourceMessageIds: this.getCandidateSourceMessages()
         .map((message) => message.id),
+      sourceMessages: this.getExactCandidateSourceMessages(
+        this.getCandidateSourceMessages().map((message) => message.id)
+      ),
       viewMode,
       userEdited,
       revision: 0,
@@ -2980,6 +3080,18 @@ export class LainBrainSession {
       : parentSelection === null
         ? stripCandidateParentLinks(candidate.markdown)
         : candidate.markdown;
+    const approvedAt = new Date().toISOString();
+    let conceptPersistence: { conceptId: string; markdown: string };
+
+    try {
+      conceptPersistence = this.createApprovedConceptPersistence(
+        candidate,
+        markdown,
+        approvedAt
+      );
+    } catch {
+      return { ok: false, error: "Vault write failed" };
+    }
 
     const pathResult = validateCandidateNotePath(
       fileName,
@@ -3066,7 +3178,7 @@ export class LainBrainSession {
 
       createdFile = await this.app.vault.create(
         pathResult.vaultPath,
-        markdown
+        conceptPersistence.markdown
       );
 
       if (parentUpdate?.added === true) {
@@ -3077,6 +3189,7 @@ export class LainBrainSession {
       }
 
       currentCandidate.createdVaultPath = pathResult.vaultPath;
+      currentCandidate.conceptId = conceptPersistence.conceptId;
 
       if (currentCandidate.markdown !== markdown) {
         currentCandidate.markdown = markdown;
@@ -3263,6 +3376,31 @@ export class LainBrainSession {
         markdown: string;
       } => plan.pathResult.ok && "linkTarget" in plan
     );
+    const approvedAt = new Date().toISOString();
+    let persistedChildPlans: Array<
+      typeof validChildPlans[number] & {
+        conceptId: string;
+        persistedMarkdown: string;
+      }
+    >;
+
+    try {
+      persistedChildPlans = validChildPlans.map((plan) => {
+        const persistence = this.createApprovedConceptPersistence(
+          plan.candidate,
+          plan.markdown,
+          approvedAt
+        );
+
+        return {
+          ...plan,
+          conceptId: persistence.conceptId,
+          persistedMarkdown: persistence.markdown
+        };
+      });
+    } catch {
+      return { ok: false, error: "Vault write failed" };
+    }
     const allPaths = [
       parentPathResult.vaultPath,
       ...validChildPlans.map((plan) => plan.pathResult.vaultPath)
@@ -3338,11 +3476,11 @@ export class LainBrainSession {
         )
       );
 
-      for (const plan of validChildPlans) {
+      for (const plan of persistedChildPlans) {
         createdFiles.push(
           await this.app.vault.create(
             plan.pathResult.vaultPath,
-            plan.markdown
+            plan.persistedMarkdown
           )
         );
       }
@@ -3359,13 +3497,14 @@ export class LainBrainSession {
       currentGroup.parentDisplayTitle = normalizedTitle;
       currentGroup.createdRevision = currentGroup.revision;
 
-      for (const plan of validChildPlans) {
+      for (const plan of persistedChildPlans) {
         if (plan.candidate.markdown !== plan.markdown) {
           plan.candidate.markdown = plan.markdown;
           plan.candidate.revision += 1;
         }
 
         plan.candidate.createdVaultPath = plan.pathResult.vaultPath;
+        plan.candidate.conceptId = plan.conceptId;
         plan.candidate.createdRevision = plan.candidate.revision;
         plan.candidate.parentGroupId = currentGroup.id;
         plan.candidate.parentVaultPath = parentPathResult.vaultPath;
@@ -3630,6 +3769,150 @@ export class LainBrainSession {
     }
 
     this.notify();
+  }
+
+  beginChatSemanticDeltaEdit(): void {
+    if (
+      this.activeChatSemanticDeltaProposal?.status !== "active" ||
+      this.chatSemanticDeltaEditing
+    ) {
+      return;
+    }
+    this.chatSemanticDeltaEditing = true;
+    this.notify();
+  }
+
+  setChatSemanticDeltaMeaningDraft(value: string): void {
+    if (
+      this.activeChatSemanticDeltaProposal?.status !== "active" ||
+      this.chatSemanticDeltaDraft === value
+    ) {
+      return;
+    }
+    this.chatSemanticDeltaDraft = value;
+    this.notify();
+  }
+
+  selectChatSemanticDeltaTarget(conceptId: string): boolean {
+    const proposal = this.activeChatSemanticDeltaProposal;
+    if (proposal === undefined) {
+      return false;
+    }
+    const selected = selectChatSemanticDeltaConcept(proposal, conceptId);
+    if (selected === undefined) {
+      return false;
+    }
+    this.activeChatSemanticDeltaProposal = selected;
+    this.chatSemanticDeltaError = null;
+    this.notify();
+    return true;
+  }
+
+  selectChatSemanticDeltaSecondaryTarget(conceptId: string): boolean {
+    const proposal = this.activeChatSemanticDeltaProposal;
+    if (proposal === undefined) return false;
+    const selected = selectChatSemanticDeltaParticipant(
+      proposal,
+      "target",
+      conceptId
+    );
+    if (selected === undefined) return false;
+    this.activeChatSemanticDeltaProposal = selected;
+    this.chatSemanticDeltaError = null;
+    this.notify();
+    return true;
+  }
+
+  setActiveChatSemanticDeltaRelationType(value: string): boolean {
+    const proposal = this.activeChatSemanticDeltaProposal;
+    if (proposal === undefined) return false;
+    const updated = setChatSemanticDeltaRelationType(
+      proposal,
+      value as Parameters<typeof setChatSemanticDeltaRelationType>[1]
+    );
+    if (updated === undefined) return false;
+    this.activeChatSemanticDeltaProposal = updated;
+    this.chatSemanticDeltaDraft = value;
+    this.chatSemanticDeltaError = null;
+    this.notify();
+    return true;
+  }
+
+  rejectActiveChatSemanticDelta(): void {
+    const proposal = this.activeChatSemanticDeltaProposal;
+    if (proposal?.status !== "active") {
+      return;
+    }
+    this.seenChatSemanticDeltaFingerprints.add(proposal.fingerprint);
+    this.activeChatSemanticDeltaProposal =
+      transitionChatSemanticDeltaProposal(
+        proposal,
+        "rejected",
+        "Not recorded as a semantic change."
+      );
+    this.chatSemanticDeltaEditing = false;
+    this.chatSemanticDeltaError = null;
+    this.notify();
+  }
+
+  async confirmActiveChatSemanticDelta(
+    confirmationEvidence: readonly UserTextProvenance[] = []
+  ):
+  Promise<ConfirmChatSemanticDeltaResult> {
+    const proposal = this.activeChatSemanticDeltaProposal;
+    if (proposal?.status !== "active") {
+      return { ok: false, error: "This semantic proposal is no longer active." };
+    }
+    if (
+      proposal.target.kind === "ambiguous_concept" ||
+      proposal.secondaryTarget?.kind === "ambiguous_concept"
+    ) {
+      this.chatSemanticDeltaError = "Choose one concept before confirming.";
+      this.notify();
+      return { ok: false, error: this.chatSemanticDeltaError };
+    }
+    if (this.semanticPropagation === undefined) {
+      this.chatSemanticDeltaError =
+        "Semantic propagation is unavailable; no concept was changed.";
+      this.notify();
+      return { ok: false, error: this.chatSemanticDeltaError };
+    }
+    this.chatSemanticDeltaConfirming = true;
+    this.chatSemanticDeltaError = null;
+    this.notify();
+    let result: ConfirmChatSemanticDeltaResult;
+    try {
+      result = await confirmChatSemanticDelta(
+        this.app,
+        this.semanticPropagation,
+        proposal,
+        this.chatSemanticDeltaDraft,
+        new Date().toISOString(),
+        confirmationEvidence
+      );
+    } catch {
+      result = {
+        ok: false,
+        error: "Semantic change confirmation failed without changing Chat."
+      };
+    }
+    if (result.ok) {
+      this.seenChatSemanticDeltaFingerprints.add(proposal.fingerprint);
+      this.activeChatSemanticDeltaProposal =
+        transitionChatSemanticDeltaProposal(
+          proposal,
+          "confirmed",
+          result.propagationQueued
+            ? "Semantic change confirmed. Background propagation queued."
+            : "Semantic change confirmed. Background propagation remains incomplete."
+        );
+      this.chatSemanticDeltaEditing = false;
+    } else {
+      this.chatSemanticDeltaError = result.error;
+    }
+    this.chatSemanticDeltaConfirming = false;
+    this.notify();
+    return result;
   }
 
   setCandidateNoteMarkdown(value: string): void {
@@ -3897,6 +4180,16 @@ export class LainBrainSession {
     }
     this.chatSemanticFailureCount = 0;
     this.lastInjectedPriorIds = [];
+    this.chatSemanticDeltaEpoch += 1;
+    if (this.activeChatSemanticDeltaProposal?.status === "active") {
+      this.seenChatSemanticDeltaFingerprints.add(
+        this.activeChatSemanticDeltaProposal.fingerprint
+      );
+    }
+    this.activeChatSemanticDeltaProposal = undefined;
+    this.chatSemanticDeltaDraft = "";
+    this.chatSemanticDeltaEditing = false;
+    this.chatSemanticDeltaError = null;
     // NOTE: semanticPriorState is intentionally NOT cleared.
     // Prior episodes survive chat clear, panel close, and restart.
     this.notify();
@@ -4005,6 +4298,62 @@ export class LainBrainSession {
       return "blocked";
     }
 
+    const semanticProposal = this.activeChatSemanticDeltaProposal;
+    if (
+      semanticProposal?.status === "active" &&
+      isBareSemanticConfirmation(message) &&
+      this.pendingAttachments.length === 0
+    ) {
+      if (
+        semanticProposal.target.kind === "ambiguous_concept" ||
+        semanticProposal.secondaryTarget?.kind === "ambiguous_concept"
+      ) {
+        this.addAssistantNotice(
+          "Choose the intended concept in the semantic-change card before confirming."
+        );
+        return "blocked";
+      }
+      const confirmationMessage: StoredMessage = {
+        id: this.createMessageId(),
+        role: "user",
+        content: message,
+        includeInHistory: true
+      };
+      this.messages.push(confirmationMessage);
+      this.userTurnSequence += 1;
+      this.generalDraft = "";
+      const result = await this.confirmActiveChatSemanticDelta([{
+        sourceKind: "message_span",
+        messageId: confirmationMessage.id,
+        startOffset: 0,
+        endOffset: confirmationMessage.content.length,
+        snapshot: confirmationMessage.content,
+        actor: "user"
+      }]);
+      this.addAssistantNotice(result.ok
+        ? "Semantic change confirmed."
+        : result.error);
+      return "sent";
+    }
+
+    if (semanticProposal !== undefined) {
+      if (semanticProposal.status === "active") {
+        this.seenChatSemanticDeltaFingerprints.add(
+          semanticProposal.fingerprint
+        );
+        this.activeChatSemanticDeltaProposal =
+          transitionChatSemanticDeltaProposal(
+            semanticProposal,
+            "expired",
+            "This proposal expired after the conversation moved on."
+          );
+      } else {
+        this.activeChatSemanticDeltaProposal = undefined;
+      }
+      this.chatSemanticDeltaEditing = false;
+      this.chatSemanticDeltaError = null;
+    }
+
     const pendingAttachments = this.pendingAttachments;
     const imageAttachments = pendingAttachments.filter(
       (a) => SUPPORTED_ATTACHMENT_IMAGE_TYPES.has(a.mimeType)
@@ -4071,9 +4420,11 @@ export class LainBrainSession {
         providerDisplayName: profile.displayName,
         attachment: firstMetadata,
         attachments: allMetadata,
-        includeInHistory: true
+        includeInHistory: true,
+        semanticDeltaEligible: false
       };
       this.messages.push(userMessage);
+      this.userTurnSequence += 1;
       this.generalDraft = "";
       this.pendingAttachments = [];
       this.loadingMode = "chat";
@@ -4097,7 +4448,8 @@ export class LainBrainSession {
           content: response.text,
           providerId: response.providerId,
           providerDisplayName: response.providerDisplayName,
-          includeInHistory: true
+          includeInHistory: true,
+          semanticDeltaEligible: false
         });
       } catch {
         this.messages.push({
@@ -4154,11 +4506,13 @@ export class LainBrainSession {
       providerId: "deepseek",
       providerDisplayName: "DeepSeek",
       includeInHistory: true,
+      semanticDeltaEligible: pdfAttachments.length === 0,
       ...(pdfMetadata !== undefined
         ? { attachments: pdfMetadata, attachment: pdfMetadata[0] }
         : {})
     };
     this.messages.push(userMessage);
+    this.userTurnSequence += 1;
     this.generalDraft = "";
     this.pendingAttachments = [];
     this.loadingMode = "chat";
@@ -4233,19 +4587,28 @@ export class LainBrainSession {
         apiKey,
         rawResponse
       );
-      this.messages.push({
+      const assistantMessage: StoredMessage = {
         id: this.createMessageId(),
         role: "assistant",
         content: response,
         providerId: "deepseek",
         providerDisplayName: "DeepSeek",
-        includeInHistory: true
-      });
+        includeInHistory: true,
+        semanticDeltaEligible: pdfAttachments.length === 0
+      };
+      this.messages.push(assistantMessage);
       this.enqueueChatSemanticAnalysis(
         apiKey,
         userMessage,
         response
       );
+      if (pdfAttachments.length === 0) {
+        this.enqueueChatSemanticDeltaAnalysis(
+          apiKey,
+          userMessage,
+          assistantMessage
+        );
+      }
     } catch (error) {
       this.captureDeepSeekError(error, "foreground-chat");
       this.messages.push({
@@ -4261,6 +4624,107 @@ export class LainBrainSession {
     }
 
     return "sent";
+  }
+
+  private enqueueChatSemanticDeltaAnalysis(
+    apiKey: string,
+    currentUserMessage: StoredMessage,
+    latestAssistantMessage: StoredMessage
+  ): void {
+    if (
+      !this.getChatSemanticDeltaAnalysisEnabled() ||
+      apiKey.trim() === "" ||
+      currentUserMessage.semanticDeltaEligible !== true ||
+      latestAssistantMessage.semanticDeltaEligible !== true
+    ) {
+      return;
+    }
+    const captureEpoch = this.chatSemanticDeltaEpoch;
+    const captureUserTurn = this.userTurnSequence;
+    const conversation: readonly ChatSemanticDeltaConversationMessage[] =
+      Object.freeze(this.messages
+        .filter((message) =>
+          message.includeInHistory &&
+          message.semanticDeltaEligible === true
+        )
+        .slice(-6)
+        .map((message) => Object.freeze({
+          id: message.id,
+          role: message.role,
+          content: message.content
+        })));
+    if (!conversation.some((message) =>
+      message.id === currentUserMessage.id && message.role === "user"
+    )) {
+      return;
+    }
+    this.chatSemanticDeltaPendingJobs += 1;
+    this.notify();
+    const run = async (): Promise<void> => {
+      try {
+        const analysis = await this.chatSemanticDeltaAnalyzer(apiKey, {
+          currentUserMessageId: currentUserMessage.id,
+          conversation
+        });
+        if (
+          captureEpoch !== this.chatSemanticDeltaEpoch ||
+          captureUserTurn !== this.userTurnSequence
+        ) {
+          return;
+        }
+        const discovered = await loadObsidianConceptIndex(this.app);
+        if (
+          captureEpoch !== this.chatSemanticDeltaEpoch ||
+          captureUserTurn !== this.userTurnSequence
+        ) {
+          return;
+        }
+        const created = createChatSemanticDeltaProposal(
+          analysis,
+          discovered.index,
+          discovered.records,
+          {
+            createdAt: new Date().toISOString(),
+            createdAtUserTurn: captureUserTurn
+          }
+        );
+        if (created.kind !== "proposal") {
+          return;
+        }
+        if (
+          this.seenChatSemanticDeltaFingerprints.has(
+            created.proposal.fingerprint
+          )
+        ) {
+          return;
+        }
+        const previous = this.activeChatSemanticDeltaProposal;
+        if (previous?.status === "active") {
+          this.seenChatSemanticDeltaFingerprints.add(previous.fingerprint);
+          this.activeChatSemanticDeltaProposal =
+            transitionChatSemanticDeltaProposal(
+              previous,
+              "superseded",
+              "A newer semantic proposal replaced this one."
+            );
+        }
+        this.activeChatSemanticDeltaProposal = created.proposal;
+        this.chatSemanticDeltaDraft = created.proposal.proposedMeaning;
+        this.chatSemanticDeltaEditing = false;
+        this.chatSemanticDeltaError = null;
+      } catch {
+        if (captureEpoch === this.chatSemanticDeltaEpoch) {
+          this.chatSemanticDeltaFailureCount += 1;
+        }
+      } finally {
+        this.chatSemanticDeltaPendingJobs = Math.max(
+          0,
+          this.chatSemanticDeltaPendingJobs - 1
+        );
+        this.notify();
+      }
+    };
+    this.chatSemanticDeltaQueue = this.chatSemanticDeltaQueue.then(run, run);
   }
 
   private enqueueChatSemanticAnalysis(
@@ -4769,6 +5233,10 @@ export class LainBrainSession {
           primaryConcept,
           markdown,
           sourceMessageIds: [...item.topic.sourceMessageIds],
+          sourceMessages: this.getExactCandidateSourceMessages(
+            item.topic.sourceMessageIds,
+            item.existing?.sourceMessages
+          ),
           viewMode: item.existing?.viewMode ?? "preview",
           userEdited: false,
           revision: (item.existing?.revision ?? -1) + 1,
@@ -4778,6 +5246,7 @@ export class LainBrainSession {
           primaryFormalizationId: item.existing?.primaryFormalizationId,
           createdVaultPath: item.existing?.createdVaultPath,
           createdRevision: item.existing?.createdRevision,
+          conceptId: item.existing?.conceptId,
           groupId: item.existing?.groupId,
           parentGroupId:
             parentGroup?.id ?? item.existing?.parentGroupId,
@@ -4960,6 +5429,79 @@ export class LainBrainSession {
         role: message.role,
         content: getMessageContentForModel(message)
       }));
+  }
+
+  private getExactCandidateSourceMessages(
+    messageIds: readonly string[],
+    retained: readonly CandidateConceptSourceMessage[] = []
+  ): CandidateConceptSourceMessage[] {
+    const ids = new Set(messageIds);
+    const result = retained
+      .filter((message) => ids.has(message.id))
+      .map((message) => ({ ...message }));
+    const seen = new Set(result.map((message) => message.id));
+
+    for (const message of this.messages) {
+      if (
+        !message.includeInHistory ||
+        !ids.has(message.id) ||
+        seen.has(message.id)
+      ) {
+        continue;
+      }
+
+      seen.add(message.id);
+      result.push({
+        id: message.id,
+        role: message.role,
+        content: message.content
+      });
+    }
+
+    return result;
+  }
+
+  private createApprovedConceptPersistence(
+    candidate: Readonly<CandidateNote>,
+    markdown: string,
+    approvedAt: string
+  ): { conceptId: string; markdown: string } {
+    const conceptId = candidate.conceptId ??
+      createConceptIdForCandidate(candidate.id);
+    const sourceIds = new Set(candidate.sourceMessageIds);
+    const sourceMessages = this.getExactCandidateSourceMessages(
+      candidate.sourceMessageIds,
+      candidate.sourceMessages
+    ).filter((message) => sourceIds.has(message.id));
+    const conceptNode = createConceptNodeFromApprovedCandidate({
+      approval: {
+        kind: "confirmed_create_note",
+        approvedAt
+      },
+      candidate: {
+        id: candidate.id,
+        title: candidate.title,
+        primaryConcept: candidate.primaryConcept,
+        markdown,
+        sourceMessageIds: candidate.sourceMessageIds,
+        revision: candidate.revision
+      },
+      conceptId,
+      sourceMessages
+    });
+
+    return {
+      conceptId,
+      markdown: serializeConceptNodeIntoMarkdown(
+        markdown,
+        conceptNode,
+        {
+          candidateId: candidate.id,
+          candidateRevision: candidate.revision,
+          approvedAt
+        }
+      )
+    };
   }
 
   private async discoverCandidateTopics(
@@ -5427,6 +5969,18 @@ function getMessageContentForModel(message: StoredMessage): string {
 
   return message.content + "\n\n" +
     `Source attachment: ${attachment.filename} (analyzed with ${attachment.providerDisplayName})`;
+}
+
+function isBareSemanticConfirmation(value: string): boolean {
+  const normalized = value.normalize("NFKC").trim().toLocaleLowerCase();
+  return [
+    "yes",
+    "对",
+    "对喵",
+    "exactly",
+    "that's what i mean",
+    "that’s what i mean"
+  ].includes(normalized);
 }
 
 

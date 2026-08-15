@@ -7,6 +7,10 @@ import {
 } from "./SelectableText";
 import type { VisionImageFile } from "./OpenAIVisionClient";
 import {
+  CHAT_STRUCTURAL_RELATION_TYPES,
+  type ChatSemanticDeltaProposalTarget
+} from "./ChatSemanticDelta";
+import {
   extractAttachmentFiles
 } from "./LainBrainSession";
 import type {
@@ -26,6 +30,7 @@ export class LainBrainChatPanel {
   private readonly noteLabel: HTMLElement;
   private readonly clearButton: HTMLButtonElement;
   private readonly selectionContextEl: HTMLDivElement;
+  private readonly semanticProposalEl: HTMLDivElement;
   private readonly unsubscribe: () => void;
   private readonly selectableCleanup: () => void;
   private readonly markdownRenderer: LainBrainMarkdownRenderBatch;
@@ -74,6 +79,9 @@ export class LainBrainChatPanel {
 
     this.selectionContextEl = this.containerEl.createDiv();
     this.selectionContextEl.style.display = "none";
+
+    this.semanticProposalEl = this.containerEl.createDiv();
+    this.semanticProposalEl.style.display = "none";
 
     this.transcriptEl = this.containerEl.createDiv();
     this.transcriptEl.style.overflowY = "auto";
@@ -269,6 +277,7 @@ export class LainBrainChatPanel {
     this.clearButton.style.display =
       selectionContext === undefined ? "" : "none";
     this.renderSelectionContext();
+    this.renderSemanticDeltaProposal();
     this.renderAttachment();
 
     if (
@@ -564,6 +573,224 @@ export class LainBrainChatPanel {
     });
     discardButton.addEventListener("click", () => {
       this.session.discardSelectionReplacement();
+    });
+  }
+
+  private renderSemanticDeltaProposal(): void {
+    const proposal = this.session.getActiveChatSemanticDeltaProposal();
+    this.semanticProposalEl.empty();
+    if (proposal === undefined) {
+      this.semanticProposalEl.style.display = "none";
+      return;
+    }
+    this.semanticProposalEl.style.display = "block";
+    this.semanticProposalEl.style.padding = "0.65rem";
+    this.semanticProposalEl.style.marginBottom = "0.5rem";
+    this.semanticProposalEl.style.border =
+      "1px solid var(--interactive-accent)";
+    this.semanticProposalEl.style.borderRadius = "4px";
+    this.semanticProposalEl.style.backgroundColor =
+      "var(--background-secondary)";
+
+    this.semanticProposalEl.createEl("strong", {
+      text: "Brain noticed a possible semantic change."
+    });
+    if (proposal.status !== "active") {
+      const status = this.semanticProposalEl.createEl("p", {
+        text: proposal.statusMessage ?? `Proposal ${proposal.status}.`
+      });
+      status.style.marginBottom = "0";
+      return;
+    }
+
+    const labels = {
+      personal_definition: "Definition",
+      relationship_confirmed: "Relationship",
+      relationship_removed: "Relationship removal",
+      concept_distinction: "Distinction",
+      ambiguity_resolved: "Ambiguity resolution"
+    } as const;
+    const category = this.semanticProposalEl.createEl("p");
+    category.style.marginBottom = "0.35rem";
+    category.createEl("strong", { text: "Change: " });
+    category.createSpan({ text: labels[proposal.changeKind] });
+
+    this.renderSemanticParticipant(
+      proposal.changeKind === "personal_definition" ? "Concept" : "Source",
+      proposal.target,
+      (conceptId) => this.session.selectChatSemanticDeltaTarget(conceptId)
+    );
+    if (proposal.secondaryTarget !== undefined) {
+      this.renderSemanticParticipant(
+        proposal.changeKind === "ambiguity_resolved"
+          ? "Selected meaning"
+          : "Target",
+        proposal.secondaryTarget,
+        (conceptId) =>
+          this.session.selectChatSemanticDeltaSecondaryTarget(conceptId)
+      );
+    }
+
+    if (
+      proposal.changeKind === "relationship_confirmed" ||
+      proposal.changeKind === "relationship_removed"
+    ) {
+      const relation = this.semanticProposalEl.createEl("p");
+      relation.style.marginBottom = "0.35rem";
+      relation.createEl("strong", { text: "Relation: " });
+      if (this.session.isEditingChatSemanticDelta) {
+        const select = relation.createEl("select");
+        select.setAttr("aria-label", "Edit structural relation type");
+        for (const option of CHAT_STRUCTURAL_RELATION_TYPES) {
+          select.createEl("option", {
+            text: option,
+            value: option
+          });
+        }
+        select.value = proposal.relationType ?? "related_to";
+        select.addEventListener("change", () => {
+          this.session.setActiveChatSemanticDeltaRelationType(select.value);
+        });
+      } else {
+        relation.createSpan({ text: proposal.relationType ?? "Unavailable" });
+      }
+    } else if (proposal.changeKind === "concept_distinction") {
+      const relation = this.semanticProposalEl.createEl("p", {
+        text: "The source is explicitly distinct from the target."
+      });
+      relation.style.marginBottom = "0.35rem";
+    } else if (proposal.changeKind === "ambiguity_resolved") {
+      const label = this.semanticProposalEl.createEl("p");
+      label.style.marginBottom = "0.35rem";
+      label.createEl("strong", { text: "Ambiguous label: " });
+      label.createSpan({ text: proposal.ambiguityLabel ?? "Unavailable" });
+    }
+
+    const explanation = this.semanticProposalEl.createEl("p");
+    explanation.style.margin = "0.35rem 0";
+    explanation.createEl("strong", { text: "Main change: " });
+    explanation.createSpan({ text: proposal.reason });
+
+    if (proposal.changeKind === "personal_definition") {
+      const previous = this.semanticProposalEl.createEl("div");
+      previous.createEl("strong", { text: "Previously: " });
+      previous.createSpan({
+        text: proposal.target.kind === "known_concept"
+          ? proposal.target.previousMeaning ?? "No approved personal definition."
+          : "This concept is not currently in the Brain."
+      });
+    }
+
+    const next = this.semanticProposalEl.createEl("div");
+    next.style.marginTop = "0.35rem";
+    next.createEl("strong", {
+      text: proposal.changeKind === "personal_definition"
+        ? "Now: "
+        : "Reviewed wording: "
+    });
+    if (this.session.isEditingChatSemanticDelta) {
+      const editor = next.createEl("textarea");
+      editor.setAttr("aria-label", "Edit proposed semantic meaning");
+      editor.value = this.session.chatSemanticDeltaMeaningDraft;
+      editor.rows = 4;
+      editor.style.display = "block";
+      editor.style.width = "100%";
+      editor.style.marginTop = "0.3rem";
+      editor.addEventListener("input", () => {
+        this.session.setChatSemanticDeltaMeaningDraft(editor.value);
+      });
+    } else {
+      next.createSpan({ text: this.session.chatSemanticDeltaMeaningDraft });
+    }
+
+    const evidence = this.semanticProposalEl.createEl("details");
+    evidence.style.marginTop = "0.4rem";
+    evidence.createEl("summary", { text: "Based on exact user evidence" });
+    const list = evidence.createEl("ul");
+    for (const source of proposal.evidence) {
+      const text = source.sourceKind === "message_span"
+        ? source.snapshot.slice(
+            source.startOffset ?? 0,
+            source.endOffset ?? source.snapshot.length
+          )
+        : source.snapshot;
+      list.createEl("li", { text });
+    }
+
+    if (this.session.chatSemanticDeltaError !== null) {
+      const error = this.semanticProposalEl.createEl("p", {
+        text: this.session.chatSemanticDeltaError
+      });
+      error.style.color = "var(--text-error)";
+    }
+
+    const actions = this.semanticProposalEl.createDiv();
+    actions.style.display = "flex";
+    actions.style.flexWrap = "wrap";
+    actions.style.gap = "0.4rem";
+    actions.style.marginTop = "0.5rem";
+
+    const confirm = actions.createEl("button", { text: "Confirm" });
+    confirm.addClass("mod-cta");
+    confirm.disabled = this.session.chatSemanticDeltaConfirming ||
+      proposal.target.kind === "ambiguous_concept" ||
+      proposal.secondaryTarget?.kind === "ambiguous_concept";
+    confirm.addEventListener("click", () => {
+      void this.session.confirmActiveChatSemanticDelta();
+    });
+
+    if (!this.session.isEditingChatSemanticDelta) {
+      const edit = actions.createEl("button", { text: "Edit" });
+      edit.addEventListener("click", () => {
+        this.session.beginChatSemanticDeltaEdit();
+      });
+    }
+
+    const reject = actions.createEl("button", { text: "Not a change" });
+    reject.disabled = this.session.chatSemanticDeltaConfirming;
+    reject.addEventListener("click", () => {
+      this.session.rejectActiveChatSemanticDelta();
+    });
+  }
+
+  private renderSemanticParticipant(
+    label: string,
+    target: Readonly<ChatSemanticDeltaProposalTarget>,
+    onSelect: (conceptId: string) => boolean
+  ): void {
+    const row = this.semanticProposalEl.createEl("p");
+    row.style.marginBottom = "0.35rem";
+    row.createEl("strong", { text: `${label}: ` });
+    if (target.kind === "known_concept") {
+      row.createSpan({ text: `${target.title} — ${target.conceptId}` });
+      return;
+    }
+    if (target.kind === "new_concept") {
+      row.createSpan({ text: `${target.suggestedTitle} (new concept)` });
+      return;
+    }
+    row.createSpan({ text: target.query });
+    const select = this.semanticProposalEl.createEl("select");
+    select.setAttr(
+      "aria-label",
+      label === "Concept"
+        ? "Select semantic-change concept"
+        : `Select ${label.toLocaleLowerCase()} concept`
+    );
+    select.style.display = "block";
+    select.style.marginTop = "0.35rem";
+    select.createEl("option", {
+      text: "Choose the intended concept…",
+      value: ""
+    });
+    for (const choice of target.choices) {
+      select.createEl("option", {
+        text: `${choice.title} — ${choice.conceptId}`,
+        value: choice.conceptId
+      });
+    }
+    select.addEventListener("change", () => {
+      if (select.value !== "") onSelect(select.value);
     });
   }
 

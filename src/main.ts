@@ -31,10 +31,15 @@ import {
   NamingOnboardingSession,
   resetPersonalNames
 } from "./PersonalNaming";
+import {
+  openConceptMaintenanceWorkspace
+} from "./BrainMaintenanceWorkspaceModal";
+import { SemanticPropagationCoordinator } from "./SemanticPropagationCoordinator";
 
 export default class LainBrainPlugin extends Plugin {
   settings: LainBrainSettings = migrateLainBrainSettings(undefined);
   session!: LainBrainSession;
+  semanticPropagation!: SemanticPropagationCoordinator;
   private readonly namingOnboarding =
     new NamingOnboardingSession();
 
@@ -50,6 +55,20 @@ export default class LainBrainPlugin extends Plugin {
       )
     );
     this.session.setPersonalNamingProvider(() => this.settings);
+    this.session.setChatSemanticDeltaAnalysisEnabledProvider(
+      () => this.settings.chatSemanticDeltaAnalysisEnabled
+    );
+    this.semanticPropagation = new SemanticPropagationCoordinator(
+      this.app,
+      this.settings.semanticDeltaState,
+      async (state) => {
+        this.settings.semanticDeltaState = state;
+        await this.saveSettings();
+      }
+    );
+    this.session.setSemanticPropagationCoordinator(
+      this.semanticPropagation
+    );
     this.session.setFormalizationIndex(this.settings.formalizationIndex);
     this.session.setFormalizationSaveCallback(() => {
       this.settings.formalizationIndex =
@@ -129,6 +148,18 @@ export default class LainBrainPlugin extends Plugin {
         await this.openLainBrain();
       }
     });
+
+    this.addCommand({
+      id: "open-concept-maintenance",
+      name: "Open Concept Maintenance",
+      callback: async () => {
+        await openConceptMaintenanceWorkspace(
+          this.app,
+          this.semanticPropagation
+        );
+      }
+    });
+    this.semanticPropagation.resumeIncompleteJobs();
   }
 
   async loadSettings(): Promise<void> {

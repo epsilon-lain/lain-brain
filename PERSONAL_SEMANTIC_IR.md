@@ -382,3 +382,35 @@ can remain `proof_verified` while the current Brain concept revision reports
 All of this is local plugin data. Proof bodies, drafts, and verification
 artifacts are never uploaded and never sent to DeepSeek as part of this
 milestone.
+
+---
+
+## Parser-free canonical Lean proposition
+
+For newly generated Lean formalizations, DeepSeek now returns a structured
+`proposition` field containing the canonical Lean proposition directly. The
+application constructs the executable `#check` source and the proof wrapper
+from that same proposition:
+
+```text
+reviewed meaning
+    ↓
+canonical Lean proposition
+    ↓
+┌──────────────────────────────┐
+│                              │
+↓                              ↓
+statement-check source        proof-verification source
+```
+
+The `#check` form is a deterministic execution projection, not the source of
+truth. Proposition boundary validation rejects wrappers such as `#check`,
+`theorem`/`lemma` declarations, Markdown fences, imports, placeholders, and
+top-level declaration injection before a canonical target is created.
+
+`LeanFormalizationTarget.provenance` distinguishes `structured_generation`
+from `migrated_legacy`. The legacy `extractLeanPropositionFromCheckSource`
+remains compatibility-only and is never used by the new formalization path.
+
+Statement checking and proof verification share one canonical target, one
+proposition hash, and one invalidation boundary.

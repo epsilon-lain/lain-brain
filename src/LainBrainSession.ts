@@ -137,6 +137,7 @@ import {
 import {
   LEAN_PROOF_WORKSPACE_SCHEMA_VERSION,
   addLeanProofVerificationArtifact,
+  buildLeanStatementCheckSource,
   buildProofWorkspaceViewModel,
   createLeanFormalizationTarget,
   createLeanProofDraft,
@@ -148,6 +149,7 @@ import {
   getLeanTargetByFormalizationId,
   upsertLeanFormalizationTarget,
   upsertLeanProofDraft,
+  validateCanonicalLeanProposition,
   type LeanProofDraft,
   type LeanProofVerificationArtifact,
   type LeanProofWorkspaceState,
@@ -2749,30 +2751,99 @@ export class LainBrainSession {
         };
       }
 
-      // Trust-boundary guard: the LLM body must not carry its own import
-      // directives.  Imports are owned exclusively by LeanArtifact.imports.
-      const bodyImportDiags = validateLeanBodyNoImports(
-        result.leanCode
-      );
-      if (bodyImportDiags.length > 0) {
+      const structuredProposition =
+        typeof result.proposition === "string"
+          ? result.proposition.trim()
+          : "";
+
+      if (structuredProposition === "" &&
+          (typeof result.leanCode !== "string" || result.leanCode.trim() === "")) {
         this.claimReviewLoading = false;
         this.notify();
-
         return {
           ok: false,
           error:
-            "LLM generated import lines in the statement body — " +
-            "this violates the Lean body contract. " +
-            bodyImportDiags[0]!.message
+            "Unable to generate a canonical Lean proposition for this statement."
         };
       }
 
+      let fullCode: string;
+      let imports: readonly string[];
+      let target: ReturnType<typeof getLeanTargetByFormalizationId>;
+
+      if (structuredProposition !== "") {
+        const propositionIssues =
+          validateCanonicalLeanProposition(structuredProposition);
+        if (propositionIssues.length > 0) {
+          this.claimReviewLoading = false;
+          this.notify();
+          return {
+            ok: false,
+            error:
+              "DeepSeek returned a malformed canonical proposition: " +
+              propositionIssues.join(" ")
+          };
+        }
+
+        imports = selectLeanImportsForFormalization(
+          formalization,
+          structuredProposition
+        );
+        const existingTarget = getLeanTargetByFormalizationId(
+          this.leanProofWorkspace,
+          formalizationId
+        );
+        target = createLeanFormalizationTarget({
+          id: existingTarget?.id,
+          formalizationId,
+          irId: this.getBrainFormalizationLinkage(formalizationId)?.irId,
+          propositionText: structuredProposition,
+          imports,
+          provenance: "structured_generation"
+        });
+        this.leanProofWorkspace = upsertLeanFormalizationTarget(
+          this.leanProofWorkspace,
+          target
+        );
+        this.notifyLeanProofWorkspaceChanged();
+        fullCode = buildLeanStatementCheckSource(target);
+      } else {
+        const leanCode = result.leanCode ?? "";
+        const bodyImportDiags = validateLeanBodyNoImports(leanCode);
+        if (bodyImportDiags.length > 0) {
+          this.claimReviewLoading = false;
+          this.notify();
+          return {
+            ok: false,
+            error:
+              "LLM generated import lines in the statement body — " +
+              "this violates the Lean body contract. " +
+              bodyImportDiags[0]!.message
+          };
+        }
+
+        imports = selectLeanImportsForFormalization(formalization, leanCode);
+        fullCode = buildLeanCode(imports, leanCode);
+        const legacyProposition = extractLeanPropositionFromCheckSource(
+          leanCode
+        );
+        if (legacyProposition !== "") {
+          target = createLeanFormalizationTarget({
+            formalizationId,
+            irId: this.getBrainFormalizationLinkage(formalizationId)?.irId,
+            propositionText: legacyProposition,
+            imports,
+            provenance: "migrated_legacy"
+          });
+          this.leanProofWorkspace = upsertLeanFormalizationTarget(
+            this.leanProofWorkspace,
+            target
+          );
+          this.notifyLeanProofWorkspaceChanged();
+        }
+      }
+
       const now = new Date().toISOString();
-      const imports = selectLeanImportsForFormalization(
-        formalization,
-        result.leanCode
-      );
-      const fullCode = buildLeanCode(imports, result.leanCode);
 
       const artifact: LeanArtifact = {
         id: this.generateLeanArtifactId(),
@@ -2791,17 +2862,6 @@ export class LainBrainSession {
       };
 
       this.leanArtifactIndex.artifacts[artifact.id] = artifact;
-      const proposition = extractLeanPropositionFromCheckSource(
-        result.leanCode
-      );
-      if (proposition !== "") {
-        this.ensureLeanFormalizationTarget(
-          formalizationId,
-          proposition,
-          imports,
-          this.getBrainFormalizationLinkage(formalizationId)?.irId
-        );
-      }
       this.claimReviewLoading = false;
       this.notify();
       this.notifyLeanArtifactsChanged();

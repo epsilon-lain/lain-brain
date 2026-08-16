@@ -24,6 +24,7 @@ import type { ConceptIndex } from "./BrainGrowthIndex";
 export const LEAN_PROOF_WORKSPACE_SCHEMA_VERSION = 1 as const;
 
 export type LeanTargetProvenance =
+  | "structured_generation"
   | "generated"
   | "migrated_legacy"
   | "user_edited";
@@ -205,6 +206,61 @@ export function createLeanFormalizationTarget(
   };
 }
 
+/**
+ * Boundary hygiene for the structured DeepSeek proposition.  This is NOT
+ * Lean validation; it only rejects presentation/declaration wrappers so the
+ * canonical target stores a proposition, not a `#check` or theorem string.
+ */
+export function validateCanonicalLeanProposition(
+  value: string
+): readonly string[] {
+  const issues: string[] = [];
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    issues.push("Proposition must be non-empty.");
+  }
+  if (trimmed.includes("```")) {
+    issues.push("Proposition must not contain Markdown fences.");
+  }
+  if (/#check\b/.test(trimmed)) {
+    issues.push("Proposition must not contain a #check wrapper.");
+  }
+  if (/\b(sorry|admit|sorryAx)\b/.test(trimmed)) {
+    issues.push("Proposition must not contain placeholder syntax.");
+  }
+
+  const topLevelPrefix =
+    /^(?:theorem|lemma|example|axiom|import|set_option|open|namespace|section|universe)\b/;
+  for (const line of trimmed.split("\n")) {
+    const candidate = line.trim();
+    if (candidate === "" || candidate.startsWith("--")) {
+      continue;
+    }
+    if (topLevelPrefix.test(candidate)) {
+      issues.push(
+        `Proposition contains a top-level declaration: "${candidate}".`
+      );
+    }
+  }
+  return issues;
+}
+
+/**
+ * Construct the executable `#check` source from the canonical proposition.
+ * The proposition is the source of truth; the source is only a projection.
+ */
+export function buildLeanStatementCheckSource(
+  target: Readonly<LeanFormalizationTarget>
+): string {
+  const importLines = target.imports
+    .map((module) => `import ${module}`)
+    .join("\n");
+  const header = importLines === ""
+    ? "set_option autoImplicit false"
+    : importLines + "\n\nset_option autoImplicit false";
+  return header + "\n\n#check (" + target.propositionText + ")";
+}
+
 export function createLeanProofDraft(
   input: Readonly<CreateLeanProofDraftInput>
 ): LeanProofDraft {
@@ -364,7 +420,8 @@ function parseTarget(value: unknown): LeanFormalizationTarget | undefined {
       typeof value.propositionHash === "string"
         ? value.propositionHash
         : hashLeanStatement(propositionText, asStringArray(value.imports)),
-    provenance: value.provenance === "migrated_legacy" ||
+    provenance: value.provenance === "structured_generation" ||
+      value.provenance === "migrated_legacy" ||
       value.provenance === "user_edited"
       ? value.provenance
       : "generated",
@@ -615,4 +672,3 @@ export function buildProofWorkspaceViewModel(
     lastVerifiedArtifactId: latestVerified?.id
   };
 }
-

@@ -125,6 +125,10 @@ A minimal proof workspace makes this usable: the exact Lean target is shown
 read-only, the proof body is editable, and drafts plus verification artifacts
 are persisted locally as durable evidence.
 
+New formalizations now receive a structured canonical Lean proposition from
+DeepSeek and construct `#check`/proof sources locally; `#check` parsing is
+legacy compatibility only.
+
 ---
 
 ## Core features

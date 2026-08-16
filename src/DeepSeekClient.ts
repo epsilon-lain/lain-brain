@@ -1258,7 +1258,8 @@ export interface LeanGenerationRequest {
 }
 
 export interface LeanGenerationResult {
-  leanCode: string;
+  proposition: string;
+  leanCode?: string;
   notes: string[];
   unresolvedMappings: string[];
 }
@@ -1281,23 +1282,32 @@ export async function generateLeanStatement(
       role: "system",
       content:
         "Translate a reviewed mathematical statement into a Lean 4 " +
-        "proposition. Return ONLY the #check form — a typecheck file, " +
-        "NOT a proof.\n\n" +
+        "proposition. Return the canonical proposition only — not a " +
+        "typecheck file and not a proof.\n\n" +
         "RULES:\n" +
-        "- Generate only a proposition / typecheck file using #check.\n" +
+        "- Put the exact Lean proposition in the \"proposition\" field.\n" +
+        "- Do NOT wrap the proposition in #check.\n" +
+        "- Do NOT invent a theorem or lemma name.\n" +
+        "- Do NOT generate a theorem or lemma declaration.\n" +
+        "- Do NOT generate proof syntax.\n" +
+        "- Do NOT use Markdown fences.\n" +
         "- Do NOT generate any `import` lines — the import block is " +
         "managed separately and will be prepended automatically.\n" +
-        "- Start with `set_option autoImplicit false`.\n" +
-        "- Do NOT generate a proof, theorem, lemma, or example.\n" +
         "- Do NOT use sorry, admit, axiom, unsafe, or external I/O.\n" +
         "- Do NOT silently change the reviewed mathematical statement.\n" +
         "- Do NOT silently add assumptions not present in the statement.\n" +
         "- If a Mathlib mapping is uncertain, list it in unresolvedMappings " +
         "instead of inventing one.\n" +
-        "- Preserve quantifier structure and domain information.\n" +
-        "- Use #check (...) with the full proposition.\n\n" +
+        "- Preserve reviewed quantifiers exactly.\n" +
+        "- Preserve implication vs equivalence.\n" +
+        "- Preserve domains/types.\n" +
+        "- Preserve accepted explicit and implicit assumptions.\n" +
+        "- Preserve meaning supplied by Personal Brain concept context.\n" +
+        "- Do not silently strengthen or weaken the reviewed claim.\n" +
+        "- Do not resolve ambiguity that remains unresolved.\n" +
+        "- Never claim Lean validation or proof verification.\n\n" +
         "Return strict JSON only, no Markdown fence, no commentary:\n" +
-        "{\"leanCode\":\"...\",\"notes\":[\"note about translation choices\"]," +
+        "{\"proposition\":\"...\",\"notes\":[\"note about translation choices\"]," +
         "\"unresolvedMappings\":[\"concept not mapped to Mathlib\"]}"
     },
     {
@@ -1309,7 +1319,7 @@ export async function generateLeanStatement(
         "Conclusion: " + request.conclusion + "\n" +
         "Quantifiers: " + request.quantifiers + "\n" +
         "Objects:\n" + objectDescriptions + "\n\n" +
-        "Generate a Lean 4 #check proposition for this statement."
+        "Generate the canonical Lean proposition for this statement."
     }
   ]);
 
@@ -1327,8 +1337,8 @@ export async function generateLeanStatement(
 
   const result = parsed as Record<string, unknown>;
 
-  if (typeof result.leanCode !== "string" || result.leanCode.trim() === "") {
-    return { error: "Missing or empty leanCode in generation response." };
+  if (typeof result.proposition !== "string" || result.proposition.trim() === "") {
+    return { error: "Missing or empty proposition in generation response." };
   }
 
   if (!Array.isArray(result.notes)) {
@@ -1340,7 +1350,11 @@ export async function generateLeanStatement(
   }
 
   return {
-    leanCode: result.leanCode.trim(),
+    proposition: result.proposition.trim(),
+    leanCode: typeof result.leanCode === "string" &&
+      result.leanCode.trim() !== ""
+      ? result.leanCode.trim()
+      : undefined,
     notes: result.notes
       .filter((n: unknown): n is string => typeof n === "string")
       .map((n: string) => n.trim())

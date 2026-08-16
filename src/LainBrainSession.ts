@@ -112,6 +112,27 @@ import {
 } from "./BrainGrowthPersistence";
 import { loadObsidianConceptIndex } from "./ObsidianConceptIndex";
 import {
+  BrainFormalizationWorkflow,
+  buildBrainFormalizationEvaluation,
+  type BrainFormalizationLinkage,
+  type BrainFormalizationSource
+} from "./BrainFormalizationWorkflow";
+import { analyzePersonalSemanticIR } from "./BrainAwareFormalizationAnalyzer";
+import {
+  BRAIN_FORMALIZATION_MEMORY_SCHEMA_VERSION,
+  addBrainFormalization,
+  getMemoryByRecordId,
+  synchronizeBrainFormalizationStatus,
+  type BrainFormalizationMemory
+} from "./BrainFormalizationMemory";
+import {
+  createLeanProofCandidate,
+  extractLeanPropositionFromCheckSource,
+  verifyLeanProofWithRunner,
+  type LeanProofProvenance,
+  type LeanProofVerificationFailure
+} from "./LeanProofVerification";
+import {
   appendLatexFormatWarning,
   reviewLatexFormatting
 } from "./LatexFormatReview";
@@ -182,7 +203,8 @@ import type {
   LeanArtifactIndex,
   LeanRunner,
   LeanEligibilityResult,
-  LeanDiagnostic
+  LeanDiagnostic,
+  VerificationStatus
 } from "./FormalizationProtocol";
 import {
   classifyMathSpeechAct,
@@ -678,6 +700,12 @@ export class LainBrainSession {
     SuggestionFormalizationPreview[]
   >();
 
+  // Durable accepted semantic lineage.  Persisted with the other plugin data.
+  private brainFormalizationMemory: BrainFormalizationMemory = {
+    schemaVersion: BRAIN_FORMALIZATION_MEMORY_SCHEMA_VERSION,
+    records: {}
+  };
+
   constructor(
     private app: App,
     private getApiKey: () => string,
@@ -966,6 +994,18 @@ export class LainBrainSession {
 
   private notifyFormalizationChanged(): void {
     this.onFormalizationChanged?.();
+  }
+
+  private onBrainFormalizationMemoryChanged?: () => void;
+
+  setBrainFormalizationMemorySaveCallback(
+    callback: () => void
+  ): void {
+    this.onBrainFormalizationMemoryChanged = callback;
+  }
+
+  private notifyBrainFormalizationMemoryChanged(): void {
+    this.onBrainFormalizationMemoryChanged?.();
   }
 
   private onSemanticPriorChanged?: () => void;
@@ -2775,6 +2815,10 @@ export class LainBrainSession {
         updatedAt: new Date().toISOString()
       };
       this.notifyFormalizationChanged();
+      this.synchronizeBrainFormalizationStatus(
+        artifact.formalizationId,
+        "not_checked"
+      );
     }
 
     this.notify();
@@ -2868,6 +2912,10 @@ export class LainBrainSession {
             artifact.formalizationId
           ] = updatedFormalization;
           this.notifyFormalizationChanged();
+          this.synchronizeBrainFormalizationStatus(
+            artifact.formalizationId,
+            "statement_typechecked"
+          );
         }
       }
 
@@ -2950,6 +2998,114 @@ export class LainBrainSession {
     }
 
     return this.runLeanCheck(generated.artifact.id);
+  }
+
+  /**
+   * Verify a user-supplied or AI-supplied Lean proof body against the exact
+   * theorem statement already produced by the statement-check path.
+   *
+   * proof_verified is set only after the existing LeanRunner successfully
+   * elaborates a trusted theorem declaration built by this method.
+   */
+  async verifyLeanProof(
+    formalizationId: string,
+    proofBody: string,
+    provenance: LeanProofProvenance = "user_authored",
+    irId?: string
+  ): Promise<
+    | {
+        ok: true;
+        candidate: ReturnType<typeof createLeanProofCandidate>;
+      }
+    | {
+        ok: false;
+        error: string;
+        failure?: LeanProofVerificationFailure;
+        diagnostics: LeanDiagnostic[];
+      }
+  > {
+    const formalization =
+      this.formalizationIndex.records[formalizationId];
+
+    if (formalization === undefined) {
+      return {
+        ok: false,
+        error: "Formalization record not found.",
+        diagnostics: []
+      };
+    }
+    if (this.leanRunner === null) {
+      return {
+        ok: false,
+        error: "Lean runner is not configured.",
+        diagnostics: []
+      };
+    }
+
+    const theoremStatement = extractLeanPropositionFromCheckSource(
+      formalization.leanStatement ?? ""
+    );
+    if (theoremStatement === "") {
+      return {
+        ok: false,
+        error:
+          "Run Lean statement checking first so an exact theorem statement exists.",
+        diagnostics: []
+      };
+    }
+
+    const artifact = this.getLeanArtifactForFormalization(formalizationId);
+    const imports = artifact?.imports ??
+      selectLeanImportsForFormalization(
+        formalization,
+        theoremStatement + "\n" + proofBody
+      );
+
+    let candidate;
+    try {
+      candidate = createLeanProofCandidate({
+        formalizationId,
+        irId,
+        theoremStatement,
+        proofBody,
+        imports,
+        provenance,
+        editedByUser: provenance === "user_edited"
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? error.message
+          : "Invalid proof candidate.",
+        diagnostics: []
+      };
+    }
+
+    const result = await verifyLeanProofWithRunner(candidate, this.leanRunner);
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: result.error,
+        failure: result.failure,
+        diagnostics: [...result.diagnostics]
+      };
+    }
+
+    // Authoritative proof_verified transition.
+    const updatedFormalization: FormalizationRecord = {
+      ...formalization,
+      verificationStatus: "proof_verified",
+      updatedAt: new Date().toISOString()
+    };
+    this.formalizationIndex.records[formalizationId] = updatedFormalization;
+    this.notifyFormalizationChanged();
+    this.synchronizeBrainFormalizationStatus(
+      formalizationId,
+      "proof_verified"
+    );
+
+    return { ok: true, candidate };
   }
 
   async testLeanEnvironment(): Promise<
@@ -3653,6 +3809,123 @@ export class LainBrainSession {
 
   hasApiKey(): boolean {
     return this.getApiKey().trim() !== "";
+  }
+
+  /**
+   * Return the current user-authored mathematical source for the
+   * "Formalize using Brain concepts" action.  This is the latest non-empty
+   * user message; it is never fabricated from assistant text.
+   */
+  getBrainFormalizationSource():
+    BrainFormalizationSource | { error: string } {
+    const userMessages = this.messages.filter(
+      (message) => message.role === "user" && message.content.trim() !== ""
+    );
+    const latest = userMessages[userMessages.length - 1];
+    if (latest === undefined) {
+      return {
+        error: "No user-authored message is available to formalize."
+      };
+    }
+    return {
+      messageId: latest.id,
+      snapshot: latest.content
+    };
+  }
+
+  async createBrainFormalizationWorkflow():
+    Promise<BrainFormalizationWorkflow | { error: string }> {
+    const source = this.getBrainFormalizationSource();
+    if ("error" in source) {
+      return source;
+    }
+    const apiKey = this.getApiKey().trim();
+    if (apiKey === "") {
+      return {
+        error: "Please add your DeepSeek API key in Lain Brain settings."
+      };
+    }
+
+    const discovered = await loadObsidianConceptIndex(this.app);
+    return new BrainFormalizationWorkflow({
+      source,
+      conceptIndex: discovered.index,
+      analyzer: {
+        analyze: (input) => analyzePersonalSemanticIR(apiKey, input)
+      }
+    });
+  }
+
+  setBrainFormalizationMemory(
+    memory: BrainFormalizationMemory | undefined
+  ): void {
+    this.brainFormalizationMemory = memory ?? {
+      schemaVersion: BRAIN_FORMALIZATION_MEMORY_SCHEMA_VERSION,
+      records: {}
+    };
+  }
+
+  getBrainFormalizationMemory(): Readonly<BrainFormalizationMemory> {
+    return this.brainFormalizationMemory;
+  }
+
+  commitBrainFormalization(
+    workflow: BrainFormalizationWorkflow,
+    record: Readonly<FormalizationRecord>,
+    linkage: BrainFormalizationLinkage
+  ): void {
+    const state = workflow.getState();
+    const ir = state.ir;
+    if (ir === undefined) {
+      return;
+    }
+
+    const added = addBrainFormalization(this.brainFormalizationMemory, {
+      ir,
+      recordId: record.id,
+      claimId: linkage.claimId,
+      sourceMessageId: state.source.messageId,
+      acceptedAt: new Date().toISOString(),
+      edited: state.edited,
+      evaluation: buildBrainFormalizationEvaluation(state)
+    });
+    this.brainFormalizationMemory = added.memory;
+    this.formalizationIndex.records[record.id] = record as FormalizationRecord;
+    this.notifyFormalizationChanged();
+    this.notifyBrainFormalizationMemoryChanged();
+  }
+
+  getBrainFormalizationLinkage(
+    recordId: string
+  ): Readonly<BrainFormalizationLinkage> | undefined {
+    const record = getMemoryByRecordId(
+      this.brainFormalizationMemory,
+      recordId
+    );
+    if (record === undefined) {
+      return undefined;
+    }
+    return {
+      irId: record.irId,
+      recordId: record.recordId,
+      claimId: record.claimId
+    };
+  }
+
+  private synchronizeBrainFormalizationStatus(
+    recordId: string,
+    verificationStatus: VerificationStatus
+  ): void {
+    const result = synchronizeBrainFormalizationStatus(
+      this.brainFormalizationMemory,
+      recordId,
+      verificationStatus
+    );
+    if (!result.updated) {
+      return;
+    }
+    this.brainFormalizationMemory = result.memory;
+    this.notifyBrainFormalizationMemoryChanged();
   }
 
   hasCompletedExchange(): boolean {

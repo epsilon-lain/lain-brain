@@ -72,6 +72,57 @@ The central authority rule is:
 
 ---
 
+## Personal Semantic IR (v0)
+
+Lain Brain now includes a first target-independent semantic layer that sits
+between natural language and Lean:
+
+```text
+natural-language mathematics
+    ↓
+Personal Brain concept resolution
+    ↓
+PersonalSemanticIR
+    ↓
+FormalizationProtocol
+    ↓
+Lean 4
+```
+
+The IR separates *what the user means* from *how it was written*. It preserves
+stable concept bindings, personal versus standard definitions, assumptions,
+claims, proof-step structure, ambiguity, and provenance without storing Lean
+syntax and without mutating the Brain. See
+[`PERSONAL_SEMANTIC_IR.md`](./PERSONAL_SEMANTIC_IR.md) for the design and
+current limitations. This is the first implementation of the long-term
+semantic-interface architecture, not a claim that arbitrary language
+translation is solved.
+
+The Chat toolbar also provides **“Formalize using Brain concepts”**, a
+review-first workflow for a selected mathematical message: Lain Brain resolves
+relevant concepts, DeepSeek proposes a semantic interpretation, the user
+reviews meaning (Accept / Edit / Reject), and only an accepted interpretation
+is projected into the existing FormalizationProtocol and Lean backend. The
+workflow reads the Brain but never mutates it.
+
+Accepted interpretations are persisted as durable **semantic lineage**: the
+IR, its exact ConceptNode revisions, review decision, evaluation summary, and
+FormalizationRecord linkage survive plugin reload, and remain stable when the
+Brain later evolves. All of this is local plugin data only.
+
+Lean statement typecheck and proof verification status are mirrored into this
+same local memory through the existing `FormalizationProtocol` authority, so
+semantic acceptance, statement typechecking, and proof verification remain
+distinct historical facts.
+
+The first genuine Lean proof-verification path now exists: a candidate proof
+body is wrapped in a trusted theorem declaration against the exact reviewed
+proposition and checked by the existing `LeanRunner`. Only kernel/elaboration
+success sets `proof_verified`; `sorry`, `admit`, statement substitution, and
+fresh top-level declarations are rejected.
+
+---
+
 ## Core features
 
 ### Personal ConceptNodes

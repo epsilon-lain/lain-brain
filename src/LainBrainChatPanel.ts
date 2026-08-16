@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 import { Modal, setIcon } from "obsidian";
+import { BrainFormalizationModal } from "./BrainFormalizationModal";
 import { LainBrainMarkdownRenderBatch } from "./LainBrainMarkdownRenderer";
 import {
   hasSelectedTextWithin,
@@ -64,6 +65,19 @@ export class LainBrainChatPanel {
     toolbar.style.marginBottom = "0.5rem";
 
     this.noteLabel = toolbar.createEl("small");
+
+    const formalizeButton = toolbar.createEl("button", {
+      text: "Formalize using Brain concepts"
+    });
+    formalizeButton.style.padding = "2px 6px";
+    formalizeButton.style.fontSize = "0.75rem";
+    formalizeButton.style.lineHeight = "1.2";
+    formalizeButton.addEventListener("click", () => {
+      new BrainFormalizationModal(
+        this.app,
+        this.session
+      ).open();
+    });
 
     this.clearButton = toolbar.createEl("button", {
       text: "Clear Chat"

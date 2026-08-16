@@ -344,3 +344,41 @@ The claim is deliberately precise:
 > Lean accepted this proof under the configured Lean environment.
 
 It is not a claim of axiom-free constructivity or automatic theorem proving.
+
+---
+
+## Proof workspace and durable verification evidence
+
+The exact Lean proposition is now a first-class `LeanFormalizationTarget`
+rather than a string recovered from generated `#check` presentation source.
+New formalizations store the canonical proposition, its imports, and its
+hash directly.
+
+The proof workspace separates two surfaces:
+
+- **Exact Lean target** — read-only;
+- **Lean proof body** — editable.
+
+This mirrors the trusted-wrapper architecture: the proof body can fill only
+the proof position inside the fixed theorem declaration.
+
+Proof drafts are local, reloadable working state. A draft records its target
+hash, proof hash, provenance (`user_authored`, `ai_generated`,
+`user_edited`, or `imported`), and edit state. Drafts are never treated as
+formally correct.
+
+Successful or failed verification produces an immutable
+`LeanProofVerificationArtifact` containing the exact target hash, proof hash,
+theorem wrapper name, provenance, import environment, result, diagnostics,
+and timestamps. A verified artifact certifies exactly one
+`(target hash, proof hash)` pair. Editing the proof or changing the target
+does not rewrite the old artifact; it creates an unverified or stale current
+candidate instead.
+
+Semantic staleness and proof verification remain independent: an old proof
+can remain `proof_verified` while the current Brain concept revision reports
+`changed`.
+
+All of this is local plugin data. Proof bodies, drafts, and verification
+artifacts are never uploaded and never sent to DeepSeek as part of this
+milestone.

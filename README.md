@@ -121,6 +121,10 @@ proposition and checked by the existing `LeanRunner`. Only kernel/elaboration
 success sets `proof_verified`; `sorry`, `admit`, statement substitution, and
 fresh top-level declarations are rejected.
 
+A minimal proof workspace makes this usable: the exact Lean target is shown
+read-only, the proof body is editable, and drafts plus verification artifacts
+are persisted locally as durable evidence.
+
 ---
 
 ## Core features

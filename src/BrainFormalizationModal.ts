@@ -1,5 +1,6 @@
 import { Modal, type App } from "obsidian";
 import type { LainBrainSession } from "./LainBrainSession";
+import { LeanProofWorkspaceModal } from "./LeanProofWorkspaceModal";
 import {
   BrainFormalizationWorkflow,
   type BrainFormalizationState
@@ -126,6 +127,19 @@ export class BrainFormalizationModal extends Modal {
 
     if (ir === undefined) {
       return;
+    }
+
+    if (state.phase === "accepted" && state.record !== undefined) {
+      const proofButton = this.contentEl.createEl("button", {
+        text: "Open proof workspace"
+      });
+      proofButton.addEventListener("click", () => {
+        new LeanProofWorkspaceModal(
+          this.app,
+          this.session,
+          state.record!.id
+        ).open();
+      });
     }
 
     this.renderSection("Original expression", [state.source.snapshot]);

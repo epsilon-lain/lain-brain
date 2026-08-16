@@ -129,6 +129,12 @@ New formalizations now receive a structured canonical Lean proposition from
 DeepSeek and construct `#check`/proof sources locally; `#check` parsing is
 legacy compatibility only.
 
+Research note: a deterministic local evaluation harness now exists for
+comparing plain-LLM vs Personal-Brain-aware semantic fidelity. See
+[`SEMANTIC_FIDELITY_EVALUATION.md`](./SEMANTIC_FIDELITY_EVALUATION.md). The
+mocked run demonstrates the instrument only; it does not claim Personal Brain
+improves fidelity.
+
 ---
 
 ## Core features

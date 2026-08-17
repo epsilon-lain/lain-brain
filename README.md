@@ -135,6 +135,10 @@ comparing plain-LLM vs Personal-Brain-aware semantic fidelity. See
 mocked run demonstrates the instrument only; it does not claim Personal Brain
 improves fidelity.
 
+Lain Brain has also completed its first synthetic live-provider paired run.
+Those results are exploratory instrument-validation data, not evidence of
+general superiority.
+
 ---
 
 ## Core features

@@ -131,3 +131,73 @@ Live runs should use synthetic Brain fixtures first, an explicit
 `eval:semantic-fidelity:live`-style command, configurable runs-per-condition,
 and no automatic API spending.
 
+## 23. Live paired-run procedure
+
+The live runner keeps the deterministic scorer frozen and executes both
+`plain_llm` and `personal_brain` for the same selected cases. `--dry-run`
+prints the selected cases, execution order, planned trial count, and output
+metadata while making zero provider requests.
+
+## 24. Condition parity
+
+Both conditions receive the same structured response schema and source text.
+The Brain condition additionally receives bounded synthetic concept context.
+
+## 25. Repeated runs and ordering
+
+`runsPerCondition` is explicit; the default experiment plan uses 3. Order
+alternates by case and run. Every trial has a unique `trialId`, condition,
+case ID, and run index.
+
+## 26. Resume behavior
+
+Completed trials are keyed by `trialId`; a resumed run skips existing trials
+and only executes missing ones.
+
+## 27. Live result storage
+
+Live results should be written to a clearly separated local research file
+with a stable experiment ID. No live result files are committed here unless
+explicitly requested.
+
+## 28. Interpretation rules
+
+Results are described as observed outcomes in a small synthetic paired
+experiment. No causal claim, significance test, or “Personal Brain works”
+statement is added.
+
+## 29. Fixture-freeze policy
+
+Evaluation 01 case definitions and scoring rules are frozen before a live
+run. A genuinely defective fixture is marked `fixture_invalid` and excluded,
+not silently rewritten after seeing output.
+
+## 30. Privacy
+
+The first live run uses synthetic fixtures only. No real Vault data, no API
+keys in output, no telemetry, no uploads, and no background execution.
+
+## 31. Lessons from the first live experiment
+
+The first live run completed 47/48 planned trials. The missing trial is
+`proof-sketch:plain_llm:2` and remains visible rather than imputed.
+
+The original v1 summary collapsed repeated runs to one result per case, which
+hid run-level variability and made the 8-vs-8 result look more certain than
+the 23/24 completed-run data supported. A repeated-run-aware reanalysis is
+required for future live experiments.
+
+The raw data also exposed a distinction between model-proposed concept IDs
+and locally verified Personal Brain IDs. A binding should count as verified
+only when its stable ID matches fixture ground truth; arbitrary
+`resolved`-labeled strings from the model are not evidence.
+
+Personal identity grounding and unsupported semantic elaboration should be
+scored as separate axes. A Brain improvement in grounding does not erase an
+overreach penalty, and overreach does not hide genuine grounding.
+
+Finally, ties must distinguish “both correct” from “both incorrect.” The
+proof-sketch case is a likely shared-failure example.
+
+Any corrected analysis is labeled post-hoc and is not treated as if it had
+been pre-registered.

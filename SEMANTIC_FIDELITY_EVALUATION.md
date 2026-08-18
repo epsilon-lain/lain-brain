@@ -201,3 +201,17 @@ proof-sketch case is a likely shared-failure example.
 
 Any corrected analysis is labeled post-hoc and is not treated as if it had
 been pre-registered.
+
+## 32. Experiment 03 and Experiment 04 provenance
+
+Experiment 02 was early instrument validation. Experiment 03 is a historical
+**instrument/treatment validation failure**: its live prompt used placeholder
+sources, omitted semantic payload construction, and exposed internal condition
+identifiers. It provides no evidence for or against Personal Brain benefit and
+is not reinterpreted by later work.
+
+Experiment 04 is a corrected synthetic replication design. Before any future
+provider request, it freezes real source/payload objects, deterministic
+expected bindings and allowed commitments, provider-visible prompt snapshots,
+label-invisibility checks, and a canonical definition hash. The local
+condition identifiers remain local metadata only.

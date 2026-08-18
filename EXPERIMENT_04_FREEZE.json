@@ -1,0 +1,63 @@
+{
+  "EXPERIMENT_04_DEFINITION_SHA256": "552b95d2a008ef77daeb47aaa80087e0953411d226f0c26250207f2396d06711",
+  "fixtureTableSha256": "04e356cc19f106066e73c0a30cf6c09c2f836fce1bad489996c7b17e02a88a0f",
+  "treatmentManifestSha256": "2603e22d59fcc609b1cfc0fa2ade5e9839843b517ee836a2da2ae6b636b7d265",
+  "commonTaskPromptSha256": "979ed816c0c7b5c771b7f5545b091a33aa9b634dfca7d1b9379bee3969484ea4",
+  "responseSchemaSha256": "7f31d0cd9f8f50f4e0918db5ab737725fa1933d9e6fd17120815622ef3c2f29e",
+  "provider": {
+    "provider": "DeepSeek",
+    "model": "deepseek-v4-flash"
+  },
+  "fixtures": [
+    {
+      "fixtureId": "harbor-private-meaning",
+      "sourceSha256": "cdac3d261b652c85d0da31eb1a71e75d77a02e10a19864d7e7f3287f810ea8de"
+    },
+    {
+      "fixtureId": "lantern-private-meaning",
+      "sourceSha256": "a5e2d4f1542f6c57fdff1ae2bcc58b733d4f7692c6abc8ede15dc5f78f415b03"
+    },
+    {
+      "fixtureId": "compass-private-meaning",
+      "sourceSha256": "ae10120b95c5c383efe077b0086e63687a4ac1b930fe9a76bfa9f86b5bffe45d"
+    },
+    {
+      "fixtureId": "field-overload",
+      "sourceSha256": "b25653833a1df852f36f58372f6430d4efe50f7cfcd0d0c594d6b79425dd6f10"
+    },
+    {
+      "fixtureId": "proof-overload",
+      "sourceSha256": "156b16e430e6ecd5f70076318fe00776267d0d46e116ad0c697c0c33a1be212a"
+    },
+    {
+      "fixtureId": "bridge-ambiguity",
+      "sourceSha256": "6af3a16fefee9d0b07be4659baf49375fa4943571ac3b35b1f3dec5f1bfd2b96"
+    },
+    {
+      "fixtureId": "normal-operator-missing-assumption",
+      "sourceSha256": "892524e9c5e0beb5597ae38dd70c4aec3ad6c6ece02958d84da1db0178e655db"
+    },
+    {
+      "fixtureId": "modus-ponens-precision",
+      "sourceSha256": "4594afb0b26aa80558f8eca49223db68f59e455fc8ac918032b03db4dc02dd58"
+    },
+    {
+      "fixtureId": "delta-control",
+      "sourceSha256": "3d1f9e5afdbbdaccc7386f998e6fe6e0583afe7d48f64b6cda05e2f3403ff1ea"
+    },
+    {
+      "fixtureId": "boundary-definition",
+      "sourceSha256": "62fa0048a99f8c17309e5c915624109fdb05a0feaf34a64be464c66b43fb50f1"
+    },
+    {
+      "fixtureId": "spectral-proof-sketch",
+      "sourceSha256": "04df3114a91d2bd8ddc5fde33a054b33417cc1261e88bc69854335adefa60032"
+    },
+    {
+      "fixtureId": "compass-revision",
+      "sourceSha256": "5111f34bf53c7033ff4b22708a5c6101cc92268db3e5245b67c8645a53d4e4fc"
+    }
+  ],
+  "trialCount": 180,
+  "seed": 240417
+}

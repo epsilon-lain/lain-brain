@@ -135,9 +135,11 @@ comparing plain-LLM vs Personal-Brain-aware semantic fidelity. See
 mocked run demonstrates the instrument only; it does not claim Personal Brain
 improves fidelity.
 
-Lain Brain has also completed its first synthetic live-provider paired run.
-Those results are exploratory instrument-validation data, not evidence of
-general superiority.
+Experiment 03's synthetic live-provider run was classified as an
+instrument/treatment validation failure because its prompt construction was
+defective. It is not evidence of general or Personal Brain superiority.
+Experiment 04 is an offline-frozen synthetic replication design; it has not
+made provider requests.
 
 ---
 

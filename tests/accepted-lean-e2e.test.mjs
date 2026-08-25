@@ -288,10 +288,165 @@ function makeSession(candidate, runner) {
   console.log("ACCEPTED-LEAN-E2E-2 PASS: failed check exposes diagnostics without verification upgrade");
 }
 
+// Trusted proof path: only successful Lean-kernel verification of the
+// trusted wrapper transitions the committed formalization to proof_verified.
+{
+  const candidate = makeCandidate();
+  const suggestion = {
+    id: "claim-candidate-real-add-zero-proof",
+    text: sourceText,
+    kind: "formal_statement",
+    verification: "lean_pending",
+    sourceReferences: [],
+    sourceMessageIds: ["message-user-real"]
+  };
+  const accepted = makeAcceptedPreview(suggestion.id);
+  const { session, runnerRequests } = makeSession(candidate, async () => ({
+    status: "statement_typechecked",
+    diagnostics: [],
+    exitCode: 0,
+    stdout: "",
+    stderr: ""
+  }));
+
+  session.suggestionPreviews.set(suggestion.id, [{
+    record: accepted,
+    suggestionId: suggestion.id,
+    sourceText: suggestion.text,
+    sourceKind: suggestion.kind
+  }]);
+  assert.equal(session.applyReviewedClaims(candidate.id, [suggestion]).ok, true);
+  assert.equal(
+    (await session.generateAndRunLeanCheck(suggestion.id, accepted.id)).ok,
+    true
+  );
+  assert.equal(
+    session.getFormalization(accepted.id).verificationStatus,
+    "statement_typechecked"
+  );
+
+  const proof = await session.verifyLeanProof(accepted.id, "intro value\nring");
+  assert.equal(proof.ok, true);
+  assert.equal(proof.artifact.verified, true);
+
+  // The trusted wrapper owns the proposition; the proof body cannot
+  // replace the target statement, and placeholders cannot verify.
+  const wrapperRequest = runnerRequests[runnerRequests.length - 1];
+  assert.match(wrapperRequest.code, /theorem lain_target_[0-9a-f]{8}/);
+  assert.match(wrapperRequest.code, /: ∀ value : ℝ, value \+ 0 = value := by/);
+  assert.doesNotMatch(wrapperRequest.code, /sorry/);
+
+  assert.equal(
+    session.getFormalization(accepted.id).verificationStatus,
+    "proof_verified"
+  );
+
+  console.log("ACCEPTED-LEAN-E2E-3 PASS: trusted kernel verification transitions to proof_verified");
+}
+
+// Unverified proof paths never reach proof_verified: runner failure and
+// placeholder proofs leave the committed status untouched.
+{
+  // Runner failure on the wrapper check
+  {
+    const candidate = makeCandidate();
+    const suggestion = {
+      id: "claim-candidate-real-add-zero-proof-failure",
+      text: sourceText,
+      kind: "formal_statement",
+      verification: "lean_pending",
+      sourceReferences: [],
+      sourceMessageIds: ["message-user-real"]
+    };
+    const accepted = makeAcceptedPreview(suggestion.id);
+    const { session } = makeSession(candidate, async (request) => {
+      if (request.code.includes("theorem lain_target_")) {
+        return {
+          status: "error",
+          diagnostics: [{ severity: "error", message: "unknown identifier" }],
+          exitCode: 1,
+          stdout: "",
+          stderr: "unknown identifier"
+        };
+      }
+      return {
+        status: "statement_typechecked",
+        diagnostics: [],
+        exitCode: 0,
+        stdout: "",
+        stderr: ""
+      };
+    });
+
+    session.suggestionPreviews.set(suggestion.id, [{
+      record: accepted,
+      suggestionId: suggestion.id,
+      sourceText: suggestion.text,
+      sourceKind: suggestion.kind
+    }]);
+    assert.equal(session.applyReviewedClaims(candidate.id, [suggestion]).ok, true);
+    assert.equal(
+      (await session.generateAndRunLeanCheck(suggestion.id, accepted.id)).ok,
+      true
+    );
+    const proof = await session.verifyLeanProof(accepted.id, "intro value\nring");
+    assert.equal(proof.ok, false);
+    assert.equal(
+      session.getFormalization(accepted.id).verificationStatus,
+      "statement_typechecked"
+    );
+  }
+
+  // Placeholder proof rejected before the runner even runs
+  {
+    const candidate = makeCandidate();
+    const suggestion = {
+      id: "claim-candidate-real-add-zero-proof-placeholder",
+      text: sourceText,
+      kind: "formal_statement",
+      verification: "lean_pending",
+      sourceReferences: [],
+      sourceMessageIds: ["message-user-real"]
+    };
+    const accepted = makeAcceptedPreview(suggestion.id);
+    const { session } = makeSession(candidate, async () => ({
+      status: "statement_typechecked",
+      diagnostics: [],
+      exitCode: 0,
+      stdout: "",
+      stderr: ""
+    }));
+
+    session.suggestionPreviews.set(suggestion.id, [{
+      record: accepted,
+      suggestionId: suggestion.id,
+      sourceText: suggestion.text,
+      sourceKind: suggestion.kind
+    }]);
+    assert.equal(session.applyReviewedClaims(candidate.id, [suggestion]).ok, true);
+    assert.equal(
+      (await session.generateAndRunLeanCheck(suggestion.id, accepted.id)).ok,
+      true
+    );
+    const proof = await session.verifyLeanProof(accepted.id, "sorry");
+    assert.equal(proof.ok, false);
+    assert.equal(proof.failure, "placeholder_rejected");
+    assert.equal(
+      session.getFormalization(accepted.id).verificationStatus,
+      "statement_typechecked"
+    );
+  }
+
+  console.log("ACCEPTED-LEAN-E2E-4 PASS: unverified paths never reach proof_verified");
+}
+
 console.log(JSON.stringify({
   acceptedApplyToLeanArtifactToRunner: true,
   canonicalRealStatementUsesNarrowImport: true,
   statementTypecheckedIsNotProofVerified: true,
   failureDiagnosticsPreserved: true,
+  trustedProofTransitionSetsProofVerified: true,
+  runnerFailureNeverReachesProofVerified: true,
+  placeholderNeverVerifiesAtSessionLevel: true,
   result: "PASS"
 }, null, 2));

@@ -77,7 +77,7 @@ import {
   createSemanticPriorEpisode,
   createEmptySemanticPriorState,
   addEpisodeToState,
-  retrieveRelevantPriors,
+  retrieveRelevantPriorsStructured,
   renderPriorsForPrompt,
   migrateSemanticPriorState,
   sliceSemanticSpecForEvidence,
@@ -89,6 +89,7 @@ import type {
   SemanticPriorEpisode,
   SemanticPriorState
 } from "./SemanticPrior";
+import { buildSemanticRetrievalQuery } from "./SemanticRetrievalQuery";
 import {
   buildCandidateNoteMarkdown,
   findConceptEvidence,
@@ -111,6 +112,50 @@ import {
   serializeConceptNodeIntoMarkdown
 } from "./BrainGrowthPersistence";
 import { loadObsidianConceptIndex } from "./ObsidianConceptIndex";
+import {
+  BrainFormalizationWorkflow,
+  buildBrainFormalizationEvaluation,
+  type BrainFormalizationLinkage,
+  type BrainFormalizationSource
+} from "./BrainFormalizationWorkflow";
+import { analyzePersonalSemanticIR } from "./BrainAwareFormalizationAnalyzer";
+import {
+  BRAIN_FORMALIZATION_MEMORY_SCHEMA_VERSION,
+  addBrainFormalization,
+  getMemoryByRecordId,
+  synchronizeBrainFormalizationStatus,
+  type BrainFormalizationMemory
+} from "./BrainFormalizationMemory";
+import {
+  createLeanProofCandidate,
+  deriveSafeTheoremName,
+  extractLeanPropositionFromCheckSource,
+  hashLeanStatement,
+  verifyLeanProofWithRunner,
+  type LeanProofProvenance,
+  type LeanProofVerificationFailure
+} from "./LeanProofVerification";
+import {
+  LEAN_PROOF_WORKSPACE_SCHEMA_VERSION,
+  addLeanProofVerificationArtifact,
+  buildLeanStatementCheckSource,
+  buildProofWorkspaceViewModel,
+  createLeanFormalizationTarget,
+  createLeanProofDraft,
+  createLeanProofVerificationArtifact,
+  emptyLeanProofWorkspace,
+  getLatestVerifiedArtifact,
+  getLeanProofArtifactsByFormalizationId,
+  getLeanProofDraftsByFormalizationId,
+  getLeanTargetByFormalizationId,
+  upsertLeanFormalizationTarget,
+  upsertLeanProofDraft,
+  validateCanonicalLeanProposition,
+  type LeanProofDraft,
+  type LeanProofVerificationArtifact,
+  type LeanProofWorkspaceState,
+  type ProofWorkspaceViewModel
+} from "./LeanProofWorkspace";
 import {
   appendLatexFormatWarning,
   reviewLatexFormatting
@@ -182,7 +227,8 @@ import type {
   LeanArtifactIndex,
   LeanRunner,
   LeanEligibilityResult,
-  LeanDiagnostic
+  LeanDiagnostic,
+  VerificationStatus
 } from "./FormalizationProtocol";
 import {
   classifyMathSpeechAct,
@@ -678,6 +724,17 @@ export class LainBrainSession {
     SuggestionFormalizationPreview[]
   >();
 
+  // Durable accepted semantic lineage.  Persisted with the other plugin data.
+  private brainFormalizationMemory: BrainFormalizationMemory = {
+    schemaVersion: BRAIN_FORMALIZATION_MEMORY_SCHEMA_VERSION,
+    records: {}
+  };
+
+  // Durable proof-workspace state: canonical targets, local drafts, and
+  // immutable verification artifacts.  Persisted with the other plugin data.
+  private leanProofWorkspace: LeanProofWorkspaceState =
+    emptyLeanProofWorkspace();
+
   constructor(
     private app: App,
     private getApiKey: () => string,
@@ -857,9 +914,18 @@ export class LainBrainSession {
       return Object.freeze([]);
     }
 
-    const relevant = retrieveRelevantPriors(
+    // M2B.5: structure-aware retrieval seeding. The query is a
+    // provisional assistant interpretation of the current utterance and
+    // the current working spec; retrieval remains advisory and never
+    // mutates personal meaning.
+    const query = buildSemanticRetrievalQuery({
+      utteranceText: currentUserText,
+      semanticSpec: this.chatSemanticSession?.semanticSpec
+    });
+    const relevant = retrieveRelevantPriorsStructured(
       this.semanticPriorState,
-      currentUserText
+      currentUserText,
+      query
     );
     this.lastInjectedPriorIds = getLastInjectedSemanticPriorIds(relevant);
     return relevant;
@@ -966,6 +1032,28 @@ export class LainBrainSession {
 
   private notifyFormalizationChanged(): void {
     this.onFormalizationChanged?.();
+  }
+
+  private onBrainFormalizationMemoryChanged?: () => void;
+
+  setBrainFormalizationMemorySaveCallback(
+    callback: () => void
+  ): void {
+    this.onBrainFormalizationMemoryChanged = callback;
+  }
+
+  private notifyBrainFormalizationMemoryChanged(): void {
+    this.onBrainFormalizationMemoryChanged?.();
+  }
+
+  private onLeanProofWorkspaceChanged?: () => void;
+
+  setLeanProofWorkspaceSaveCallback(callback: () => void): void {
+    this.onLeanProofWorkspaceChanged = callback;
+  }
+
+  private notifyLeanProofWorkspaceChanged(): void {
+    this.onLeanProofWorkspaceChanged?.();
   }
 
   private onSemanticPriorChanged?: () => void;
@@ -2673,30 +2761,99 @@ export class LainBrainSession {
         };
       }
 
-      // Trust-boundary guard: the LLM body must not carry its own import
-      // directives.  Imports are owned exclusively by LeanArtifact.imports.
-      const bodyImportDiags = validateLeanBodyNoImports(
-        result.leanCode
-      );
-      if (bodyImportDiags.length > 0) {
+      const structuredProposition =
+        typeof result.proposition === "string"
+          ? result.proposition.trim()
+          : "";
+
+      if (structuredProposition === "" &&
+          (typeof result.leanCode !== "string" || result.leanCode.trim() === "")) {
         this.claimReviewLoading = false;
         this.notify();
-
         return {
           ok: false,
           error:
-            "LLM generated import lines in the statement body — " +
-            "this violates the Lean body contract. " +
-            bodyImportDiags[0]!.message
+            "Unable to generate a canonical Lean proposition for this statement."
         };
       }
 
+      let fullCode: string;
+      let imports: readonly string[];
+      let target: ReturnType<typeof getLeanTargetByFormalizationId>;
+
+      if (structuredProposition !== "") {
+        const propositionIssues =
+          validateCanonicalLeanProposition(structuredProposition);
+        if (propositionIssues.length > 0) {
+          this.claimReviewLoading = false;
+          this.notify();
+          return {
+            ok: false,
+            error:
+              "DeepSeek returned a malformed canonical proposition: " +
+              propositionIssues.join(" ")
+          };
+        }
+
+        imports = selectLeanImportsForFormalization(
+          formalization,
+          structuredProposition
+        );
+        const existingTarget = getLeanTargetByFormalizationId(
+          this.leanProofWorkspace,
+          formalizationId
+        );
+        target = createLeanFormalizationTarget({
+          id: existingTarget?.id,
+          formalizationId,
+          irId: this.getBrainFormalizationLinkage(formalizationId)?.irId,
+          propositionText: structuredProposition,
+          imports,
+          provenance: "structured_generation"
+        });
+        this.leanProofWorkspace = upsertLeanFormalizationTarget(
+          this.leanProofWorkspace,
+          target
+        );
+        this.notifyLeanProofWorkspaceChanged();
+        fullCode = buildLeanStatementCheckSource(target);
+      } else {
+        const leanCode = result.leanCode ?? "";
+        const bodyImportDiags = validateLeanBodyNoImports(leanCode);
+        if (bodyImportDiags.length > 0) {
+          this.claimReviewLoading = false;
+          this.notify();
+          return {
+            ok: false,
+            error:
+              "LLM generated import lines in the statement body — " +
+              "this violates the Lean body contract. " +
+              bodyImportDiags[0]!.message
+          };
+        }
+
+        imports = selectLeanImportsForFormalization(formalization, leanCode);
+        fullCode = buildLeanCode(imports, leanCode);
+        const legacyProposition = extractLeanPropositionFromCheckSource(
+          leanCode
+        );
+        if (legacyProposition !== "") {
+          target = createLeanFormalizationTarget({
+            formalizationId,
+            irId: this.getBrainFormalizationLinkage(formalizationId)?.irId,
+            propositionText: legacyProposition,
+            imports,
+            provenance: "migrated_legacy"
+          });
+          this.leanProofWorkspace = upsertLeanFormalizationTarget(
+            this.leanProofWorkspace,
+            target
+          );
+          this.notifyLeanProofWorkspaceChanged();
+        }
+      }
+
       const now = new Date().toISOString();
-      const imports = selectLeanImportsForFormalization(
-        formalization,
-        result.leanCode
-      );
-      const fullCode = buildLeanCode(imports, result.leanCode);
 
       const artifact: LeanArtifact = {
         id: this.generateLeanArtifactId(),
@@ -2775,6 +2932,10 @@ export class LainBrainSession {
         updatedAt: new Date().toISOString()
       };
       this.notifyFormalizationChanged();
+      this.synchronizeBrainFormalizationStatus(
+        artifact.formalizationId,
+        "not_checked"
+      );
     }
 
     this.notify();
@@ -2868,6 +3029,10 @@ export class LainBrainSession {
             artifact.formalizationId
           ] = updatedFormalization;
           this.notifyFormalizationChanged();
+          this.synchronizeBrainFormalizationStatus(
+            artifact.formalizationId,
+            "statement_typechecked"
+          );
         }
       }
 
@@ -2950,6 +3115,158 @@ export class LainBrainSession {
     }
 
     return this.runLeanCheck(generated.artifact.id);
+  }
+
+  /**
+   * Verify a user-supplied or AI-supplied Lean proof body against the exact
+   * theorem statement already produced by the statement-check path.
+   *
+   * proof_verified is set only after the existing LeanRunner successfully
+   * elaborates a trusted theorem declaration built by this method.
+   */
+  async verifyLeanProof(
+    formalizationId: string,
+    proofBody: string,
+    provenance: LeanProofProvenance = "user_authored",
+    irId?: string
+  ): Promise<
+    | {
+        ok: true;
+        candidate: ReturnType<typeof createLeanProofCandidate>;
+        artifact: LeanProofVerificationArtifact;
+      }
+    | {
+        ok: false;
+        error: string;
+        failure?: LeanProofVerificationFailure;
+        diagnostics: LeanDiagnostic[];
+        artifact?: LeanProofVerificationArtifact;
+      }
+  > {
+    const formalization =
+      this.formalizationIndex.records[formalizationId];
+
+    if (formalization === undefined) {
+      return {
+        ok: false,
+        error: "Formalization record not found.",
+        diagnostics: []
+      };
+    }
+    if (this.leanRunner === null) {
+      return {
+        ok: false,
+        error: "Lean runner is not configured.",
+        diagnostics: []
+      };
+    }
+
+    if (!this.ensureLegacyLeanFormalizationTarget(formalizationId)) {
+      return {
+        ok: false,
+        error:
+          "No canonical Lean target exists for this formalization.",
+        diagnostics: []
+      };
+    }
+
+    const target = getLeanTargetByFormalizationId(
+      this.leanProofWorkspace,
+      formalizationId
+    );
+    if (target === undefined) {
+      return {
+        ok: false,
+        error: "No canonical Lean target exists for this formalization.",
+        diagnostics: []
+      };
+    }
+
+    let candidate;
+    try {
+      candidate = createLeanProofCandidate({
+        formalizationId,
+        irId,
+        theoremStatement: target.propositionText,
+        proofBody,
+        imports: target.imports,
+        provenance,
+        editedByUser: provenance === "user_edited"
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? error.message
+          : "Invalid proof candidate.",
+        diagnostics: []
+      };
+    }
+
+    const result = await verifyLeanProofWithRunner(candidate, this.leanRunner);
+    const now = new Date().toISOString();
+    const artifactResult = result.ok
+      ? "verified" as const
+      : result.failure === "placeholder_rejected"
+        ? "placeholder_rejected" as const
+        : result.failure === "invalid_candidate"
+          ? "invalid_candidate" as const
+          : result.failure === "timeout"
+            ? "timeout" as const
+            : result.failure === "environment_error"
+              ? "environment_error" as const
+              : "lean_error" as const;
+    const artifact = createLeanProofVerificationArtifact({
+      formalizationId,
+      irId,
+      targetId: target.id,
+      targetHash: target.propositionHash,
+      proofCandidateId: candidate.id,
+      proofHash: hashLeanStatement(candidate.proofBody),
+      proofProvenance: provenance,
+      theoremName: result.ok
+        ? result.theoremName
+        : deriveSafeTheoremName(
+            formalizationId,
+            candidate.theoremStatementHash
+          ),
+      imports: target.imports,
+      result: artifactResult,
+      verified: result.ok,
+      verifiedAt: result.ok ? now : undefined,
+      executedAt: now,
+      diagnostics: result.ok ? [] : result.diagnostics.map((d) => d.message)
+    });
+    this.leanProofWorkspace = addLeanProofVerificationArtifact(
+      this.leanProofWorkspace,
+      artifact
+    );
+    this.notifyLeanProofWorkspaceChanged();
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: result.error,
+        failure: result.failure,
+        diagnostics: [...result.diagnostics],
+        artifact
+      };
+    }
+
+    // Authoritative proof_verified transition.
+    const updatedFormalization: FormalizationRecord = {
+      ...formalization,
+      verificationStatus: "proof_verified",
+      updatedAt: new Date().toISOString()
+    };
+    this.formalizationIndex.records[formalizationId] = updatedFormalization;
+    this.notifyFormalizationChanged();
+    this.synchronizeBrainFormalizationStatus(
+      formalizationId,
+      "proof_verified"
+    );
+
+    return { ok: true, candidate, artifact };
   }
 
   async testLeanEnvironment(): Promise<
@@ -3653,6 +3970,468 @@ export class LainBrainSession {
 
   hasApiKey(): boolean {
     return this.getApiKey().trim() !== "";
+  }
+
+  /**
+   * Return the current user-authored mathematical source for the
+   * "Formalize using Brain concepts" action.  This is the latest non-empty
+   * user message; it is never fabricated from assistant text.
+   */
+  getBrainFormalizationSource():
+    BrainFormalizationSource | { error: string } {
+    const userMessages = this.messages.filter(
+      (message) => message.role === "user" && message.content.trim() !== ""
+    );
+    const latest = userMessages[userMessages.length - 1];
+    if (latest === undefined) {
+      return {
+        error: "No user-authored message is available to formalize."
+      };
+    }
+    return {
+      messageId: latest.id,
+      snapshot: latest.content
+    };
+  }
+
+  async createBrainFormalizationWorkflow():
+    Promise<BrainFormalizationWorkflow | { error: string }> {
+    const source = this.getBrainFormalizationSource();
+    if ("error" in source) {
+      return source;
+    }
+    const apiKey = this.getApiKey().trim();
+    if (apiKey === "") {
+      return {
+        error: "Please add your DeepSeek API key in Lain Brain settings."
+      };
+    }
+
+    const discovered = await loadObsidianConceptIndex(this.app);
+    return new BrainFormalizationWorkflow({
+      source,
+      conceptIndex: discovered.index,
+      analyzer: {
+        analyze: (input) => analyzePersonalSemanticIR(apiKey, input)
+      }
+    });
+  }
+
+  setBrainFormalizationMemory(
+    memory: BrainFormalizationMemory | undefined
+  ): void {
+    this.brainFormalizationMemory = memory ?? {
+      schemaVersion: BRAIN_FORMALIZATION_MEMORY_SCHEMA_VERSION,
+      records: {}
+    };
+  }
+
+  getBrainFormalizationMemory(): Readonly<BrainFormalizationMemory> {
+    return this.brainFormalizationMemory;
+  }
+
+  commitBrainFormalization(
+    workflow: BrainFormalizationWorkflow,
+    record: Readonly<FormalizationRecord>,
+    linkage: BrainFormalizationLinkage
+  ): void {
+    const state = workflow.getState();
+    const ir = state.ir;
+    if (ir === undefined) {
+      return;
+    }
+
+    const added = addBrainFormalization(this.brainFormalizationMemory, {
+      ir,
+      recordId: record.id,
+      claimId: linkage.claimId,
+      sourceMessageId: state.source.messageId,
+      acceptedAt: new Date().toISOString(),
+      edited: state.edited,
+      evaluation: buildBrainFormalizationEvaluation(state)
+    });
+    this.brainFormalizationMemory = added.memory;
+    this.formalizationIndex.records[record.id] = record as FormalizationRecord;
+    this.notifyFormalizationChanged();
+    this.notifyBrainFormalizationMemoryChanged();
+  }
+
+  getBrainFormalizationLinkage(
+    recordId: string
+  ): Readonly<BrainFormalizationLinkage> | undefined {
+    const record = getMemoryByRecordId(
+      this.brainFormalizationMemory,
+      recordId
+    );
+    if (record === undefined) {
+      return undefined;
+    }
+    return {
+      irId: record.irId,
+      recordId: record.recordId,
+      claimId: record.claimId
+    };
+  }
+
+  private synchronizeBrainFormalizationStatus(
+    recordId: string,
+    verificationStatus: VerificationStatus
+  ): void {
+    const result = synchronizeBrainFormalizationStatus(
+      this.brainFormalizationMemory,
+      recordId,
+      verificationStatus
+    );
+    if (!result.updated) {
+      return;
+    }
+    this.brainFormalizationMemory = result.memory;
+    this.notifyBrainFormalizationMemoryChanged();
+  }
+
+  setLeanProofWorkspaceState(
+    state: LeanProofWorkspaceState | undefined
+  ): void {
+    this.leanProofWorkspace = state ?? emptyLeanProofWorkspace();
+  }
+
+  getLeanProofWorkspaceState(): Readonly<LeanProofWorkspaceState> {
+    return this.leanProofWorkspace;
+  }
+
+  getLeanFormalizationTarget(
+    formalizationId: string
+  ): ReturnType<typeof getLeanTargetByFormalizationId> {
+    return getLeanTargetByFormalizationId(
+      this.leanProofWorkspace,
+      formalizationId
+    );
+  }
+
+  ensureLeanFormalizationTarget(
+    formalizationId: string,
+    propositionText: string,
+    imports: readonly string[],
+    irId?: string
+  ): void {
+    const existing = getLeanTargetByFormalizationId(
+      this.leanProofWorkspace,
+      formalizationId
+    );
+    if (
+      existing !== undefined &&
+      existing.propositionText === propositionText
+    ) {
+      return;
+    }
+    const target = createLeanFormalizationTarget({
+      id: existing?.id,
+      formalizationId,
+      irId,
+      propositionText,
+      imports,
+      provenance: "generated"
+    });
+    this.leanProofWorkspace = upsertLeanFormalizationTarget(
+      this.leanProofWorkspace,
+      target
+    );
+    this.notifyLeanProofWorkspaceChanged();
+  }
+
+  private ensureLegacyLeanFormalizationTarget(
+    formalizationId: string
+  ): boolean {
+    if (
+      getLeanTargetByFormalizationId(
+        this.leanProofWorkspace,
+        formalizationId
+      ) !== undefined
+    ) {
+      return true;
+    }
+    const formalization = this.formalizationIndex.records[formalizationId];
+    if (formalization === undefined) {
+      return false;
+    }
+    const proposition = extractLeanPropositionFromCheckSource(
+      formalization.leanStatement ?? ""
+    );
+    if (proposition === "") {
+      return false;
+    }
+    const artifact = this.getLeanArtifactForFormalization(formalizationId);
+    const imports = artifact?.imports ??
+      selectLeanImportsForFormalization(formalization, proposition);
+    const target = createLeanFormalizationTarget({
+      formalizationId,
+      propositionText: proposition,
+      imports,
+      provenance: "migrated_legacy"
+    });
+    this.leanProofWorkspace = upsertLeanFormalizationTarget(
+      this.leanProofWorkspace,
+      target
+    );
+    this.notifyLeanProofWorkspaceChanged();
+    return true;
+  }
+
+  createProofDraft(
+    formalizationId: string,
+    proofBody: string,
+    provenance: LeanProofProvenance = "user_authored",
+    irId?: string
+  ):
+    | { ok: true; draft: LeanProofDraft }
+    | { ok: false; error: string } {
+    if (!this.ensureLegacyLeanFormalizationTarget(formalizationId)) {
+      return {
+        ok: false,
+        error: "No canonical Lean target exists for this formalization."
+      };
+    }
+    const target = getLeanTargetByFormalizationId(
+      this.leanProofWorkspace,
+      formalizationId
+    );
+    if (target === undefined) {
+      return {
+        ok: false,
+        error: "No canonical Lean target exists for this formalization."
+      };
+    }
+    const draft = createLeanProofDraft({
+      formalizationId,
+      irId,
+      targetId: target.id,
+      targetHash: target.propositionHash,
+      proofBody,
+      provenance
+    });
+    this.leanProofWorkspace = upsertLeanProofDraft(
+      this.leanProofWorkspace,
+      draft
+    );
+    this.notifyLeanProofWorkspaceChanged();
+    return { ok: true, draft };
+  }
+
+  saveProofDraft(
+    draftId: string,
+    proofBody: string
+  ): { ok: true; draft: LeanProofDraft } | { ok: false; error: string } {
+    const existing = this.leanProofWorkspace.drafts[draftId];
+    if (existing === undefined) {
+      return { ok: false, error: "Proof draft not found." };
+    }
+    const updated: LeanProofDraft = {
+      ...existing,
+      proofBody,
+      proofHash: createLeanProofDraft({
+        formalizationId: existing.formalizationId,
+        targetId: existing.targetId,
+        targetHash: existing.targetHash,
+        proofBody,
+        provenance: existing.provenance
+      }).proofHash,
+      edited: true,
+      updatedAt: new Date().toISOString()
+    };
+    this.leanProofWorkspace = upsertLeanProofDraft(
+      this.leanProofWorkspace,
+      updated
+    );
+    this.notifyLeanProofWorkspaceChanged();
+    return { ok: true, draft: updated };
+  }
+
+  getProofDraftsForFormalization(
+    formalizationId: string
+  ): readonly LeanProofDraft[] {
+    return getLeanProofDraftsByFormalizationId(
+      this.leanProofWorkspace,
+      formalizationId
+    );
+  }
+
+  getProofArtifactsForFormalization(formalizationId: string) {
+    return getLeanProofArtifactsByFormalizationId(
+      this.leanProofWorkspace,
+      formalizationId
+    );
+  }
+
+  getProofWorkspaceViewModel(
+    formalizationId: string
+  ): ProofWorkspaceViewModel {
+    const memory = getMemoryByRecordId(
+      this.brainFormalizationMemory,
+      formalizationId
+    );
+    return buildProofWorkspaceViewModel(
+      this.leanProofWorkspace,
+      formalizationId,
+      { memory }
+    );
+  }
+
+  async verifyProofDraft(
+    draftId: string
+  ): Promise<
+    | {
+        ok: true;
+        artifact: LeanProofVerificationArtifact;
+      }
+    | {
+        ok: false;
+        error: string;
+        failure?: LeanProofVerificationFailure;
+        diagnostics: LeanDiagnostic[];
+        artifact?: LeanProofVerificationArtifact;
+      }
+  > {
+    const draft = this.leanProofWorkspace.drafts[draftId];
+    if (draft === undefined) {
+      return { ok: false, error: "Proof draft not found.", diagnostics: [] };
+    }
+    if (this.leanRunner === null) {
+      return {
+        ok: false,
+        error: "Lean runner is not configured.",
+        diagnostics: []
+      };
+    }
+
+    if (!this.ensureLegacyLeanFormalizationTarget(draft.formalizationId)) {
+      return {
+        ok: false,
+        error: "No canonical Lean target exists for this formalization.",
+        diagnostics: []
+      };
+    }
+    const target = getLeanTargetByFormalizationId(
+      this.leanProofWorkspace,
+      draft.formalizationId
+    );
+    if (target === undefined) {
+      return {
+        ok: false,
+        error: "No canonical Lean target exists for this formalization.",
+        diagnostics: []
+      };
+    }
+
+    if (draft.targetHash !== target.propositionHash) {
+      const now = new Date().toISOString();
+      const staleArtifact = createLeanProofVerificationArtifact({
+        formalizationId: draft.formalizationId,
+        irId: draft.irId,
+        targetId: target.id,
+        targetHash: target.propositionHash,
+        proofCandidateId: draft.id,
+        proofHash: draft.proofHash,
+        proofProvenance: draft.provenance,
+        theoremName: deriveSafeTheoremName(
+          draft.formalizationId,
+          target.propositionHash
+        ),
+        imports: target.imports,
+        result: "stale_candidate",
+        verified: false,
+        executedAt: now,
+        diagnostics: ["Proof candidate is bound to a different Lean target."]
+      });
+      this.leanProofWorkspace = addLeanProofVerificationArtifact(
+        this.leanProofWorkspace,
+        staleArtifact
+      );
+      this.notifyLeanProofWorkspaceChanged();
+      return {
+        ok: false,
+        error: "Proof candidate is stale for the current Lean target.",
+        failure: "stale_candidate",
+        diagnostics: staleArtifact.diagnostics.map((message) => ({
+          severity: "error",
+          message
+        })),
+        artifact: staleArtifact
+      };
+    }
+
+    const candidate = createLeanProofCandidate({
+      id: draft.id,
+      formalizationId: draft.formalizationId,
+      irId: draft.irId,
+      theoremStatement: target.propositionText,
+      proofBody: draft.proofBody,
+      imports: target.imports,
+      provenance: draft.provenance,
+      editedByUser: draft.edited
+    });
+    const result = await verifyLeanProofWithRunner(candidate, this.leanRunner);
+    const now = new Date().toISOString();
+    const artifactResult = result.ok
+      ? "verified" as const
+      : result.failure === "placeholder_rejected"
+        ? "placeholder_rejected" as const
+        : result.failure === "invalid_candidate"
+          ? "invalid_candidate" as const
+          : result.failure === "timeout"
+            ? "timeout" as const
+            : result.failure === "environment_error"
+              ? "environment_error" as const
+              : "lean_error" as const;
+    const artifact = createLeanProofVerificationArtifact({
+      formalizationId: draft.formalizationId,
+      irId: draft.irId,
+      targetId: target.id,
+      targetHash: target.propositionHash,
+      proofCandidateId: draft.id,
+      proofHash: draft.proofHash,
+      proofProvenance: draft.provenance,
+      theoremName: result.ok
+        ? result.theoremName
+        : deriveSafeTheoremName(draft.formalizationId, target.propositionHash),
+      imports: target.imports,
+      result: artifactResult,
+      verified: result.ok,
+      verifiedAt: result.ok ? now : undefined,
+      executedAt: now,
+      diagnostics: result.ok ? [] : result.diagnostics.map((d) => d.message)
+    });
+    this.leanProofWorkspace = addLeanProofVerificationArtifact(
+      this.leanProofWorkspace,
+      artifact
+    );
+    this.notifyLeanProofWorkspaceChanged();
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: result.error,
+        failure: result.failure,
+        diagnostics: [...result.diagnostics],
+        artifact
+      };
+    }
+
+    const formalization =
+      this.formalizationIndex.records[draft.formalizationId];
+    if (formalization !== undefined) {
+      this.formalizationIndex.records[draft.formalizationId] = {
+        ...formalization,
+        verificationStatus: "proof_verified",
+        updatedAt: now
+      };
+      this.notifyFormalizationChanged();
+      this.synchronizeBrainFormalizationStatus(
+        draft.formalizationId,
+        "proof_verified"
+      );
+    }
+
+    return { ok: true, artifact };
   }
 
   hasCompletedExchange(): boolean {

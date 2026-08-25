@@ -190,14 +190,95 @@ console.log("T06-T08 PASS: analysisStatus derivation");
 assert.equal(record.reviewStatus, "pending");
 assert.equal(record.verificationStatus, "not_checked");
 
-// proof_verified must not be allowed
-const bogusErrors = validateFormalizationInvariants({
-  ...record,
-  verificationStatus: "proof_verified"
+// State validity: every legitimate lifecycle status validates cleanly.
+// Transition authorization for proof_verified is not the validator's job —
+// it belongs to the trusted Lean-kernel verification boundary.
+assert.equal(validateFormalizationInvariants(record).length, 0);
+
+const phase2Record = { ...record, verificationStatus: "statement_typechecked" };
+assert.equal(
+  validateFormalizationInvariants(phase2Record).length,
+  0,
+  "T09: legitimate Phase 2 statement_typechecked record validates"
+);
+
+const phase3Record = { ...record, verificationStatus: "proof_verified" };
+assert.equal(
+  validateFormalizationInvariants(phase3Record).length,
+  0,
+  "T10: legitimate Phase 3 proof_verified record validates"
+);
+
+const errorRecord = { ...record, verificationStatus: "error" };
+assert.equal(validateFormalizationInvariants(errorRecord).length, 0);
+
+// Unknown states remain invalid — state validity is preserved.
+const garbageRecord = { ...record, verificationStatus: "verified" };
+const garbageErrors = validateFormalizationInvariants(garbageRecord);
+assert.ok(garbageErrors.length > 0);
+assert.ok(garbageErrors.some(e => e.includes("verificationStatus")));
+console.log("T09-T11 PASS: status defaults and lifecycle states");
+
+// ═══════════════════════════════════════════════════════════════════════
+// Verification-status authority boundaries
+// ═══════════════════════════════════════════════════════════════════════
+
+// AI generation always starts at not_checked.
+const generated = createFormalizationRecord(makeValidParams());
+assert.equal(generated.verificationStatus, "not_checked");
+assert.equal(validateFormalizationInvariants(generated).length, 0);
+
+// User review cannot transition verificationStatus: reviewing a
+// statement_typechecked record preserves its status and stays valid.
+const typechecked = { ...record, verificationStatus: "statement_typechecked" };
+const reviewedTypechecked = applyFormalizationReview(typechecked, "accepted");
+assert.equal(reviewedTypechecked.verificationStatus, "statement_typechecked");
+assert.equal(validateFormalizationInvariants(reviewedTypechecked).length, 0);
+
+// Reviewing a proof_verified record also preserves status — legitimate
+// Phase 3 records are not rejected by the review path.
+const proofed = { ...record, verificationStatus: "proof_verified" };
+const reviewedProofed = applyFormalizationReview(proofed, "accepted");
+assert.equal(reviewedProofed.verificationStatus, "proof_verified");
+assert.equal(validateFormalizationInvariants(reviewedProofed).length, 0);
+
+// The direct setter API never grants proof_verified.
+assert.throws(() => trySetProofVerified(record), /Lean kernel/);
+
+// Deserialization: legitimate proof_verified records survive round-trip.
+const verifiedIndex = serializeFormalizationIndex({
+  schemaVersion: 1,
+  records: { [proofed.id]: proofed }
 });
-assert.ok(bogusErrors.length > 0);
-assert.ok(bogusErrors.some(e => e.includes("proof_verified")));
-console.log("T09-T11 PASS: status defaults enforced");
+const verifiedReload = deserializeFormalizationIndex(verifiedIndex);
+assert.ok(verifiedReload !== null);
+assert.equal(
+  verifiedReload.records[proofed.id].verificationStatus,
+  "proof_verified"
+);
+
+// Deserialization trickery: an out-of-set status string never loads as a
+// record, so it can never become proof_verified state.
+const forgedIndex = {
+  schemaVersion: 1,
+  records: {
+    forged: { ...proofed, id: "forged-1", verificationStatus: "verified" }
+  }
+};
+const forgedReload = deserializeFormalizationIndex(forgedIndex);
+assert.ok(forgedReload !== null);
+assert.equal(Object.keys(forgedReload.records).length, 0);
+
+// Deserialization never fabricates a verification upgrade: a persisted
+// not_checked record reloads as not_checked.
+const plainIndex = {
+  schemaVersion: 1,
+  records: { [record.id]: record }
+};
+const plainReload = deserializeFormalizationIndex(plainIndex);
+assert.equal(plainReload.records[record.id].verificationStatus, "not_checked");
+
+console.log("STATUS-AUTHORITY PASS: verification transition boundaries hold");
 
 // ═══════════════════════════════════════════════════════════════════════
 // T12-T15: implicit assumption → semantic change linkage

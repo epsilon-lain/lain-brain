@@ -18,7 +18,8 @@ const built = await esbuild.build({
       "export {",
       "  createFormalizationRecord,",
       "  applyFormalizationReview",
-      "} from './src/FormalizationProtocol';"
+      "} from './src/FormalizationProtocol';",
+      "export { deserializeConceptNodeFromMarkdown } from './src/BrainGrowthPersistence';"
     ].join("\n"),
     resolveDir: process.cwd(),
     sourcefile: "claim-classification-entry.ts",
@@ -69,7 +70,8 @@ const {
   normalizeReviewedClaim,
   parseClaimSuggestionsJson,
   createFormalizationRecord,
-  applyFormalizationReview
+  applyFormalizationReview,
+  deserializeConceptNodeFromMarkdown
 } = module.exports;
 
 const personal = normalizeReviewedClaim({
@@ -456,8 +458,16 @@ const createWrites = environment.writes.filter(
   (write) => write.operation === "create"
 );
 assert.equal(createWrites.length, 1);
-assert.equal(createWrites[0].content, createdMarkdown);
+assert.equal(createWrites[0].content.includes(createdMarkdown), true);
 assert.equal(createWrites[0].content.includes("## Knowledge status"), true);
+const persistedConcept = deserializeConceptNodeFromMarkdown(
+  createWrites[0].content
+);
+assert.equal(persistedConcept.conceptNode.id, "concept:" + candidateA.id);
+assert.equal(
+  persistedConcept.conceptNode.generatedInterpretations[0].text,
+  createdMarkdown
+);
 
 const createdVaultContent = createWrites[0].content;
 session.setCandidateNoteMarkdown(

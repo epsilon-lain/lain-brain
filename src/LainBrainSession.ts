@@ -77,7 +77,7 @@ import {
   createSemanticPriorEpisode,
   createEmptySemanticPriorState,
   addEpisodeToState,
-  retrieveRelevantPriors,
+  retrieveRelevantPriorsStructured,
   renderPriorsForPrompt,
   migrateSemanticPriorState,
   sliceSemanticSpecForEvidence,
@@ -89,6 +89,7 @@ import type {
   SemanticPriorEpisode,
   SemanticPriorState
 } from "./SemanticPrior";
+import { buildSemanticRetrievalQuery } from "./SemanticRetrievalQuery";
 import {
   buildCandidateNoteMarkdown,
   findConceptEvidence,
@@ -913,9 +914,18 @@ export class LainBrainSession {
       return Object.freeze([]);
     }
 
-    const relevant = retrieveRelevantPriors(
+    // M2B.5: structure-aware retrieval seeding. The query is a
+    // provisional assistant interpretation of the current utterance and
+    // the current working spec; retrieval remains advisory and never
+    // mutates personal meaning.
+    const query = buildSemanticRetrievalQuery({
+      utteranceText: currentUserText,
+      semanticSpec: this.chatSemanticSession?.semanticSpec
+    });
+    const relevant = retrieveRelevantPriorsStructured(
       this.semanticPriorState,
-      currentUserText
+      currentUserText,
+      query
     );
     this.lastInjectedPriorIds = getLastInjectedSemanticPriorIds(relevant);
     return relevant;

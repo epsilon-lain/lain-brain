@@ -15,8 +15,10 @@
 //   3. No assistant prose is stored as evidence.
 //   4. Episodes for the same anchor coexist — later episodes do not overwrite
 //      earlier ones.
-//   5. Anchors are derived deterministically from the SemanticSpec.
-//   6. Retrieval is deterministic: exact/substring matching, no embeddings.
+//   5. Anchors are derived deterministically from the SemanticSpec and
+//      from exact user-authored evidence text surfaces (M2B.5).
+//   6. Retrieval is deterministic: exact/substring matching plus
+//      structure-aware seeding (M2B.5), no embeddings.
 // ────────────────────────────────────────────────────────────────────────
 
 import type {
@@ -27,6 +29,8 @@ import type {
   SemanticSymbol
 } from "./SemanticSpec";
 import type { UserTextProvenance } from "./KnowledgeProtocol";
+import { extractLexicalSurfaces } from "./SemanticRetrievalQuery";
+import type { SemanticRetrievalQuery } from "./SemanticRetrievalQuery";
 
 // We only import the type; createSemanticSpec is not needed for slicing
 // because we build a structurally minimal slice object directly.
@@ -57,6 +61,13 @@ const STOP_ANCHORS = new Set([
   "hello", "test", "x", "y", "z", "n", "m", "a", "b", "c", "?", "。",
   "吗", "喵", "嗯", "哦"
 ]);
+
+/**
+ * Maximum number of evidence-text anchors merged into one episode.
+ * Bounded so a long evidence snapshot cannot inflate anchor sets
+ * without limit.
+ */
+const MAX_EVIDENCE_ANCHORS = 48;
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -162,8 +173,21 @@ function fallbackId(): string {
  *
  * Does NOT invent normalized standard terminology merely for retrieval.
  */
+/**
+ * Derive deterministic retrieval anchors for an episode.
+ *
+ * Anchors come from two channels:
+ *   1. SemanticSpec symbols, statements, and descriptions (M2B.4).
+ *   2. Exact user-authored evidence text surfaces — CJK bigram/trigram
+ *      windows and alphabetic words (M2B.5). This keeps the user's own
+ *      language retrievable even when the LLM models only entities.
+ *
+ * The evidence channel is empty unless evidence refs are supplied, so
+ * spec-only callers observe the historical behavior unchanged.
+ */
 export function deriveAnchors(
-  semanticSpec: Readonly<SemanticSpec>
+  semanticSpec: Readonly<SemanticSpec>,
+  evidenceRefs: readonly UserTextProvenance[] = []
 ): readonly string[] {
   const anchors = new Set<string>();
 
@@ -229,6 +253,11 @@ export function deriveAnchors(
     }
   }
 
+  // Evidence-text lexical anchors (M2B.5)
+  for (const anchor of deriveEvidenceTextAnchors(evidenceRefs)) {
+    anchors.add(anchor);
+  }
+
   return deepFreeze([...anchors].sort());
 }
 
@@ -271,6 +300,49 @@ function isStopAnchor(value: string): boolean {
   }
 
   return STOP_ANCHORS.has(normalized);
+}
+
+// ── Evidence Text Anchors (M2B.5) ────────────────────────────────────────────────────────────
+
+/**
+ * Materialize the exact user-authored text of an evidence ref.
+ * For message spans only the marked slice is used; no truncation is
+ * applied here because this feeds deterministic anchor derivation.
+ */
+function materializeEvidenceText(
+  source: Readonly<UserTextProvenance>
+): string {
+  if (source.sourceKind === "user_edit") {
+    return source.snapshot;
+  }
+  if (
+    source.startOffset !== undefined &&
+    source.endOffset !== undefined
+  ) {
+    return source.snapshot.slice(source.startOffset, source.endOffset);
+  }
+  return source.snapshot;
+}
+
+/**
+ * Derive retrieval anchors from the raw user-authored evidence text of
+ * an episode. Deterministic, no LLM call.
+ */
+export function deriveEvidenceTextAnchors(
+  evidenceRefs: readonly UserTextProvenance[]
+): readonly string[] {
+  const anchors = new Set<string>();
+
+  for (const ref of evidenceRefs) {
+    const surfaces = extractLexicalSurfaces(materializeEvidenceText(ref));
+    for (const surface of surfaces) {
+      if (!isStopAnchor(surface)) {
+        anchors.add(surface);
+      }
+    }
+  }
+
+  return deepFreeze([...anchors].sort().slice(0, MAX_EVIDENCE_ANCHORS));
 }
 
 // ── Evidence Identity ──────────────────────────────────────────────────
@@ -534,12 +606,12 @@ export function createSemanticPriorEpisode(
 ): SemanticPriorEpisode {
   validateEvidenceRefs(params.evidenceRefs);
 
-  const anchors = deriveAnchors(params.semanticSpec);
+  const anchors = deriveAnchors(params.semanticSpec, params.evidenceRefs);
 
   if (anchors.length === 0) {
     throw new Error(
       "Semantic prior episode must have at least one anchor derived from " +
-      "the semantic spec."
+      "the semantic spec or user evidence text."
     );
   }
 
@@ -668,6 +740,61 @@ interface ScoredEpisode {
 }
 
 /**
+ * Deterministic lexical scoring of one episode against normalized user
+ * text. Shared by the flat retrieval path and the structure-aware
+ * retrieval path (M2B.5) so both channels rank identically on lexical
+ * evidence.
+ */
+function scoreEpisodeLexical(
+  episode: SemanticPriorEpisode,
+  normalizedText: string
+): { score: number; matchedAnchors: string[] } {
+  let score = 0;
+  const matchedAnchors: string[] = [];
+
+  for (const anchor of episode.anchors) {
+    const normalizedAnchor = anchor
+      .normalize("NFKC")
+      .toLocaleLowerCase();
+
+    if (normalizedAnchor.length === 0) {
+      continue;
+    }
+
+    // Exact match of the full anchor in the user text
+    if (normalizedText.includes(normalizedAnchor)) {
+      // Longer anchors are more specific — bonus proportional to length
+      score += 20 + normalizedAnchor.length;
+
+      // Bonus for anchors that are particularly specific
+      if (normalizedAnchor.length >= 6) {
+        score += 30;
+      }
+
+      matchedAnchors.push(anchor);
+    }
+    // Partial overlap: anchor contains a substring of user text
+    else if (normalizedAnchor.length >= 4) {
+      // Check if any meaningful substring of the anchor appears in user text
+      const minSubLen = Math.max(3, Math.floor(normalizedAnchor.length * 0.5));
+      let found = false;
+      for (let i = 0; i <= normalizedAnchor.length - minSubLen; i++) {
+        const sub = normalizedAnchor.slice(i, i + minSubLen);
+        if (normalizedText.includes(sub)) {
+          score += 5 + sub.length;
+          found = true;
+        }
+      }
+      if (found) {
+        matchedAnchors.push(anchor);
+      }
+    }
+  }
+
+  return { score, matchedAnchors };
+}
+
+/**
  * Retrieve a small number of potentially relevant historical episodes.
  *
  * Uses simple deterministic matching: exact/sub-string overlap between
@@ -694,47 +821,10 @@ export function retrieveRelevantPriors(
   const scored: ScoredEpisode[] = [];
 
   for (const episode of state.episodes) {
-    let score = 0;
-    const matchedAnchors: string[] = [];
-
-    for (const anchor of episode.anchors) {
-      const normalizedAnchor = anchor
-        .normalize("NFKC")
-        .toLocaleLowerCase();
-
-      if (normalizedAnchor.length === 0) {
-        continue;
-      }
-
-      // Exact match of the full anchor in the user text
-      if (normalizedText.includes(normalizedAnchor)) {
-        // Longer anchors are more specific — bonus proportional to length
-        score += 20 + normalizedAnchor.length;
-
-        // Bonus for anchors that are particularly specific
-        if (normalizedAnchor.length >= 6) {
-          score += 30;
-        }
-
-        matchedAnchors.push(anchor);
-      }
-      // Partial overlap: anchor contains a substring of user text
-      else if (normalizedAnchor.length >= 4) {
-        // Check if any meaningful substring of the anchor appears in user text
-        const minSubLen = Math.max(3, Math.floor(normalizedAnchor.length * 0.5));
-        let found = false;
-        for (let i = 0; i <= normalizedAnchor.length - minSubLen; i++) {
-          const sub = normalizedAnchor.slice(i, i + minSubLen);
-          if (normalizedText.includes(sub)) {
-            score += 5 + sub.length;
-            found = true;
-          }
-        }
-        if (found) {
-          matchedAnchors.push(anchor);
-        }
-      }
-    }
+    const { score, matchedAnchors } = scoreEpisodeLexical(
+      episode,
+      normalizedText
+    );
 
     if (matchedAnchors.length > 0) {
       scored.push({ episode, score, matchedAnchors });
@@ -752,6 +842,257 @@ export function retrieveRelevantPriors(
   return deepFreeze(
     scored.slice(0, maxEpisodes).map((s) => s.episode)
   );
+}
+
+// ── Structure-Aware Retrieval (M2B.5) ───────────────────────────────────────────────────────
+
+/** Structural scoring weights for symbol-intersection retrieval. */
+const STRUCTURAL_EXACT_MATCH = 6;
+const STRUCTURAL_USER_DEFINED_BONUS = 3;
+const STRUCTURAL_PARTIAL_MATCH = 2;
+const STRUCTURAL_INTERSECTION_BONUS = 8;
+const SEED_EXACT_MATCH = 6;
+const SEED_CONTAINMENT_MATCH = 2;
+
+/**
+ * One symbol occurrence in the cross-episode symbol index.
+ */
+export interface EpisodeSymbolIndexEntry {
+  readonly episode: SemanticPriorEpisode;
+  readonly surface: string;
+  readonly userDefined: boolean;
+}
+
+function normalizeSurface(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase().trim();
+}
+
+/**
+ * Build the in-memory cross-episode symbol index (M2B.5 scope 10d).
+ *
+ * Maps each normalized symbol surface to every episode whose SemanticSpec
+ * contains that symbol. Deterministic: entries are sorted by episode
+ * creation time, then episode id.
+ */
+export function buildEpisodeSymbolIndex(
+  episodes: readonly SemanticPriorEpisode[]
+): ReadonlyMap<string, readonly EpisodeSymbolIndexEntry[]> {
+  const index = new Map<string, EpisodeSymbolIndexEntry[]>();
+
+  for (const episode of episodes) {
+    for (const symbol of episode.semanticSpec.symbols) {
+      const surface = symbol.surface.trim();
+      if (surface === "") {
+        continue;
+      }
+      const key = normalizeSurface(surface);
+      if (key === "") {
+        continue;
+      }
+      const entries = index.get(key) ?? [];
+      entries.push({
+        episode,
+        surface,
+        userDefined: symbol.userDefined === true
+      });
+      index.set(key, entries);
+    }
+  }
+
+  for (const entries of index.values()) {
+    entries.sort(
+      (a, b) =>
+        a.episode.createdAt - b.episode.createdAt ||
+        a.episode.id.localeCompare(b.episode.id)
+    );
+    Object.freeze(entries);
+  }
+
+  return index;
+}
+
+/**
+ * Lexical seed-channel scoring: match query seed surfaces against episode
+ * anchors in both containment directions. This is the fallback channel
+ * that keeps retrieval working when no structural fields are populated.
+ */
+function scoreSeedSurfaces(
+  episode: SemanticPriorEpisode,
+  seedSurfaces: readonly string[]
+): number {
+  if (seedSurfaces.length === 0) {
+    return 0;
+  }
+
+  let score = 0;
+
+  for (const seed of seedSurfaces) {
+    const normalizedSeed = normalizeSurface(seed);
+    if (normalizedSeed.length < MIN_ANCHOR_LENGTH) {
+      continue;
+    }
+
+    let best = 0;
+    for (const anchor of episode.anchors) {
+      const normalizedAnchor = normalizeSurface(anchor);
+      if (normalizedAnchor.length === 0) {
+        continue;
+      }
+      if (normalizedAnchor === normalizedSeed) {
+        best = Math.max(best, SEED_EXACT_MATCH + normalizedAnchor.length);
+      } else if (normalizedAnchor.includes(normalizedSeed)) {
+        best = Math.max(best, SEED_CONTAINMENT_MATCH + normalizedSeed.length);
+      } else if (
+        normalizedSeed.includes(normalizedAnchor) &&
+        normalizedAnchor.length >= MIN_ANCHOR_LENGTH
+      ) {
+        best = Math.max(best, SEED_CONTAINMENT_MATCH + normalizedAnchor.length);
+      }
+    }
+    score += best;
+  }
+
+  return score;
+}
+
+/**
+ * Structural scoring: intersect query subject/relation refs with the
+ * episode's SemanticSpec symbols. userDefined symbols weigh more; an
+ * episode matching BOTH a subject and a relation ref receives an
+ * intersection bonus (M2B.5 scope 10e).
+ */
+function scoreStructuralSymbols(
+  episode: SemanticPriorEpisode,
+  query: Readonly<SemanticRetrievalQuery>
+): { score: number; structuralMatches: string[] } {
+  if (query.subjectRefs.length === 0 && query.relationRefs.length === 0) {
+    return { score: 0, structuralMatches: [] };
+  }
+
+  let score = 0;
+  let subjectMatched = false;
+  let relationMatched = false;
+  const structuralMatches: string[] = [];
+
+  for (const symbol of episode.semanticSpec.symbols) {
+    const symbolSurface = normalizeSurface(symbol.surface);
+    if (symbolSurface === "") {
+      continue;
+    }
+
+    for (const ref of query.subjectRefs) {
+      const refSurface = normalizeSurface(ref.surface);
+      if (refSurface === "") {
+        continue;
+      }
+      if (symbolSurface === refSurface) {
+        score += STRUCTURAL_EXACT_MATCH;
+        if (symbol.userDefined === true) {
+          score += STRUCTURAL_USER_DEFINED_BONUS;
+        }
+        subjectMatched = true;
+        structuralMatches.push(symbol.surface.trim());
+      } else if (
+        symbolSurface.includes(refSurface) ||
+        refSurface.includes(symbolSurface)
+      ) {
+        if (
+          Math.min(symbolSurface.length, refSurface.length) >=
+          MIN_ANCHOR_LENGTH
+        ) {
+          score += STRUCTURAL_PARTIAL_MATCH;
+          subjectMatched = true;
+        }
+      }
+    }
+
+    for (const ref of query.relationRefs) {
+      const refSurface = normalizeSurface(ref.surface);
+      if (refSurface === "") {
+        continue;
+      }
+      if (symbolSurface === refSurface) {
+        score += STRUCTURAL_EXACT_MATCH;
+        if (symbol.userDefined === true) {
+          score += STRUCTURAL_USER_DEFINED_BONUS;
+        }
+        relationMatched = true;
+        structuralMatches.push(symbol.surface.trim());
+      } else if (
+        symbolSurface.includes(refSurface) ||
+        refSurface.includes(symbolSurface)
+      ) {
+        if (
+          Math.min(symbolSurface.length, refSurface.length) >=
+          MIN_ANCHOR_LENGTH
+        ) {
+          score += STRUCTURAL_PARTIAL_MATCH;
+          relationMatched = true;
+        }
+      }
+    }
+  }
+
+  if (subjectMatched && relationMatched) {
+    score += STRUCTURAL_INTERSECTION_BONUS;
+  }
+
+  return { score, structuralMatches: [...new Set(structuralMatches)] };
+}
+
+/**
+ * Retrieve historical episodes using structure-aware seeding (M2B.5).
+ *
+ * The total score adjoins three deterministic channels:
+ *   1. Lexical baseline: the established flat anchor matching against the
+ *      current user text (unchanged from M2B.4).
+ *   2. Seed surfaces: query lexical seeds matched against anchors in both
+ *      containment directions.
+ *   3. Structural intersection: subject/relation refs intersected with
+ *      episode symbols, weighted by userDefined, with an intersection
+ *      bonus when both channels land on the same episode.
+ *
+ * With an empty query this degrades exactly to the flat lexical result —
+ * fail-safe, never fail-dangerous. No LLM call is involved.
+ */
+export function retrieveRelevantPriorsStructured(
+  state: SemanticPriorState,
+  currentUserText: string,
+  query: Readonly<SemanticRetrievalQuery>,
+  maxEpisodes: number = MAX_RETRIEVED_EPISODES
+): readonly SemanticPriorEpisode[] {
+  if (state.episodes.length === 0 || currentUserText.trim() === "") {
+    return deepFreeze([]);
+  }
+
+  const normalizedText = currentUserText
+    .normalize("NFKC")
+    .toLocaleLowerCase();
+
+  const scored: Array<{
+    episode: SemanticPriorEpisode;
+    score: number;
+  }> = [];
+
+  for (const episode of state.episodes) {
+    const lexical = scoreEpisodeLexical(episode, normalizedText);
+    const seedScore = scoreSeedSurfaces(episode, query.seedSurfaces);
+    const structural = scoreStructuralSymbols(episode, query);
+
+    const total = lexical.score + seedScore + structural.score;
+    if (total > 0) {
+      scored.push({ episode, score: total });
+    }
+  }
+
+  scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      b.episode.createdAt - a.episode.createdAt ||
+      a.episode.id.localeCompare(b.episode.id)
+  );
+
+  return deepFreeze(scored.slice(0, maxEpisodes).map((s) => s.episode));
 }
 
 // ── Rendering ──────────────────────────────────────────────────────────

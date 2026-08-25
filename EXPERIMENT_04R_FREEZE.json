@@ -1,0 +1,148 @@
+{
+  "EXPERIMENT_04R_DEFINITION_SHA256": "55711fa7ea44fb3979f618d04c7964d19214cef29525debdd28894a355899d5d",
+  "fixtureTableSha256": "128909ec3b740496671415cc3989228ec30b4bbf89724806f3930163b428b9d5",
+  "treatmentManifestSha256": "2603e22d59fcc609b1cfc0fa2ade5e9839843b517ee836a2da2ae6b636b7d265",
+  "commonTaskPromptSha256": "979ed816c0c7b5c771b7f5545b091a33aa9b634dfca7d1b9379bee3969484ea4",
+  "responseSchemaSha256": "7f31d0cd9f8f50f4e0918db5ab737725fa1933d9e6fd17120815622ef3c2f29e",
+  "auditManifestSha256": "0eab2e7097c76da5443a42c0565324163bf02d2f0c396958683516f2382879db",
+  "provider": {
+    "provider": "DeepSeek",
+    "model": "deepseek-v4-flash"
+  },
+  "fixtures": [
+    {
+      "fixtureId": "harbor-private-meaning",
+      "sourceSha256": "cdac3d261b652c85d0da31eb1a71e75d77a02e10a19864d7e7f3287f810ea8de",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "lantern-private-meaning",
+      "sourceSha256": "a5e2d4f1542f6c57fdff1ae2bcc58b733d4f7692c6abc8ede15dc5f78f415b03",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "compass-private-meaning",
+      "sourceSha256": "ae10120b95c5c383efe077b0086e63687a4ac1b930fe9a76bfa9f86b5bffe45d",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "field-overload",
+      "sourceSha256": "b25653833a1df852f36f58372f6430d4efe50f7cfcd0d0c594d6b79425dd6f10",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "proof-overload",
+      "sourceSha256": "156b16e430e6ecd5f70076318fe00776267d0d46e116ad0c697c0c33a1be212a",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "bridge-ambiguity",
+      "sourceSha256": "6af3a16fefee9d0b07be4659baf49375fa4943571ac3b35b1f3dec5f1bfd2b96",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "normal-operator-missing-assumption",
+      "sourceSha256": "892524e9c5e0beb5597ae38dd70c4aec3ad6c6ece02958d84da1db0178e655db",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "modus-ponens-precision",
+      "sourceSha256": "4594afb0b26aa80558f8eca49223db68f59e455fc8ac918032b03db4dc02dd58",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "delta-control",
+      "sourceSha256": "3d1f9e5afdbbdaccc7386f998e6fe6e0583afe7d48f64b6cda05e2f3403ff1ea",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "boundary-definition",
+      "sourceSha256": "62fa0048a99f8c17309e5c915624109fdb05a0feaf34a64be464c66b43fb50f1",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "spectral-proof-sketch",
+      "sourceSha256": "04df3114a91d2bd8ddc5fde33a054b33417cc1261e88bc69854335adefa60032",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    },
+    {
+      "fixtureId": "compass-revision",
+      "sourceSha256": "5111f34bf53c7033ff4b22708a5c6101cc92268db3e5245b67c8645a53d4e4fc",
+      "auditGates": {
+        "definitionSourceIndependent": true,
+        "relationsSourceIndependent": true,
+        "noSpeechActLeakage": true,
+        "noMissingConditionLeakage": true,
+        "noRevisionAnswerLeakage": true
+      }
+    }
+  ],
+  "trialCount": 180,
+  "seed": 240417
+}

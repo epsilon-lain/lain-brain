@@ -640,6 +640,24 @@ export function deriveAnalysisStatus(
     : "ready_for_review";
 }
 
+/**
+ * Legitimate FormalizationRecord verification states across the whole
+ * lifecycle (creation, statement typecheck, proof verification, error).
+ *
+ * Membership here is STATE VALIDITY only — it does not authorize any
+ * transition. The transition TO proof_verified is authorized exclusively
+ * by the trusted Lean-kernel verification boundary: the
+ * verifyLeanProofWithRunner success paths in LainBrainSession are the
+ * only runtime code permitted to set it.
+ */
+const LEGITIMATE_VERIFICATION_STATUSES: ReadonlySet<string> = new Set([
+  "not_checked",
+  "statement_typechecked",
+  "proof_verified",
+  "counterexample_verified",
+  "error"
+]);
+
 export function validateFormalizationInvariants(
   record: FormalizationRecord
 ): string[] {
@@ -698,21 +716,17 @@ export function validateFormalizationInvariants(
     }
   }
 
-  // 4. proof_verified can only be set by Lean kernel (Phase 3)
-  if (record.verificationStatus === "proof_verified") {
+  // 4. verificationStatus must be one of the legitimate lifecycle states.
+  //    This is state validity, not transition authorization: legitimate
+  //    Phase 2 (statement_typechecked) and Phase 3 (proof_verified)
+  //    records must validate cleanly. The only code permitted to
+  //    transition a record TO proof_verified is the trusted Lean-kernel
+  //    verification boundary (verifyLeanProofWithRunner success paths in
+  //    LainBrainSession).
+  if (!LEGITIMATE_VERIFICATION_STATUSES.has(record.verificationStatus)) {
     errors.push(
-      "verificationStatus proof_verified can only be set by Lean kernel " +
-      "(Phase 3)."
-    );
-  }
-
-  // 5. Phase 1 verificationStatus constraints
-  if (
-    record.verificationStatus !== "not_checked" &&
-    record.verificationStatus !== "error"
-  ) {
-    errors.push(
-      "Phase 1 only supports verificationStatus not_checked or error."
+      `verificationStatus "${String(record.verificationStatus)}" is not ` +
+      "a legitimate formalization verification state."
     );
   }
 
@@ -991,6 +1005,16 @@ export function deserializeFormalizationIndex(
       typeof record.claimId !== "string" ||
       !isMathSpeechActKind(record.speechAct) ||
       typeof record.aiNormalizedStatement !== "string"
+    ) {
+      continue;
+    }
+
+    // State validity at the load boundary: an out-of-set
+    // verificationStatus (e.g. a forged or corrupted status string) must
+    // never load as a record. Legitimate Phase 2/3 records load normally.
+    if (
+      typeof record.verificationStatus !== "string" ||
+      !LEGITIMATE_VERIFICATION_STATUSES.has(record.verificationStatus)
     ) {
       continue;
     }

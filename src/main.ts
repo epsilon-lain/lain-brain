@@ -24,6 +24,8 @@ import {
 import { getActiveImageProvider } from "./ProviderProfiles";
 import type { FormalizationIndex, LeanArtifactIndex } from "./FormalizationProtocol";
 import type { SemanticPriorState } from "./SemanticPrior";
+import type { BrainFormalizationMemory } from "./BrainFormalizationMemory";
+import type { LeanProofWorkspaceState } from "./LeanProofWorkspace";
 import { SpawnLeanRunner } from "./LeanRunner";
 import { LainBrainNamingModal } from "./LainBrainNamingModal";
 import {
@@ -73,6 +75,22 @@ export default class LainBrainPlugin extends Plugin {
     this.session.setFormalizationSaveCallback(() => {
       this.settings.formalizationIndex =
         this.session.getFormalizationIndex() as FormalizationIndex;
+      void this.saveSettings();
+    });
+    this.session.setBrainFormalizationMemory(
+      this.settings.brainFormalizationMemory
+    );
+    this.session.setBrainFormalizationMemorySaveCallback(() => {
+      this.settings.brainFormalizationMemory =
+        this.session.getBrainFormalizationMemory() as BrainFormalizationMemory;
+      void this.saveSettings();
+    });
+    this.session.setLeanProofWorkspaceState(
+      this.settings.leanProofWorkspace
+    );
+    this.session.setLeanProofWorkspaceSaveCallback(() => {
+      this.settings.leanProofWorkspace =
+        this.session.getLeanProofWorkspaceState() as LeanProofWorkspaceState;
       void this.saveSettings();
     });
 

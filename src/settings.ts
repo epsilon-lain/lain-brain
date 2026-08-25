@@ -27,6 +27,14 @@ import {
   migrateSemanticDeltaState
 } from "./SemanticDeltaState";
 import type { SemanticDeltaState } from "./SemanticDeltaState";
+import {
+  deserializeBrainFormalizationMemory
+} from "./BrainFormalizationMemory";
+import type { BrainFormalizationMemory } from "./BrainFormalizationMemory";
+import {
+  deserializeLeanProofWorkspace
+} from "./LeanProofWorkspace";
+import type { LeanProofWorkspaceState } from "./LeanProofWorkspace";
 
 export type LeanExecutionMode = "native" | "wsl";
 
@@ -41,6 +49,8 @@ export interface LainBrainSettings {
   leanArtifactIndex?: LeanArtifactIndex;
   semanticPriorState?: SemanticPriorState;
   semanticDeltaState?: SemanticDeltaState;
+  brainFormalizationMemory?: BrainFormalizationMemory;
+  leanProofWorkspace?: LeanProofWorkspaceState;
   chatSemanticDeltaAnalysisEnabled: boolean;
   leanExecutionMode: LeanExecutionMode;
   leanProjectRoot: string;
@@ -142,6 +152,12 @@ export function migrateLainBrainSettings(
     migrateSemanticPriorState(value.semanticPriorState);
   const semanticDeltaState =
     migrateSemanticDeltaState(value.semanticDeltaState);
+  const brainFormalizationMemory =
+    deserializeBrainFormalizationMemory(
+      value.brainFormalizationMemory
+    ).memory;
+  const leanProofWorkspace =
+    deserializeLeanProofWorkspace(value.leanProofWorkspace).state;
 
   const leanArgs = Array.isArray(value.leanArgs) &&
     value.leanArgs.every((a: unknown) => typeof a === "string")
@@ -164,6 +180,8 @@ export function migrateLainBrainSettings(
     leanArtifactIndex,
     semanticPriorState,
     semanticDeltaState,
+    brainFormalizationMemory,
+    leanProofWorkspace,
     chatSemanticDeltaAnalysisEnabled:
       value.chatSemanticDeltaAnalysisEnabled !== false,
     leanExecutionMode: value.leanExecutionMode === "wsl"

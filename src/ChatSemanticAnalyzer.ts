@@ -31,6 +31,12 @@ export interface ChatSemanticAnalysisRequest {
   readonly userEvidence: readonly ChatSemanticEvidence[];
   readonly latestAssistantResponse: string;
   readonly currentSession?: Readonly<ChatSemanticSession>;
+  /**
+   * M2B.6a-v0: temporary advisory sense context for this exchange.
+   * Context for the provisional hypothesis only — never user evidence,
+   * never persisted.
+   */
+  readonly senseContext?: string;
 }
 
 export type ChatSemanticAnalyzer = (
@@ -314,6 +320,12 @@ export const analyzeChatSemantics: ChatSemanticAnalyzer = async (
   const currentHypothesis = request.currentSession?.semanticSpec === undefined
     ? "None yet."
     : JSON.stringify(request.currentSession.semanticSpec);
+  const senseContextBlock = request.senseContext === undefined
+    ? []
+    : [
+        "Current sense context (temporary, advisory; context only, never user evidence):",
+        request.senseContext
+      ];
   const response = await requestDeepSeek(apiKey, [
     { role: "system", content: createChatSemanticAnalysisSystemPrompt() },
     {
@@ -323,6 +335,7 @@ export const analyzeChatSemantics: ChatSemanticAnalyzer = async (
         evidenceBlock,
         "Current provisional SemanticSpec:",
         currentHypothesis,
+        ...senseContextBlock,
         "Conversation (context only):",
         JSON.stringify(request.conversation),
         "Latest assistant response (context only, never user evidence):",

@@ -113,6 +113,28 @@ import {
 } from "./BrainGrowthPersistence";
 import { loadObsidianConceptIndex } from "./ObsidianConceptIndex";
 import {
+  activateRuntimeSenses,
+  detectSessionDirection,
+  type SenseActivationInput,
+  type SenseActivationReport
+} from "./ContextualSenseActivation";
+import {
+  conceptSurfaces,
+  containsSurfaceMention,
+  deriveDistinctiveTerms,
+  findConceptSurfaceMentions,
+  normalizeSurfaceText,
+  projectRuntimeSenseCandidates,
+  type RuntimeSenseCandidate
+} from "./RuntimeSenseProjection";
+import {
+  degradedSenseContext,
+  renderSenseContextAnnotation,
+  type RuntimeSenseContext
+} from "./ContextualSensePrompt";
+import { extractLexicalSurfaces } from "./SemanticRetrievalQuery";
+import type { ConceptNode } from "./BrainGrowth";
+import {
   BrainFormalizationWorkflow,
   buildBrainFormalizationEvaluation,
   type BrainFormalizationLinkage,
@@ -645,6 +667,23 @@ export class LainBrainSession {
   private semanticPriorState: SemanticPriorState =
     createEmptySemanticPriorState();
   private lastInjectedPriorIds: readonly string[] = [];
+  /**
+   * M2B.6a-v0: transient result of the contextual-sense experiment for the
+   * last foreground send. Inspectable for tests/diagnostics; never persisted.
+   */
+  private lastSenseContext?: RuntimeSenseContext;
+  /**
+   * M2B.6a-v0: transient session directions (V3), conceptId → senseId.
+   * Set from explicit user direction statements and cleared by clearChat().
+   * Never persisted — v0 has no sense write path.
+   */
+  private readonly senseSessionDirections = new Map<string, string>();
+  /**
+   * M2B.6a-v0: cached read-only concept index for the sense experiment.
+   * Loaded once per session (one vault scan per session); stale concept
+   * notes require a plugin reload. v0 limitation, documented.
+   */
+  private conceptIndexCache?: readonly ConceptNode[];
   private chatSemanticQueue: Promise<void> = Promise.resolve();
   /** Queue-owned semantic state, isolated by foreground chat epoch. */
   private readonly chatSemanticSessionsByEpoch =
@@ -905,9 +944,14 @@ export class LainBrainSession {
   /**
    * Preserve the established deterministic prior selection and bookkeeping
    * while allowing the foreground adapter to consume exact episode objects.
+   *
+   * M2B.6a-v0: `extraSeedSurfaces` are additive sense-activated terms.
+   * They join the query's seed surfaces and never suppress the existing
+   * channels, episodes, or the M2B.5 relevance-preserving quota behavior.
    */
   private selectRelevantSemanticPriorEpisodes(
-    currentUserText: string
+    currentUserText: string,
+    extraSeedSurfaces: readonly string[] = []
   ): readonly SemanticPriorEpisode[] {
     if (currentUserText.trim() === "") {
       this.lastInjectedPriorIds = [];
@@ -922,13 +966,179 @@ export class LainBrainSession {
       utteranceText: currentUserText,
       semanticSpec: this.chatSemanticSession?.semanticSpec
     });
+    const effectiveQuery = extraSeedSurfaces.length === 0
+      ? query
+      : Object.freeze({
+          ...query,
+          seedSurfaces: Object.freeze([
+            ...query.seedSurfaces,
+            ...extraSeedSurfaces.map(normalizeSurfaceText)
+              .filter((surface) => surface !== "")
+          ])
+        });
     const relevant = retrieveRelevantPriorsStructured(
       this.semanticPriorState,
       currentUserText,
-      query
+      effectiveQuery
     );
     this.lastInjectedPriorIds = getLastInjectedSemanticPriorIds(relevant);
     return relevant;
+  }
+
+  /**
+   * M2B.6a-v0: transient contextual-sense experiment (design §13).
+   *
+   * Projects the EXISTING ConceptNode authority buckets into runtime sense
+   * candidates, activates them with pure deterministic signals, and returns
+   * a transient context: annotation text + additive retrieval seed terms +
+   * similarity-only related concepts (distinct referents).
+   *
+   * Read-only with respect to the Brain: no ConceptNode mutation, no
+   * persistence, no provider calls. Any failure degrades to the current
+   * behavior exactly (fail-safe).
+   */
+  private async loadCachedConceptIndex(): Promise<readonly ConceptNode[]> {
+    if (this.conceptIndexCache !== undefined) {
+      return this.conceptIndexCache;
+    }
+    const concepts = Object.freeze(
+      (await loadObsidianConceptIndex(this.app)).index.concepts
+    );
+    this.conceptIndexCache = concepts;
+    return concepts;
+  }
+
+  private async buildRuntimeSenseContext(
+    message: string,
+    priorEpisodes: readonly SemanticPriorEpisode[]
+  ): Promise<RuntimeSenseContext> {
+    try {
+      const concepts = await this.loadCachedConceptIndex();
+
+      const reports: SenseActivationReport[] = [];
+      const candidatesById = new Map<string, RuntimeSenseCandidate>();
+      const extraSeeds: string[] = [];
+      const matchedConceptIds = new Set<string>();
+
+      for (const concept of concepts) {
+        const mentions = findConceptSurfaceMentions(concept, message);
+        if (mentions.length === 0) {
+          continue;
+        }
+        matchedConceptIds.add(concept.id);
+        const surface = mentions[0]!;
+        const candidates = projectRuntimeSenseCandidates(concept, surface);
+        const distinctMeanings = new Set(
+          candidates.map((candidate) => candidate.meaning.trim())
+        );
+        if (candidates.length < 2 || distinctMeanings.size < 2) {
+          continue;
+        }
+        const surfaces = conceptSurfaces(concept);
+        for (const candidate of candidates) {
+          candidatesById.set(candidate.id, candidate);
+        }
+
+        const input: SenseActivationInput = {
+          conceptId: concept.id,
+          surface,
+          conceptSurfaces: surfaces,
+          candidates,
+          utterance: message,
+          priorEpisodes,
+          sessionDirections: this.senseSessionDirections
+        };
+        // V3: explicit direction statements are recorded as transient
+        // session directions (expire with the session; never persisted).
+        const detected = detectSessionDirection(input);
+        if (detected !== undefined) {
+          this.senseSessionDirections.set(
+            detected.conceptId,
+            detected.senseId
+          );
+        }
+        const report = activateRuntimeSenses(input);
+        reports.push(report);
+
+        // Additive retrieval seeds from the selected sense (or the
+        // strongest candidate when unresolved).
+        const seedSenseId = report.selectedSenseId ??
+          [...report.entries].sort(
+            (a, b) => b.score - a.score ||
+              a.senseId.localeCompare(b.senseId)
+          )[0]?.senseId;
+        if (seedSenseId !== undefined) {
+          const seedCandidate = candidatesById.get(seedSenseId);
+          if (seedCandidate !== undefined) {
+            for (const term of deriveDistinctiveTerms(
+              seedCandidate,
+              surfaces
+            )) {
+              extraSeeds.push(term);
+            }
+          }
+        }
+      }
+
+      // Deduplicate, drop terms already present in the utterance, cap.
+      const utteranceSurfaces = new Set(
+        extractLexicalSurfaces(message).map(normalizeSurfaceText)
+      );
+      const uniqueSeeds = [...new Set(extraSeeds.map(normalizeSurfaceText))]
+        .filter((term) =>
+          term !== "" && !utteranceSurfaces.has(term)
+        )
+        .sort()
+        .slice(0, 6);
+
+      // Concepts whose episodes were retrieved by similarity only: the
+      // utterance does not mention their surface, so they are labeled
+      // "related meaning / distinct referent" — never identity.
+      const relatedOnly: string[] = [];
+      for (const concept of concepts) {
+        if (matchedConceptIds.has(concept.id)) {
+          continue;
+        }
+        const surfaces = conceptSurfaces(concept);
+        const mentionedInEpisodes = surfaces.some((surface) =>
+          priorEpisodes.some((episode) => {
+            const text = [
+              ...episode.evidenceRefs.map((ref) => ref.snapshot),
+              ...episode.anchors
+            ].join(" ");
+            return containsSurfaceMention(text, surface);
+          })
+        );
+        if (mentionedInEpisodes) {
+          relatedOnly.push(surfaces[0] ?? concept.title);
+        }
+      }
+      const uniqueRelatedOnly = [...new Set(relatedOnly)].slice(0, 4);
+
+      const annotation = renderSenseContextAnnotation(
+        reports,
+        candidatesById,
+        uniqueRelatedOnly
+      );
+      if (annotation === "") {
+        return degradedSenseContext();
+      }
+      return Object.freeze({
+        reports: Object.freeze(reports),
+        extraSeedSurfaces: Object.freeze(uniqueSeeds),
+        relatedOnlySurfaces: Object.freeze(uniqueRelatedOnly),
+        annotation,
+        degraded: false
+      });
+    } catch {
+      // Fail-safe: any sense-layer failure degrades to current behavior.
+      return degradedSenseContext();
+    }
+  }
+
+  /** M2B.6a-v0 diagnostics: transient sense context of the last send. */
+  getLastSenseContext(): Readonly<RuntimeSenseContext> | undefined {
+    return this.lastSenseContext;
   }
 
   /** Sanitized last-error diagnostics. Secrets are redacted before storage. */
@@ -4959,6 +5169,9 @@ export class LainBrainSession {
     }
     this.chatSemanticFailureCount = 0;
     this.lastInjectedPriorIds = [];
+    // M2B.6a-v0: transient sense state expires with the session.
+    this.lastSenseContext = undefined;
+    this.senseSessionDirections.clear();
     this.chatSemanticDeltaEpoch += 1;
     if (this.activeChatSemanticDeltaProposal?.status === "active") {
       this.seenChatSemanticDeltaFingerprints.add(
@@ -5311,9 +5524,28 @@ export class LainBrainSession {
       // changes only representation/injection, never retrieval policy.
       const selectedPriorEpisodes =
         this.selectRelevantSemanticPriorEpisodes(message);
-      const priorContext = selectedPriorEpisodes.length === 0
+
+      // ── M2B.6a-v0: contextual sense experiment (additive, fail-safe) ──
+      // The sense layer projects the existing ConceptNode buckets into
+      // transient candidates, activates them with pure deterministic
+      // signals, and yields an advisory annotation plus additive retrieval
+      // seed terms. On any failure it degrades to the current behavior.
+      const senseContext = await this.buildRuntimeSenseContext(
+        message,
+        selectedPriorEpisodes
+      );
+      this.lastSenseContext = senseContext;
+      const effectivePriorEpisodes =
+        !senseContext.degraded && senseContext.extraSeedSurfaces.length > 0
+          ? this.selectRelevantSemanticPriorEpisodes(
+              message,
+              senseContext.extraSeedSurfaces
+            )
+          : selectedPriorEpisodes;
+      const senseAnnotation = senseContext.annotation;
+      const priorContext = effectivePriorEpisodes.length === 0
         ? ""
-        : renderPriorsForPrompt(selectedPriorEpisodes);
+        : renderPriorsForPrompt(effectivePriorEpisodes);
 
       let foregroundContext: Readonly<NormalChatForegroundContext> = {
         mode: "legacy_fallback"
@@ -5325,11 +5557,11 @@ export class LainBrainSession {
             text: userMessage.content,
             messageId: userMessage.id
           },
-          selectedSemanticPriorEpisodes: selectedPriorEpisodes
+          selectedSemanticPriorEpisodes: effectivePriorEpisodes
         });
         const expectedExternalContext =
           this.activeFile !== null ||
-          selectedPriorEpisodes.length > 0;
+          effectivePriorEpisodes.length > 0;
         if (
           expectedExternalContext &&
           prepared.promptSection.items.length === 0
@@ -5353,14 +5585,16 @@ export class LainBrainSession {
             this.getConversationHistory(),
             undefined,
             undefined,
-            foregroundContext
+            foregroundContext,
+            senseAnnotation !== "" ? senseAnnotation : undefined
           )
         : await this.askText(
             apiKey,
             this.getConversationHistory(),
             this.activeNoteContext,
             priorContext !== "" ? priorContext : undefined,
-            foregroundContext
+            foregroundContext,
+            senseAnnotation !== "" ? senseAnnotation : undefined
           );
       const response = await this.reviewAndRepairLatex(
         apiKey,
@@ -5379,7 +5613,8 @@ export class LainBrainSession {
       this.enqueueChatSemanticAnalysis(
         apiKey,
         userMessage,
-        response
+        response,
+        senseAnnotation !== "" ? senseAnnotation : undefined
       );
       if (pdfAttachments.length === 0) {
         this.enqueueChatSemanticDeltaAnalysis(
@@ -5509,7 +5744,8 @@ export class LainBrainSession {
   private enqueueChatSemanticAnalysis(
     apiKey: string,
     userMessage: StoredMessage,
-    latestAssistantResponse: string
+    latestAssistantResponse: string,
+    senseContextAnnotation?: string
   ): void {
     // Capture the completed foreground exchange as an immutable queue job.
     const captureEpoch = this.foregroundSessionEpoch;
@@ -5549,7 +5785,10 @@ export class LainBrainSession {
           conversation,
           userEvidence,
           latestAssistantResponse,
-          currentSession
+          currentSession,
+          ...(senseContextAnnotation === undefined
+            ? {}
+            : { senseContext: senseContextAnnotation })
         });
       } catch (error) {
         // Semantic shadow analysis is deliberately fail-open.

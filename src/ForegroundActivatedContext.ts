@@ -6,6 +6,7 @@ import {
 } from "./ActivationSeed";
 import {
   materializeActivatedContext,
+  resolveActivatedContextBudget,
   type ActivatedContextBudget,
   type ActivatedContextBundle
 } from "./ActivatedContextMaterialization";
@@ -58,7 +59,18 @@ export interface ForegroundActivatedContext {
 export async function prepareForegroundActivatedContext(
   options: Readonly<ForegroundActivatedContextOptions>
 ): Promise<ForegroundActivatedContext> {
-  const episodes = options.selectedSemanticPriorEpisodes ?? [];
+  // Stage 4B materialization admits at most maxSemanticEpisodeItems
+  // episode targets, in traversal order. Stage 3 orders seed targets by
+  // target key — for episodes, the episode id — NOT by retrieval relevance.
+  // Bridging more episodes than the materialization quota therefore lets
+  // arbitrary id-ordered episodes displace the most relevant ones. Slice
+  // the caller-selected ranked list to the exact quota before seeding so
+  // retrieval relevance order is preserved end to end.
+  const materializationBudget = resolveActivatedContextBudget(
+    options.materializationBudget ?? {}
+  );
+  const episodes = (options.selectedSemanticPriorEpisodes ?? [])
+    .slice(0, materializationBudget.maxSemanticEpisodeItems);
   const episodeById = new Map<string, Readonly<SemanticPriorEpisode>>();
   for (const episode of episodes) {
     if (!episodeById.has(episode.id)) {

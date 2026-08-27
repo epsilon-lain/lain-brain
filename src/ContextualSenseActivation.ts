@@ -355,6 +355,64 @@ export function detectSessionDirection(
   return undefined;
 }
 
+// ── Fresh referent detection (deployed failure: X filled with 未来) ─────
+
+/**
+ * Fresh-referent surfaces are short previously-unresolved tokens the user
+ * introduces in a declarative semantic frame:
+ *   "X 对我来说是某种自由" / "Y 是我给某个东西起的名字" / "Z 对我意味着……"
+ *
+ * The safe default (M2B.6a design, Fresh Referent Principle): such a
+ * surface is a DISTINCT PROVISIONAL REFERENT — not a placeholder waiting
+ * to be filled, not an alias of the most recently activated concept, not
+ * a coreference candidate. The model-facing annotation (§8) tells the
+ * model exactly that; identity still requires independent user-authored
+ * identity evidence ("X 就是未来", "这里 X 指未来").
+ *
+ * Conservative by construction: only short latin tokens (1-3 letters) in
+ * explicit declarative frames, never stored concept surfaces, and a small
+ * pronoun/stopword exclusion. False negatives are acceptable; a false
+ * positive merely marks a distinct provisional referent, which is always
+ * the safe default.
+ */
+const FRESH_REFERENT_STOPWORDS = new Set([
+  "i", "me", "he", "we", "it", "no", "ok", "id", "la", "vs"
+]);
+
+// Boundary class includes ASCII punctuation: the utterance is NFKC-
+// normalized first, which maps fullwidth ，。；：！？ to , . ; : ! ?.
+const FRESH_REFERENT_PATTERN =
+  /(?:^|[\s,.;:!?，。；：!?])([a-z]{1,3})\s*(?:对我来说|对我|在我看来|对你来说|对你)?\s*(?:就)?\s*(?:是|表示|代表|意味着|指)/iu;
+
+export function detectFreshReferentSurfaces(
+  utterance: string,
+  knownSurfaces: readonly string[]
+): readonly string[] {
+  const normalizedUtterance = normalizeSurfaceText(utterance);
+  const known = new Set(
+    knownSurfaces.map((surface) => normalizeSurfaceText(surface))
+      .filter((surface) => surface !== "")
+  );
+  const found: string[] = [];
+  const seen = new Set<string>();
+
+  const pattern = new RegExp(FRESH_REFERENT_PATTERN.source, "giu");
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(normalizedUtterance)) !== null) {
+    const token = match[1]!.toLowerCase();
+    if (
+      !FRESH_REFERENT_STOPWORDS.has(token) &&
+      !known.has(token) &&
+      !seen.has(token)
+    ) {
+      seen.add(token);
+      found.push(token);
+    }
+  }
+
+  return Object.freeze(found);
+}
+
 // ── Activation ──────────────────────────────────────────────────────────
 
 export function activateRuntimeSenses(

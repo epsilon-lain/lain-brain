@@ -27,8 +27,10 @@ export const SENSE_CONTEXT_POLICY = [
   "Sense context (temporary, advisory):",
   "This context is temporary and advisory. Authority describes provenance,",
   "not contextual probability. Related context establishes similarity only",
-  "— never infer same object, alias, or coreference from similarity or",
-  "activation. Identity requires a user-authored equivalence statement."
+  "— never infer same object, alias, or coreference from similarity,",
+  "activation, discourse adjacency, co-text, or retrieval. Identity",
+  "requires independent user-authored identity evidence (for example",
+  "\"X 就是未来\", \"这里 X 指未来\", \"X 是未来的另一个名字\")."
 ].join("\n");
 
 /** Compact, display-only, derived at render time. Never confirmed. */
@@ -68,6 +70,12 @@ export interface RuntimeSenseContext {
   readonly extraSeedSurfaces: readonly string[];
   /** Concepts retrieved by similarity only — distinct referents. */
   readonly relatedOnlySurfaces: readonly string[];
+  /**
+   * Fresh surfaces introduced by the user in a declarative frame
+   * ("X 对我来说是某种自由"). Marked as distinct provisional referents,
+   * never placeholders to fill (Fresh Referent Principle).
+   */
+  readonly freshReferentSurfaces: readonly string[];
   readonly annotation: string;
   readonly degraded: boolean;
 }
@@ -77,6 +85,7 @@ export function degradedSenseContext(): RuntimeSenseContext {
     reports: Object.freeze([]),
     extraSeedSurfaces: Object.freeze([]),
     relatedOnlySurfaces: Object.freeze([]),
+    freshReferentSurfaces: Object.freeze([]),
     annotation: "",
     degraded: true
   });
@@ -89,11 +98,13 @@ export function degradedSenseContext(): RuntimeSenseContext {
 export function renderSenseContextAnnotation(
   reports: readonly SenseActivationReport[],
   candidatesById: ReadonlyMap<string, RuntimeSenseCandidate>,
-  relatedOnlySurfaces: readonly string[]
+  relatedOnlySurfaces: readonly string[],
+  freshReferentSurfaces: readonly string[]
 ): string {
   if (
     reports.length === 0 &&
-    (relatedOnlySurfaces.length === 0)
+    relatedOnlySurfaces.length === 0 &&
+    freshReferentSurfaces.length === 0
   ) {
     return "";
   }
@@ -146,6 +157,18 @@ export function renderSenseContextAnnotation(
       append(
         "current-context: unresolved (multiple plausible senses)"
       );
+    }
+  }
+
+  if (freshReferentSurfaces.length > 0) {
+    for (const surface of freshReferentSurfaces.slice(0, 4)) {
+      if (!append(
+        `fresh referent: ${surface} — a distinct provisional referent, ` +
+        "not a placeholder to fill, not an alias of a related or recently " +
+        "activated concept. Identity requires user-authored identity evidence."
+      )) {
+        break;
+      }
     }
   }
 

@@ -114,6 +114,7 @@ import {
 import { loadObsidianConceptIndex } from "./ObsidianConceptIndex";
 import {
   activateRuntimeSenses,
+  detectFreshReferentSurfaces,
   detectSessionDirection,
   type SenseActivationInput,
   type SenseActivationReport
@@ -1115,10 +1116,22 @@ export class LainBrainSession {
       }
       const uniqueRelatedOnly = [...new Set(relatedOnly)].slice(0, 4);
 
+      // Fresh Referent Principle: surfaces the user just introduced in a
+      // declarative frame are distinct provisional referents — never
+      // placeholders to fill from adjacent discourse or related priors.
+      const knownSurfaces = concepts.flatMap((concept) =>
+        conceptSurfaces(concept)
+      );
+      const freshSurfaces = detectFreshReferentSurfaces(
+        message,
+        knownSurfaces
+      );
+
       const annotation = renderSenseContextAnnotation(
         reports,
         candidatesById,
-        uniqueRelatedOnly
+        uniqueRelatedOnly,
+        freshSurfaces
       );
       if (annotation === "") {
         return degradedSenseContext();
@@ -1127,6 +1140,7 @@ export class LainBrainSession {
         reports: Object.freeze(reports),
         extraSeedSurfaces: Object.freeze(uniqueSeeds),
         relatedOnlySurfaces: Object.freeze(uniqueRelatedOnly),
+        freshReferentSurfaces: Object.freeze(freshSurfaces),
         annotation,
         degraded: false
       });

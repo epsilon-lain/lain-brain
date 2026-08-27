@@ -28,6 +28,7 @@ const built = await esbuild.build({
       "export {",
       "  activateRuntimeSenses,",
       "  detectSessionDirection,",
+      "  detectFreshReferentSurfaces,",
       "  MIN_CONTEXT_EVIDENCE,",
       "  CLEAR_WIN_MARGIN",
       "} from './src/ContextualSenseActivation';",
@@ -96,6 +97,7 @@ const {
   serializeConceptNodeIntoMarkdown,
   activateRuntimeSenses,
   detectSessionDirection,
+  detectFreshReferentSurfaces,
   TFile
 } = mod.exports;
 
@@ -551,6 +553,13 @@ function senseAnnotationOf(call) {
   assert.equal(context.reports.length, 0,
     "X is not a stored concept — no sense candidates, no identity machinery");
   assert.ok(context.relatedOnlySurfaces.includes("蓝璃"));
+  // Fresh Referent Principle: X itself is marked a distinct provisional
+  // referent, never a placeholder to fill.
+  assert.ok(context.freshReferentSurfaces.includes("x"));
+  assert.ok(annotation.includes("fresh referent: x"));
+  assert.ok(annotation.includes("not a placeholder to fill"));
+  assert.ok(annotation.includes("discourse adjacency"),
+    "generalized identity policy covers discourse adjacency");
 
   // The model-facing prompt forbids identity inference from similarity.
   assert.ok(
@@ -659,6 +668,113 @@ function senseAnnotationOf(call) {
       );
     }
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// TEST B2 — fresh referent detection (unit)
+// ═════════════════════════════════════════════════════════════════════════
+
+{
+  const detect = (utterance, known = []) =>
+    JSON.stringify([...detectFreshReferentSurfaces(utterance, known)]);
+
+  assert.equal(
+    detect("X 对我来说是某种自由"),
+    JSON.stringify(["x"]),
+    "declarative fresh surface → distinct provisional referent"
+  );
+  assert.equal(detect("Y 是我给某个东西起的名字"), JSON.stringify(["y"]));
+  assert.equal(detect("Z 对我意味着自由"), JSON.stringify(["z"]));
+  assert.equal(
+    detect("X 就是未来"),
+    JSON.stringify(["x"]),
+    "user-supplied identity evidence still marks X fresh (the user's own statement carries the identity)"
+  );
+  assert.equal(
+    detect("未来这个词读 mirai 吗"),
+    JSON.stringify([]),
+    "no declarative fresh frame"
+  );
+  assert.equal(
+    detect("mirai 对我来说是助手", ["mirai"]),
+    JSON.stringify([]),
+    "stored concept surfaces are never fresh"
+  );
+  assert.equal(detect("X"), JSON.stringify([]), "bare token without a frame");
+  assert.equal(detect("no 是对的"), JSON.stringify([]), "pronoun stopwords excluded");
+  assert.equal(
+    detect("X 对我来说是某种自由，Y 是我起的名字", []),
+    JSON.stringify(["x", "y"]),
+    "multiple fresh surfaces"
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// TEST E2 — fresh referent (deployed failure: X filled with 未来)
+// ═════════════════════════════════════════════════════════════════════════
+
+{
+  const mirai = makeMiraiConcept();
+  const markdown = conceptMarkdown(mirai, `# mirai\n\n${MIRAI_ASSISTANT}\n`);
+  const vault = makeVaultApp([{ path: "Lain Brain/Notes/mirai.md", markdown }]);
+  const { session, capturedCalls } = createTestSession(vault.app);
+
+  // Build the deployed context: recent discourse about 未来 plus the
+  // resulting prior episodes.
+  await sendAndWait(session, "未来这个词读 mirai 吗");
+
+  await sendAndWait(session, "X 对我来说是某种自由");
+  const call = lastCall(capturedCalls);
+  const annotation = senseAnnotationOf(call);
+  const context = session.getLastSenseContext();
+
+  // X is marked as a distinct provisional referent — not a placeholder.
+  assert.equal(context.degraded, false);
+  assert.ok(context.freshReferentSurfaces.includes("x"));
+  assert.equal(context.reports.length, 0, "X is not a stored concept");
+  assert.ok(annotation.includes("fresh referent: x"));
+  assert.ok(annotation.includes("distinct provisional referent"));
+  assert.ok(annotation.includes("not a placeholder to fill"));
+
+  // Generalized identity policy covers discourse adjacency.
+  assert.ok(annotation.includes("discourse adjacency"));
+  assert.ok(
+    call.systemPrompt.includes("discourse adjacency"),
+    "model-facing prompt carries the generalized identity policy"
+  );
+
+  // No identity/fill suggestion from the sense layer itself. (The policy
+  // preamble legitimately names 未来 inside identity-EVIDENCE examples;
+  // the fresh-referent line itself must never suggest a fill.)
+  const freshLine = annotation
+    .split("\n")
+    .find((line) => line.startsWith("fresh referent:"));
+  assert.ok(freshLine !== undefined);
+  assert.ok(
+    !freshLine.includes("未来"),
+    "fresh-referent line must not suggest X = 未来"
+  );
+  assert.ok(
+    !annotation.match(/\bsame_as\b|\balias_of\b|\brefers_to\b/u),
+    "no generated identity annotation"
+  );
+
+  // The recent 未来 discourse remains available as conversation context
+  // (relatedness preserved; identity never asserted).
+  const historyText = call.conversationHistory
+    .map((message) => message.content)
+    .join("\n");
+  assert.ok(historyText.includes("未来这个词读 mirai 吗"));
+
+  // No persistent mutation anywhere.
+  assert.equal(vault.writes.create, 0);
+  assert.equal(vault.writes.modify, 0);
+  assert.equal(vault.writes.trash, 0);
+  assert.equal(
+    vault.contentByPath.get("Lain Brain/Notes/mirai.md"),
+    markdown,
+    "concept note byte-identical"
+  );
 }
 
 console.log("CONTEXTUAL-SENSE-ACTIVATION PASS");

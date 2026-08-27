@@ -238,12 +238,40 @@ improves Brain behavior *before* making any representation permanent (§13).
   concept itself → a **new sense** (user-authored, unconfirmed until
   confirmed). Revisions are history, not senses (§9 scenario C).
 
-**IDENTITY INVARIANT (semantic relevance ≠ referential identity).**
-A semantically similar or highly activated concept may be injected as
-*related context*, but activation or similarity alone must NEVER establish
-same_as, alias_of, refers_to, coreference, or a concept merge. Identity
-claims require independent supporting evidence of their own; similarity is
-context, not evidence. (Concept activation ≠ same-as / alias / coreference.)
+**IDENTITY INVARIANT — semantic relevance, activation, adjacency, and
+co-text/retrieval are each ≠ referential identity.**
+
+- SEMANTIC RELEVANCE ≠ REFERENTIAL IDENTITY
+- CONTEXTUAL ACTIVATION ≠ REFERENTIAL IDENTITY
+- DISCOURSE ADJACENCY ≠ REFERENTIAL IDENTITY
+- CO-TEXT / RETRIEVAL ≠ REFERENTIAL IDENTITY
+
+A semantically similar, highly activated, recently discussed, or
+retrieved concept may be injected as *related context*, but none of these
+may ever establish same_as, alias_of, refers_to, coreference, or a
+concept merge. Identity/coreference claims require **independent
+identity evidence** — e.g. "X 就是未来", "这里 X 指未来", "X 是未来的另一
+个名字", "我说 X 的时候就是指未来". Similarity, activation, adjacency,
+and retrieval are context, not evidence.
+
+**FRESH REFERENT PRINCIPLE.** When the user explicitly introduces a
+previously unresolved surface in a declarative semantic statement —
+"X 对我来说是某种自由", "Y 是我给某个东西起的名字", "Z 对我意味着……" —
+the safe default is: treat that surface as a **distinct provisional
+referent**. It is NOT:
+
+- a placeholder / empty slot waiting to be filled,
+- an alias of the most recently activated or discussed concept,
+- a coreference candidate,
+- the same entity as a semantically related prior,
+
+unless the user's language supplies independent identity/coreference
+evidence. A NEW EXPLICIT SURFACE ≠ AN UNBOUND PLACEHOLDER BY DEFAULT.
+(Deployed failure: "X 对我来说是某种自由" after a mirai/未来 discussion
+was answered with "X 是一个空的格子…最自然的填法大概是未来" — the fix,
+§8/§13, marks fresh surfaces as distinct provisional referents in the
+model-facing context and forbids identity inference from discourse
+adjacency.)
 
 **AUTHORITY/RELEVANCE INVARIANT.**
 Authority is not contextual evidence. A sense's authority class never
@@ -550,14 +578,18 @@ steps are `LainBrainSession.send()` → `selectRelevantSemanticPriorEpisodes`
    - **Identity safety in related-context injection.** Whenever a concept
      is injected on similarity without identity evidence, it is marked
      "related (similar meaning), distinct referent". The prompt policy
-     gains one line: "Related context establishes similarity only. Never
-     infer same object / alias / coreference from similarity or
-     activation. Identity requires a user-authored equivalence statement
-     or a user-confirmed alias/merge." The safe default model-facing
-     stance for similarity-without-identity is exactly: "X is currently
-     treated as a distinct referent. Its meaning resembles the previously
-     known 蓝璃 / 离开封闭系统 context, but there is no evidence that X
-     and 蓝璃 are the same object." (See §9 scenario D.)
+     line: "Related context establishes similarity only — never infer
+     same object, alias, or coreference from similarity, activation,
+     discourse adjacency, co-text, or retrieval. Identity requires
+     independent user-authored identity evidence." **Fresh Referent
+     Principle (§3)**: surfaces the user introduces in a declarative
+     frame ("X 对我来说是某种自由") are annotated as distinct
+     provisional referents — "not a placeholder to fill, not an alias of
+     a related or recently activated concept". The safe default
+     model-facing stance for the deployed X case is exactly:
+     "这里先把 X 当作一个独立的指称。你说它对你来说和某种自由有关。
+     刚才的'未来'在语义上可能相关，但目前没有证据说明 X 就是未来，
+     所以我不会把它们合并。" (See §9 scenario E.)
 6. **Interpretation effect**: the active sense feeds the shadow semantic
    analyzer request as context (same annotation block), so the session's
    working hypothesis records *which sense* it built on — but the
@@ -702,6 +734,33 @@ New user statement: **"X 对我来说是某种自由。"**
   eventually seed a concept *for X* through the existing flows (user
   confirmation), but it never touches 蓝璃's senses.
 
+**SECOND DEPLOYED OCCURRENCE (same utterance, after the mirai/未来
+discussion):** the Brain no longer guessed X = 蓝璃 (identity-safety PASS),
+but answered **"X 是一个空的格子"** and **"最自然的填法大概是未来"**, then
+asked whether X was 未来. Forensic cause (traced through the actual
+runtime): the X turn ran in the same session right after A1–A4, so the
+conversation history contained the whole 未来 discussion (discourse
+adjacency); retrieval also surfaced the previous X-turn episode whose own
+shadow hypothesis said "上下文中最可能指向'未来'" plus an old episode
+whose anchors contain "占位符" (placeholder priming); the sense annotation
+covered only similarity/activation grounds and said nothing about X
+itself. The model therefore treated the new surface as an unbound slot
+and filled it from adjacent discourse — **DISCOURSE PROXIMITY ≠
+REFERENTIAL IDENTITY** and **A NEW EXPLICIT SURFACE ≠ AN UNBOUND
+PLACEHOLDER BY DEFAULT** (Fresh Referent Principle, §3).
+
+- **Selected behavior (v0 fix)**: the annotation now marks the fresh
+  surface as a distinct provisional referent ("not a placeholder to fill,
+  not an alias of a related or recently activated concept") and the
+  identity policy enumerates discourse adjacency, co-text, and retrieval
+  as non-identity grounds. The safe model-facing stance is exactly:
+  > "这里先把 X 当作一个独立的指称。你说它对你来说和某种自由有关。
+  > 刚才的'未来'在语义上可能相关，但目前没有证据说明 X 就是未来，
+  > 所以我不会把它们合并。"
+- **Relatedness is preserved, identity is not**: 未来/mirai content may
+  remain in the conversation and retrieval context; only the identity
+  inference is forbidden.
+
 ---
 
 ## 10. Migration & backward compatibility — FUTURE PERSISTENCE PHASE (design target, NOT v0 scope)
@@ -799,6 +858,7 @@ Lightweight; no ontology editor.
 | Properties mixed with senses | Same boundary test; scenario B documents the 蓝璃 case; test fixtures encode it. |
 | Prompt context inflation | The sense annotation block is hard-capped (only utterance-mentioned concepts with ≥2 senses; a few lines each; counted in the existing prompt budget). |
 | Similarity mistaken for referential identity (false coreference — deployed failure: X ≈ 蓝璃) | Identity invariant (§3): similarity/activation never implies same_as/alias_of/refers_to/coreference/merge. Related context is injected with an explicit distinct-referent stance (§8); identity questions arise only from user signals (§7 item 6); identity mutations happen only through user-confirmed flows. Covered by a mandatory identity-safety e2e test (§13.6). |
+| Discourse adjacency mistaken for coreference / fresh surface treated as an unbound placeholder (deployed failure: X filled with 未来) | Fresh Referent Principle (§3): declaratively introduced fresh surfaces are annotated as distinct provisional referents — never placeholders; the identity policy explicitly forbids inference from discourse adjacency, co-text, and retrieval (§8). Covered by the fresh-referent unit + e2e tests (§13.6). |
 
 ---
 
@@ -894,9 +954,18 @@ Fallback = current behavior exactly (§8 fail-safe).
    unchanged after the turn.
    (b) unit — the activation report contains no identity fields; identity
    can only be recorded via the existing user-confirmed flows.
-5. Fail-safe test: broken/missing activation inputs → output identical to
+5. Fresh-referent tests (deployed failure: X filled with 未来):
+   (a) unit — declarative fresh-surface detection ("X 对我来说是某种自由"
+   → ["x"]; "Y 是我给某个东西起的名字" → ["y"]; "X 就是未来" → ["x"];
+   no frame → []; stored concept surfaces → []; pronouns/stopwords → []).
+   (b) e2e — after a mirai/未来 exchange, "X 对我来说是某种自由" must
+   mark X as a distinct provisional referent ("not a placeholder to
+   fill"), carry the discourse-adjacency identity policy in the prompt,
+   never suggest X = 未来 in the annotation, keep 未来 as conversational
+   context, and mutate nothing.
+6. Fail-safe test: broken/missing activation inputs → output identical to
    current behavior (no annotation, unchanged retrieval).
-6. Invariant test: no activation field can be serialized into a concept
+7. Invariant test: no activation field can be serialized into a concept
    note / data.json.
 
 Persistence-phase tests (migration determinism, senseId stability across

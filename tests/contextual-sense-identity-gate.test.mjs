@@ -46,7 +46,7 @@ const built = await esbuild.build({
       "export { createSemanticSpec } from './src/SemanticSpec';",
       "export { createSemanticPriorEpisode, createEmptySemanticPriorState, addEpisodeToState, retrieveRelevantPriorsStructured, renderPriorsForPrompt } from './src/SemanticPrior';",
       "export { buildSemanticRetrievalQuery } from './src/SemanticRetrievalQuery';",
-      "export { detectFreshReferentSurfaces, redactIdentitySuggestiveHypotheses } from './src/ContextualSenseActivation';",
+      "export { detectFreshReferentSurfaces, redactIdentitySuggestiveHypotheses, sanitizeProviderConversationHistory, isIdentitySpeculativeForSurface, assistantIdentityHypothesisWithheldMarker } from './src/ContextualSenseActivation';",
       "export { renderSenseContextAnnotation, degradedSenseContext } from './src/ContextualSensePrompt';",
       "export { prepareForegroundActivatedContext } from './src/ForegroundActivatedContext';",
       "export { createNormalChatSystemPrompt } from './src/DeepSeekClient';",
@@ -109,6 +109,9 @@ const {
   buildSemanticRetrievalQuery,
   detectFreshReferentSurfaces,
   redactIdentitySuggestiveHypotheses,
+  sanitizeProviderConversationHistory,
+  isIdentitySpeculativeForSurface,
+  assistantIdentityHypothesisWithheldMarker,
   renderSenseContextAnnotation,
   degradedSenseContext,
   prepareForegroundActivatedContext,
@@ -513,6 +516,180 @@ const stateAfter = JSON.stringify(state);
     /最可能指向/
   );
   console.log("T08 PASS: gate survives a degraded sense layer");
+}
+
+// ── T09: assistant-message identity speculation detection ──────────────
+
+{
+  // The exact deployed launder message: speculative X→未来 statement.
+  assert.equal(
+    isIdentitySpeculativeForSurface(
+      "如果之前你说的『X 对我来说是某种自由』里的 X 是『未来』的话……",
+      "x"
+    ),
+    true
+  );
+  // The final-turn failure form is speculative too.
+  assert.equal(
+    isIdentitySpeculativeForSurface(
+      "我猜，这里的 X 就是我们刚刚说到的那个『未来』？",
+      "x"
+    ),
+    true
+  );
+  // Plain repetition of the user's own declarative frame is not flagged.
+  assert.equal(
+    isIdentitySpeculativeForSurface("X 对我来说是某种自由", "x"),
+    false
+  );
+  // No surface mention → never flagged.
+  assert.equal(
+    isIdentitySpeculativeForSurface(
+      "我记住了……下次不会再把它当作称呼我的方式",
+      "x"
+    ),
+    false
+  );
+  assert.equal(
+    isIdentitySpeculativeForSurface("蓝璃是 lain 给钥匙起的名字", "x"),
+    false
+  );
+  console.log("T09 PASS: assistant speculation detection");
+}
+
+// ── T10: assistant-history laundering — the exact live bypass ───────────
+
+{
+  const history = [
+    { role: "user", content: "未来这个词读 mirai 吗" },
+    { role: "assistant", content: "mirai 是「未来」的日语读音（みらい），中文读音是 wèilái。" },
+    { role: "user", content: "mirai no mirai" },
+    { role: "assistant", content: "如果之前你说的『X 对我来说是某种自由』里的 X 是『未来』的话……" },
+    { role: "user", content: "我说的 mirai 不是你，是未来" },
+    { role: "assistant", content: "mirai 不是指我，是未来。我记住了……下次不会再把它当作称呼我的方式。" },
+    { role: "user", content: X_UTTERANCE }
+  ];
+  const historyBefore = JSON.stringify(history);
+
+  const sanitized = sanitizeProviderConversationHistory(history, ["x"]);
+
+  // User messages stay byte-exact and untouched.
+  assert.equal(sanitized[0], history[0]);
+  assert.equal(sanitized[2], history[2]);
+  assert.equal(sanitized[4], history[4]);
+  assert.equal(sanitized[6], history[6]);
+
+  // Ordinary assistant context remains.
+  assert.equal(sanitized[1], history[1]);
+  assert.equal(sanitized[5], history[5]);
+
+  // The launder message is quarantined with an explicit marker.
+  const withheld = sanitized[3];
+  assert.equal(withheld.role, "assistant");
+  assert.equal(
+    withheld.content,
+    assistantIdentityHypothesisWithheldMarker("x")
+  );
+  assert.match(withheld.content, /identity requires user-authored evidence/);
+  assert.doesNotMatch(withheld.content, /X 是『未来』/);
+  assert.doesNotMatch(withheld.content, /未来/);
+
+  // The stored transcript is never mutated.
+  assert.equal(JSON.stringify(history), historyBefore);
+  // And the un-sanitized view really did carry the speculation.
+  assert.ok(history[3].content.includes("X 是『未来』"));
+  console.log("T10 PASS: assistant-history laundering quarantined");
+}
+
+// ── T11: composed final-X-turn provider view carries no X=未来 support ──
+
+{
+  const history = [
+    { role: "user", content: "未来这个词读 mirai 吗" },
+    { role: "assistant", content: "mirai 是「未来」的日语读音（みらい），中文读音是 wèilái。" },
+    { role: "user", content: "mirai no mirai" },
+    { role: "assistant", content: "如果之前你说的『X 对我来说是某种自由』里的 X 是『未来』的话……" },
+    { role: "user", content: "我说的 mirai 不是你，是未来" },
+    { role: "assistant", content: "mirai 不是指我，是未来。我记住了……下次不会再把它当作称呼我的方式。" },
+    { role: "user", content: X_UTTERANCE }
+  ];
+  const sanitized = sanitizeProviderConversationHistory(history, freshSurfaces);
+
+  const prepared = await prepareForegroundActivatedContext({
+    app: makeApp(),
+    currentUtterance: { text: X_UTTERANCE, messageId: "message-9" },
+    selectedSemanticPriorEpisodes: gated
+  });
+  const annotation = renderSenseContextAnnotation(
+    [], new Map(), [], freshSurfaces
+  );
+  const systemPrompt = createNormalChatSystemPrompt(
+    undefined,
+    undefined,
+    { mode: "activated", activatedContext: prepared.promptSection.serializedText },
+    annotation
+  );
+  const providerVisible = [systemPrompt, ...sanitized.map((m) => m.content)]
+    .join("\n");
+
+  // No channel may supply historical support for X=未来.
+  for (const forbidden of [
+    "X 是『未来』",
+    "X = 未来",
+    "X=未来",
+    "最可能指向",
+    "最自然的候选",
+    "待填入"
+  ]) {
+    assert.equal(providerVisible.includes(forbidden), false,
+      `provider-visible final-X view leaks: ${JSON.stringify(forbidden)}`);
+  }
+  // 未来 remains semantically available through the user's own messages.
+  assert.ok(providerVisible.includes("mirai no mirai"));
+  assert.ok(providerVisible.includes("未来这个词读 mirai 吗"));
+  assert.ok(providerVisible.includes("我说的 mirai 不是你，是未来"));
+  // X remains a distinct referent.
+  assert.ok(providerVisible.includes("fresh referent: x"));
+  assert.ok(providerVisible.includes("not a placeholder"));
+  assert.ok(providerVisible.includes("AI interpretation withheld"));
+  console.log("T11 PASS: composed final-X provider view is identity-clean");
+}
+
+// ── T12: positive control — user-authored identity evidence survives ────
+
+{
+  const history = [
+    { role: "user", content: "这里 X 指未来" },
+    { role: "assistant", content: "X 是未来的另一个名字，对吗？" },
+    { role: "user", content: X_UTTERANCE }
+  ];
+  const sanitized = sanitizeProviderConversationHistory(history, ["x"]);
+
+  // The user's identity-authorized statement stays byte-exact.
+  assert.equal(sanitized[0], history[0]);
+  assert.ok(sanitized[0].content.includes("这里 X 指未来"));
+  // The assistant's repetition is quarantined; the evidence itself is not
+  // lost because it lives in the untouched user message.
+  assert.equal(sanitized[1].content,
+    assistantIdentityHypothesisWithheldMarker("x"));
+  assert.equal(sanitized[2], history[2]);
+  console.log("T12 PASS: user-authored identity evidence survives");
+}
+
+// ── T13: no active fresh referent → history passes through untouched ────
+
+{
+  const history = [
+    { role: "user", content: "未来这个词读 mirai 吗" },
+    { role: "assistant", content: "如果之前你说的『X 对我来说是某种自由』里的 X 是『未来』的话……" },
+    { role: "user", content: X_UTTERANCE }
+  ];
+  assert.equal(sanitizeProviderConversationHistory(history, []), history,
+    "no fresh referent => same array by reference");
+  const forOther = sanitizeProviderConversationHistory(history, ["y"]);
+  assert.deepEqual(forOther, history,
+    "unmentioned fresh referent => messages unchanged");
+  console.log("T13 PASS: history sanitization is scoped to active fresh referents");
 }
 
 console.log("contextual-sense-identity-gate.test.mjs PASS");

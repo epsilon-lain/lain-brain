@@ -117,6 +117,7 @@ import {
   detectFreshReferentSurfaces,
   detectSessionDirection,
   redactIdentitySuggestiveHypotheses,
+  sanitizeProviderConversationHistory,
   type SenseActivationInput,
   type SenseActivationReport
 } from "./ContextualSenseActivation";
@@ -5580,6 +5581,17 @@ export class LainBrainSession {
         senseContext.freshReferentSurfaces
       );
       const senseAnnotation = senseContext.annotation;
+
+      // ── M2B.6a-v0: conversation-history channel of the identity gate ──
+      // A transient provider-only view: user messages stay byte-exact;
+      // assistant-authored identity speculation about an active fresh
+      // referent is withheld. Assistant-history laundering must not
+      // re-authorize a hypothesis the SemanticPrior gate withheld. The
+      // stored transcript is never mutated.
+      const providerHistory = sanitizeProviderConversationHistory(
+        this.getConversationHistory(),
+        senseContext.freshReferentSurfaces
+      );
       const priorContext = identitySafePriorEpisodes.length === 0
         ? ""
         : renderPriorsForPrompt(identitySafePriorEpisodes);
@@ -5619,7 +5631,7 @@ export class LainBrainSession {
       const rawResponse = foregroundContext.mode === "activated"
         ? await this.askText(
             apiKey,
-            this.getConversationHistory(),
+            providerHistory,
             undefined,
             undefined,
             foregroundContext,
@@ -5627,7 +5639,7 @@ export class LainBrainSession {
           )
         : await this.askText(
             apiKey,
-            this.getConversationHistory(),
+            providerHistory,
             this.activeNoteContext,
             priorContext !== "" ? priorContext : undefined,
             foregroundContext,

@@ -310,10 +310,7 @@ export function detectSessionDirection(
   if (surface === "" || !utterance.includes(surface)) {
     return undefined;
   }
-  const surfacePattern = surface.replace(
-    /[.*+?^${}()|[\]\\]/gu,
-    "\\$&"
-  );
+  const surfacePattern = escapeRegex(surface);
 
   const patterns: readonly RegExp[] = [
     // Session-scoped: "这里的 mirai 指未来" / "这句话里 X 指 Z".
@@ -433,6 +430,104 @@ export function detectFreshReferentSurfaces(
  */
 const IDENTITY_CUE_PATTERN =
   /(?:指向|指代|就是指|就是|可能指|最可能|对应|等于|refers?|候选|填入|推测|猜测)/iu;
+
+/**
+ * Identity-linking verbs immediately following the surface ("X 是未来",
+ * "X 可能是未来", "X 指的是未来"). Bare "是" is included: an assistant
+ * sentence that links the fresh surface to a referent ("…里的 X 是『未来』
+ * 的话…") is identity speculation even without a stronger cue word.
+ * Plain repetition of the user's own declarative frame ("X 对我来说是某种
+ * 自由") does not match — the verb must directly follow the surface.
+ */
+const SURFACE_IDENTITY_LINK_PATTERN_SOURCE =
+  "(?:就是|可能是|应该是|大概是|指的是|是指|代表|意味着|等于|对应|是)";
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * Does this AI-owned text speculate about what the surface refers to?
+ * Used for the conversation-history channel of the identity evidence gate:
+ * assistant-authored identity speculation about an active fresh referent
+ * is never identity evidence, no matter which channel carries it.
+ */
+export function isIdentitySpeculativeForSurface(
+  text: string,
+  surface: string
+): boolean {
+  const token = normalizeSurfaceText(surface);
+  if (token === "") {
+    return false;
+  }
+  const normalizedText = normalizeSurfaceText(text);
+  const mention = new RegExp(
+    `(?:^|[^a-z0-9])${escapeRegex(token)}(?:[^a-z0-9]|$)`,
+    "iu"
+  );
+  if (!mention.test(normalizedText)) {
+    return false;
+  }
+  if (IDENTITY_CUE_PATTERN.test(normalizedText)) {
+    return true;
+  }
+  const link = new RegExp(
+    `(?:^|[^a-z0-9])${escapeRegex(token)}\\s*` +
+    SURFACE_IDENTITY_LINK_PATTERN_SOURCE,
+    "iu"
+  );
+  return link.test(normalizedText);
+}
+
+/** Transient marker replacing withheld assistant identity speculation. */
+export function assistantIdentityHypothesisWithheldMarker(
+  surface: string
+): string {
+  return `[assistant identity hypothesis about "${surface}" withheld; ` +
+    "identity requires user-authored evidence]";
+}
+
+/** Structural message shape for the provider-visible conversation view. */
+export interface ProviderHistoryMessage {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+}
+
+/**
+ * Conversation-history channel of the identity evidence gate.
+ *
+ * Assistant-authored identity speculation about an active fresh referent
+ * must not become identity evidence merely because the assistant repeated
+ * it into the conversation (assistant-history laundering). This builds a
+ * TRANSIENT provider-only view: user messages stay byte-exact and
+ * untouched; assistant messages that speculate about an active fresh
+ * surface's referent are replaced by an explicit withheld marker, so the
+ * non-identity content of every other message is preserved. The stored
+ * transcript is never mutated.
+ */
+export function sanitizeProviderConversationHistory(
+  messages: readonly ProviderHistoryMessage[],
+  freshSurfaces: readonly string[]
+): ProviderHistoryMessage[] {
+  if (freshSurfaces.length === 0) {
+    return messages as ProviderHistoryMessage[];
+  }
+  return messages.map((message) => {
+    if (message.role !== "assistant") {
+      return message;
+    }
+    const surface = freshSurfaces.find((fresh) =>
+      isIdentitySpeculativeForSurface(message.content, fresh)
+    );
+    if (surface === undefined) {
+      return message;
+    }
+    return Object.freeze({
+      role: "assistant" as const,
+      content: assistantIdentityHypothesisWithheldMarker(surface)
+    });
+  });
+}
 
 function specIdentityText(
   spec: Readonly<{

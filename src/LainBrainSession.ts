@@ -116,6 +116,7 @@ import {
   activateRuntimeSenses,
   detectFreshReferentSurfaces,
   detectSessionDirection,
+  redactIdentitySuggestiveHypotheses,
   type SenseActivationInput,
   type SenseActivationReport
 } from "./ContextualSenseActivation";
@@ -1013,6 +1014,21 @@ export class LainBrainSession {
     message: string,
     priorEpisodes: readonly SemanticPriorEpisode[]
   ): Promise<RuntimeSenseContext> {
+    // Fresh Referent Principle: detection runs first and must survive any
+    // later sense-layer failure — the identity evidence gate depends on it.
+    // Without the concept index we detect against an empty known-surface
+    // set (safe: only short latin tokens in explicit declarative frames).
+    let freshSurfaces: readonly string[];
+    try {
+      const concepts = await this.loadCachedConceptIndex();
+      freshSurfaces = detectFreshReferentSurfaces(
+        message,
+        concepts.flatMap((concept) => conceptSurfaces(concept))
+      );
+    } catch {
+      freshSurfaces = detectFreshReferentSurfaces(message, Object.freeze([]));
+    }
+
     try {
       const concepts = await this.loadCachedConceptIndex();
 
@@ -1116,17 +1132,6 @@ export class LainBrainSession {
       }
       const uniqueRelatedOnly = [...new Set(relatedOnly)].slice(0, 4);
 
-      // Fresh Referent Principle: surfaces the user just introduced in a
-      // declarative frame are distinct provisional referents — never
-      // placeholders to fill from adjacent discourse or related priors.
-      const knownSurfaces = concepts.flatMap((concept) =>
-        conceptSurfaces(concept)
-      );
-      const freshSurfaces = detectFreshReferentSurfaces(
-        message,
-        knownSurfaces
-      );
-
       const annotation = renderSenseContextAnnotation(
         reports,
         candidatesById,
@@ -1145,8 +1150,15 @@ export class LainBrainSession {
         degraded: false
       });
     } catch {
-      // Fail-safe: any sense-layer failure degrades to current behavior.
-      return degradedSenseContext();
+      // Fail-safe: any sense-layer failure degrades to current behavior,
+      // but fresh-referent detection survives so the identity evidence
+      // gate still applies to this turn.
+      return freshSurfaces.length === 0
+        ? degradedSenseContext()
+        : Object.freeze({
+            ...degradedSenseContext(),
+            freshReferentSurfaces: freshSurfaces
+          });
     }
   }
 
@@ -5556,10 +5568,21 @@ export class LainBrainSession {
               senseContext.extraSeedSurfaces
             )
           : selectedPriorEpisodes;
+
+      // ── M2B.6a-v0: identity evidence gate ──
+      // When a fresh referent is active, historical AI hypotheses that
+      // speculate about its referent ("X 最可能指向未来") are withheld
+      // from the model-facing context. Transient redaction only: the
+      // persisted episodes are never mutated, and their user evidence
+      // remains available.
+      const identitySafePriorEpisodes = redactIdentitySuggestiveHypotheses(
+        effectivePriorEpisodes,
+        senseContext.freshReferentSurfaces
+      );
       const senseAnnotation = senseContext.annotation;
-      const priorContext = effectivePriorEpisodes.length === 0
+      const priorContext = identitySafePriorEpisodes.length === 0
         ? ""
-        : renderPriorsForPrompt(effectivePriorEpisodes);
+        : renderPriorsForPrompt(identitySafePriorEpisodes);
 
       let foregroundContext: Readonly<NormalChatForegroundContext> = {
         mode: "legacy_fallback"
@@ -5571,11 +5594,11 @@ export class LainBrainSession {
             text: userMessage.content,
             messageId: userMessage.id
           },
-          selectedSemanticPriorEpisodes: effectivePriorEpisodes
+          selectedSemanticPriorEpisodes: identitySafePriorEpisodes
         });
         const expectedExternalContext =
           this.activeFile !== null ||
-          effectivePriorEpisodes.length > 0;
+          identitySafePriorEpisodes.length > 0;
         if (
           expectedExternalContext &&
           prepared.promptSection.items.length === 0

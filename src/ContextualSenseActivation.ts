@@ -413,6 +413,108 @@ export function detectFreshReferentSurfaces(
   return Object.freeze(found);
 }
 
+// ── Identity evidence gate (deployed retest failure: X = 未来) ─────────
+
+/**
+ * Identity-cue terms found in AI-generated hypotheses. A historical AI
+ * hypothesis that SPECULATES about a fresh surface's referent ("X 最可能
+ * 指向未来") is never identity evidence — injecting it would create a
+ * self-reinforcing loop: guess → persisted → retrieved → appears
+ * historically supported → re-guessed. Such hypotheses are withheld from
+ * the model-facing context when the fresh surface they mention is active.
+ *
+ * The cue list covers the speculative phrasings observed in the deployed
+ * poisoned episodes, including placeholder-fill and guess forms:
+ *   "最可能指向未来", "X 的指代", "待填入具体内容",
+ *   "最自然的候选是未来", "助手推测 X=未来".
+ * A cue match alone never redacts — the spec must also mention the active
+ * fresh surface. False positives merely withhold an AI interpretation
+ * (fail-safe direction); the episode's user evidence always survives.
+ */
+const IDENTITY_CUE_PATTERN =
+  /(?:指向|指代|就是指|就是|可能指|最可能|对应|等于|refers?|候选|填入|推测|猜测)/iu;
+
+function specIdentityText(
+  spec: Readonly<{
+    readonly description?: string;
+    readonly symbols?: readonly {
+      readonly surface?: string;
+      readonly description?: string;
+    }[];
+    readonly statements?: readonly {
+      readonly description?: string;
+    }[];
+  }>
+): string {
+  return [
+    spec.description ?? "",
+    ...(spec.symbols ?? []).flatMap((symbol) => [
+      symbol.surface ?? "",
+      symbol.description ?? ""
+    ]),
+    ...(spec.statements ?? []).map((statement) => statement.description ?? "")
+  ].join(" ");
+}
+
+/**
+ * When fresh referents are active, replace the provisional AI hypothesis
+ * of any retrieved episode whose spec speculates about a fresh surface's
+ * referent with a neutral withheld marker. The episode's own user evidence
+ * and anchors are preserved — only the non-identity-authorized
+ * interpretation is removed. Purely transient: the persisted episode is
+ * never mutated.
+ */
+export function redactIdentitySuggestiveHypotheses(
+  episodes: readonly SemanticPriorEpisode[],
+  freshSurfaces: readonly string[]
+): readonly SemanticPriorEpisode[] {
+  if (freshSurfaces.length === 0) {
+    return episodes;
+  }
+  const tokens = freshSurfaces
+    .map((surface) => normalizeSurfaceText(surface))
+    .filter((surface) => surface !== "");
+
+  return Object.freeze(episodes.map((episode) => {
+    const text = specIdentityText(episode.semanticSpec);
+    const mentionedToken = tokens.find((token) => {
+      const pattern = new RegExp(
+        `(?:^|[^a-z0-9])${token}(?:[^a-z0-9]|$)`,
+        "iu"
+      );
+      return pattern.test(text);
+    });
+    if (mentionedToken === undefined || !IDENTITY_CUE_PATTERN.test(text)) {
+      return episode;
+    }
+    const spec = episode.semanticSpec;
+    const redactedSpec = Object.freeze({
+      id: spec.id,
+      schemaVersion: spec.schemaVersion,
+      claimId: spec.claimId,
+      sourceRefs: spec.sourceRefs,
+      symbols: Object.freeze([]),
+      expressions: Object.freeze([]),
+      statements: Object.freeze([]),
+      ambiguities: Object.freeze([]),
+      resolutions: Object.freeze([]),
+      patches: Object.freeze([]),
+      analysisStatus: "ready_for_review" as const,
+      reviewStatus: "pending" as const,
+      revision: spec.revision,
+      createdAt: spec.createdAt,
+      updatedAt: spec.updatedAt,
+      description:
+        `AI interpretation withheld: only user-authored identity evidence ` +
+        `may support referential identity for "${mentionedToken}".`
+    });
+    return Object.freeze({
+      ...episode,
+      semanticSpec: redactedSpec
+    });
+  }));
+}
+
 // ── Activation ──────────────────────────────────────────────────────────
 
 export function activateRuntimeSenses(

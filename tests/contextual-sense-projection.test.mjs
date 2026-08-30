@@ -305,4 +305,65 @@ function makeConceptNode() {
   assert.equal(JSON.stringify(node), before, "source node unchanged");
 }
 
+// ── stale generated interpretations never project (PR #3 blocker) ─────
+
+{
+  const base = createConceptNode({
+    id: "concept:stale-fixture",
+    title: "stale-fixture",
+    aliases: [],
+    createdAt: CREATED_AT
+  });
+  const node = updateConceptNode(base, {
+    generatedInterpretations: [{
+      id: "ai:current",
+      text: "current AI interpretation",
+      sourceReferences: ["chat:1"],
+      derivedStatus: "current"
+    }, {
+      id: "ai:legacy",
+      text: "legacy AI interpretation without derivedStatus",
+      sourceReferences: ["chat:2"]
+    }, {
+      id: "ai:stale",
+      text: "stale AI interpretation",
+      sourceReferences: ["chat:3"],
+      derivedStatus: "stale"
+    }]
+  }, {
+    changedAt: CREATED_AT,
+    reason: "fixture: derived-status mix"
+  });
+  const before = JSON.stringify(node);
+
+  const candidates = projectRuntimeSenseCandidates(node, "stale-fixture");
+  const byText = new Map(
+    candidates.map((candidate) => [candidate.meaning, candidate])
+  );
+
+  // derivedStatus "current" still projects as ai_provisional.
+  const current = byText.get("current AI interpretation");
+  assert.ok(current !== undefined, "current interpretation projects");
+  assert.equal(current.authority, "ai_provisional");
+
+  // derivedStatus undefined (legacy entries) still projects.
+  const legacy = byText.get("legacy AI interpretation without derivedStatus");
+  assert.ok(legacy !== undefined, "legacy interpretation projects");
+  assert.equal(legacy.authority, "ai_provisional");
+
+  // derivedStatus "stale" must not be resurrected as a runtime sense.
+  assert.equal(
+    byText.has("stale AI interpretation"),
+    false,
+    "stale interpretation does not project"
+  );
+  assert.ok(
+    candidates.every((candidate) => !candidate.id.endsWith(":ai:stale")),
+    "no candidate id carries the stale entry"
+  );
+
+  // Projection is read-only: the source ConceptNode is unchanged.
+  assert.equal(JSON.stringify(node), before, "source node unchanged");
+}
+
 console.log("CONTEXTUAL-SENSE-PROJECTION PASS");

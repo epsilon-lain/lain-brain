@@ -146,6 +146,12 @@ function userTextProvenance(
  *                                                         sourceReferences
  *                                                         retained verbatim)
  *   generatedInterpretations  → ai_provisional           (ai_generated)
+ *
+ * Stale generated interpretations (derivedStatus === "stale") have been
+ * mechanically invalidated by the Brain staleness machinery and are never
+ * projected: they must not be resurrected as runtime senses, activated, or
+ * used to derive retrieval seed terms. Entries with derivedStatus
+ * "current" or undefined (legacy) project unchanged.
  */
 export function projectRuntimeSenseCandidates(
   node: Readonly<ConceptNode>,
@@ -206,6 +212,9 @@ export function projectRuntimeSenseCandidates(
   }
 
   for (const entry of node.generatedInterpretations) {
+    if (entry.derivedStatus === "stale") {
+      continue;
+    }
     push(
       entry.id,
       entry.text,

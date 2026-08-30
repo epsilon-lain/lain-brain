@@ -72,8 +72,9 @@ export interface RuntimeSenseContext {
   readonly relatedOnlySurfaces: readonly string[];
   /**
    * Fresh surfaces introduced by the user in a declarative frame
-   * ("X 对我来说是某种自由"). Marked as distinct provisional referents,
-   * never placeholders to fill (Fresh Referent Principle).
+   * ("X 对我来说是某种自由"). Marked as distinct referents whose
+   * identity may be unresolved — never placeholders to fill, never
+   * unbound variables (Fresh Referent Principle).
    */
   readonly freshReferentSurfaces: readonly string[];
   readonly annotation: string;
@@ -94,12 +95,17 @@ export function degradedSenseContext(): RuntimeSenseContext {
 /**
  * Render the compact annotation block. Pure and deterministic.
  * Returns "" when there is nothing to say.
+ *
+ * `currentUtterance` (the user's exact current message) is quoted as the
+ * fresh referent's current semantic content: an unresolved identity does
+ * not make the referent empty — the user's own statement is evidence.
  */
 export function renderSenseContextAnnotation(
   reports: readonly SenseActivationReport[],
   candidatesById: ReadonlyMap<string, RuntimeSenseCandidate>,
   relatedOnlySurfaces: readonly string[],
-  freshReferentSurfaces: readonly string[]
+  freshReferentSurfaces: readonly string[],
+  currentUtterance?: string
 ): string {
   if (
     reports.length === 0 &&
@@ -161,11 +167,25 @@ export function renderSenseContextAnnotation(
   }
 
   if (freshReferentSurfaces.length > 0) {
+    const quotedUtterance = currentUtterance === undefined
+      ? undefined
+      : `"${currentUtterance.replace(/\s+/gu, " ").trim().slice(0, 80)}"`;
     for (const surface of freshReferentSurfaces.slice(0, 4)) {
+      if (
+        quotedUtterance !== undefined &&
+        !append(`fresh referent: ${surface} — user statement: ${quotedUtterance}`)
+      ) {
+        break;
+      }
       if (!append(
-        `fresh referent: ${surface} — a distinct provisional referent, ` +
-        "not a placeholder to fill, not an alias of a related or recently " +
-        "activated concept. Identity requires user-authored identity evidence."
+        `fresh referent: ${surface} — a distinct referent the user is ` +
+        "using referentially in their own statement; its identity is " +
+        "unresolved unless the user's statement resolves it. " +
+        "Not semantically empty: the user's exact statement is the " +
+        `current semantic content attributed to ${surface}. ` +
+        "It is not an unbound variable, not a blank slot, not a " +
+        "placeholder waiting to be filled. Identity requires " +
+        "user-authored identity evidence."
       )) {
         break;
       }

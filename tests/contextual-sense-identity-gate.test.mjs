@@ -459,7 +459,7 @@ const stateAfter = JSON.stringify(state);
   }
   // X remains distinct: the fresh-referent advisory is present.
   assert.ok(systemPrompt.includes("fresh referent: x"));
-  assert.ok(systemPrompt.includes("distinct provisional referent"));
+  assert.ok(systemPrompt.includes("distinct referent"));
   assert.ok(systemPrompt.includes("not a placeholder"));
   assert.ok(systemPrompt.includes("AI interpretation withheld"));
   // No identity/coreference clarification question is posed.
@@ -690,6 +690,61 @@ const stateAfter = JSON.stringify(state);
   assert.deepEqual(forOther, history,
     "unmentioned fresh referent => messages unchanged");
   console.log("T13 PASS: history sanitization is scoped to active fresh referents");
+}
+
+// ── T14: Fresh Referent semantic typing — unresolved ≠ unbound ──────────
+//
+// "X 对我来说是某种自由" must establish: distinct referent, identity
+// unresolved, semantic content NOT empty (the user attributed 某种自由 to
+// X), not a placeholder, not an unbound variable. Forbidden positive
+// framings ("is empty", "is an unbound variable") must never appear.
+
+{
+  const annotation = renderSenseContextAnnotation(
+    [], new Map(), [], freshSurfaces, X_UTTERANCE
+  );
+  const prepared = await prepareForegroundActivatedContext({
+    app: makeApp(),
+    currentUtterance: { text: X_UTTERANCE, messageId: "message-9" },
+    selectedSemanticPriorEpisodes: gated
+  });
+  const systemPrompt = createNormalChatSystemPrompt(
+    undefined,
+    undefined,
+    { mode: "activated", activatedContext: prepared.promptSection.serializedText },
+    annotation
+  );
+
+  // Required established properties.
+  assert.ok(systemPrompt.includes("fresh referent: x"));
+  assert.ok(systemPrompt.includes("distinct referent"));
+  assert.ok(systemPrompt.includes("identity is unresolved"));
+  assert.ok(systemPrompt.includes("Not semantically empty"));
+  assert.ok(systemPrompt.includes("not a placeholder"));
+  assert.ok(systemPrompt.includes("not an unbound variable"));
+  assert.ok(systemPrompt.includes("not a blank slot"));
+  // The user's exact statement is preserved as X's semantic content.
+  assert.ok(systemPrompt.includes("user statement:"));
+  assert.ok(systemPrompt.includes(`"${X_UTTERANCE}"`));
+  // Forbidden positive framings never appear.
+  assert.doesNotMatch(systemPrompt, /is (?:semantically )?empty/);
+  assert.doesNotMatch(systemPrompt, /is an unbound variable/);
+  console.log("T14 PASS: fresh referent is typed as unresolved, never unbound");
+}
+
+// ── T15: positive control — explicit let-binding stays a variable ───────
+
+{
+  // "设 X 为一个未知变量" has no declarative fresh frame, so no
+  // fresh-referent annotation is produced and the mathematical-variable
+  // interpretation remains fully available.
+  const surfaces = detectFreshReferentSurfaces("设 X 为一个未知变量", []);
+  assert.deepEqual([...surfaces], []);
+  const annotation = renderSenseContextAnnotation(
+    [], new Map(), [], [...surfaces], "设 X 为一个未知变量"
+  );
+  assert.equal(annotation, "");
+  console.log("T15 PASS: explicit variable binding keeps variable interpretation");
 }
 
 console.log("contextual-sense-identity-gate.test.mjs PASS");

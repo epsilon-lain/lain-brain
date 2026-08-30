@@ -1137,7 +1137,8 @@ export class LainBrainSession {
         reports,
         candidatesById,
         uniqueRelatedOnly,
-        freshSurfaces
+        freshSurfaces,
+        message
       );
       if (annotation === "") {
         return degradedSenseContext();

@@ -360,17 +360,19 @@ export function detectSessionDirection(
  *   "X 对我来说是某种自由" / "Y 是我给某个东西起的名字" / "Z 对我意味着……"
  *
  * The safe default (M2B.6a design, Fresh Referent Principle): such a
- * surface is a DISTINCT PROVISIONAL REFERENT — not a placeholder waiting
- * to be filled, not an alias of the most recently activated concept, not
- * a coreference candidate. The model-facing annotation (§8) tells the
- * model exactly that; identity still requires independent user-authored
- * identity evidence ("X 就是未来", "这里 X 指未来").
+ * surface is a DISTINCT REFERENT whose identity may be unresolved — not a
+ * placeholder waiting to be filled, not an unbound or empty variable (the
+ * user's own statement is its current semantic content), not an alias of
+ * the most recently activated concept, not a coreference candidate. The
+ * model-facing annotation (§8) tells the model exactly that; identity
+ * still requires independent user-authored identity evidence ("X 就是未
+ * 来", "这里 X 指未来").
  *
  * Conservative by construction: only short latin tokens (1-3 letters) in
  * explicit declarative frames, never stored concept surfaces, and a small
  * pronoun/stopword exclusion. False negatives are acceptable; a false
- * positive merely marks a distinct provisional referent, which is always
- * the safe default.
+ * positive merely marks a distinct referent, which is always the safe
+ * default.
  */
 const FRESH_REFERENT_STOPWORDS = new Set([
   "i", "me", "he", "we", "it", "no", "ok", "id", "la", "vs"

@@ -553,11 +553,11 @@ function senseAnnotationOf(call) {
   assert.equal(context.reports.length, 0,
     "X is not a stored concept — no sense candidates, no identity machinery");
   assert.ok(context.relatedOnlySurfaces.includes("蓝璃"));
-  // Fresh Referent Principle: X itself is marked a distinct provisional
-  // referent, never a placeholder to fill.
+  // Fresh Referent Principle: X itself is marked a distinct referent,
+  // never a placeholder waiting to be filled.
   assert.ok(context.freshReferentSurfaces.includes("x"));
   assert.ok(annotation.includes("fresh referent: x"));
-  assert.ok(annotation.includes("not a placeholder to fill"));
+  assert.ok(annotation.includes("not a placeholder"));
   assert.ok(annotation.includes("discourse adjacency"),
     "generalized identity policy covers discourse adjacency");
 
@@ -681,7 +681,12 @@ function senseAnnotationOf(call) {
   assert.equal(
     detect("X 对我来说是某种自由"),
     JSON.stringify(["x"]),
-    "declarative fresh surface → distinct provisional referent"
+    "declarative fresh surface → distinct referent"
+  );
+  assert.equal(
+    detect("设 X 为一个未知变量"),
+    JSON.stringify([]),
+    "let-binding stays an ordinary mathematical variable (no fresh frame)"
   );
   assert.equal(detect("Y 是我给某个东西起的名字"), JSON.stringify(["y"]));
   assert.equal(detect("Z 对我意味着自由"), JSON.stringify(["z"]));
@@ -728,13 +733,24 @@ function senseAnnotationOf(call) {
   const annotation = senseAnnotationOf(call);
   const context = session.getLastSenseContext();
 
-  // X is marked as a distinct provisional referent — not a placeholder.
+  // X is marked as a distinct referent with unresolved identity — never
+  // a placeholder, never an unbound/empty variable.
   assert.equal(context.degraded, false);
   assert.ok(context.freshReferentSurfaces.includes("x"));
   assert.equal(context.reports.length, 0, "X is not a stored concept");
   assert.ok(annotation.includes("fresh referent: x"));
-  assert.ok(annotation.includes("distinct provisional referent"));
-  assert.ok(annotation.includes("not a placeholder to fill"));
+  assert.ok(annotation.includes("distinct referent"));
+  assert.ok(annotation.includes("identity is unresolved"));
+  assert.ok(annotation.includes("Not semantically empty"));
+  assert.ok(annotation.includes("not a placeholder"));
+  assert.ok(annotation.includes("not an unbound variable"));
+  assert.ok(annotation.includes("not a blank slot"));
+  // The user's exact statement is preserved as X's semantic content.
+  assert.ok(annotation.includes("user statement:"));
+  assert.ok(annotation.includes("X 对我来说是某种自由"));
+  // The forbidden positive framings never appear.
+  assert.doesNotMatch(annotation, /is (?:semantically )?empty/);
+  assert.doesNotMatch(annotation, /is an unbound variable/);
 
   // Generalized identity policy covers discourse adjacency.
   assert.ok(annotation.includes("discourse adjacency"));

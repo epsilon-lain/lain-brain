@@ -290,7 +290,10 @@ export function parseChatSemanticDeltaAnalysisJson(
     evidence: parseEvidence(value.evidence, request)
   };
   if (value.changeKind === "personal_definition") {
-    if (isExclusivelyScopedBindingEvidence(common.evidence, request)) {
+    const conceptQuery = requireLabel("Concept query", value.conceptQuery);
+    if (isExclusivelyScopedBindingEvidence(
+      common.evidence, request, conceptQuery
+    )) {
       // Scoped bindings ("设 X 为…", "let x = …") are local reasoning
       // scope, not durable personal semantics.
       return Object.freeze({ kind: "no_meaningful_change" });
@@ -298,7 +301,7 @@ export function parseChatSemanticDeltaAnalysisJson(
     return deepFreeze({
       ...common,
       changeKind: "personal_definition" as const,
-      conceptQuery: requireLabel("Concept query", value.conceptQuery),
+      conceptQuery,
       proposedMeaning: requireText("Proposed meaning", value.proposedMeaning)
     });
   }
@@ -398,23 +401,62 @@ export const SCOPED_BINDING_PATTERN = new RegExp([
 ].join("|"), "iu");
 
 /**
- * Durable framing that keeps a definition proposal alive. Includes the
- * declarative personal-semantic frames current main treats as meaningful
- * user-authored content ("对我来说，X 是某种自由。" / "For me, x
- * represents freedom."): a binder clause elsewhere in the same message
- * must not suppress an independent personal-semantic clause.
+ * Durable framing that keeps a definition proposal alive. Concept-linked:
+ * a clause carries durable/personal semantics only when the proposal's
+ * concept symbol and the framing co-occur in the SAME clause. An unrelated
+ * "对我来说"/"一直"/"for me" elsewhere in the message is not evidence
+ * about the concept ("设 X 为一个未知变量。这个问题对我来说很难。" is
+ * binder-only for X, while "设 X 为一个未知变量。对我来说，X 是某种自
+ * 由。" carries personal semantics about X).
  */
 const DURABLE_DEFINITION_MARKER_PATTERN =
   /(以后|一直|通常|的定义|就是指|总是|对我来说|对我而言|在我看来|for\s+me)/iu;
+
+/** Clause boundaries: sentence punctuation and line breaks, never commas. */
+const CLAUSE_SPLIT_PATTERN = /[。！？!?；;\n.]+/u;
+
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/** Occurrence matcher for the proposal's concept symbol in user text. */
+function conceptOccurrencePattern(conceptQuery: string): RegExp {
+  const normalized = conceptQuery.normalize("NFKC").trim();
+  if (/^[A-Za-z_][A-Za-z0-9_']{0,7}$/iu.test(normalized)) {
+    return new RegExp(
+      `(?:^|[^a-z0-9])${escapeRegExpLiteral(normalized)}(?:[^a-z0-9]|$)`,
+      "iu"
+    );
+  }
+  return new RegExp(escapeRegExpLiteral(normalized), "u");
+}
+
+/**
+ * True when some clause of the text mentions the proposal's concept AND
+ * carries durable/personal framing — the framing must refer to the SAME
+ * concept symbol as the proposal, not merely appear anywhere in the text.
+ */
+function hasDurablePersonalSemanticsForConcept(
+  text: string,
+  conceptQuery: string
+): boolean {
+  const occurrence = conceptOccurrencePattern(conceptQuery);
+  return text
+    .split(CLAUSE_SPLIT_PATTERN)
+    .some((clause) =>
+      occurrence.test(clause) &&
+      DURABLE_DEFINITION_MARKER_PATTERN.test(clause)
+    );
+}
 
 /** Does this user text carry a scoped-binding frame? */
 export function isScopedBindingStatement(text: string): boolean {
   return SCOPED_BINDING_PATTERN.test(text);
 }
 
-function isScopedBindingOnly(text: string): boolean {
+function isScopedBindingOnly(text: string, conceptQuery: string): boolean {
   return isScopedBindingStatement(text) &&
-    !DURABLE_DEFINITION_MARKER_PATTERN.test(text);
+    !hasDurablePersonalSemanticsForConcept(text, conceptQuery);
 }
 
 function evidenceQuote(
@@ -438,14 +480,16 @@ function evidenceQuote(
 
 /**
  * True when the proposal's entire evidence support is binder-framed:
- * every quoted span is a scoped binding (with no durable framing), or all
- * evidence comes from the current user message and that whole message is a
- * scoped binding. The fallback catches partial quotes that omit the binder
- * word ("X 为一个未知变量" quoted out of "设 X 为一个未知变量").
+ * every quoted span is a scoped binding (with no concept-linked durable
+ * framing), or all evidence comes from the current user message and that
+ * whole message is a scoped binding. The fallback catches partial quotes
+ * that omit the binder word ("X 为一个未知变量" quoted out of "设 X 为一
+ * 个未知变量").
  */
 function isExclusivelyScopedBindingEvidence(
   evidence: readonly UserTextProvenance[],
-  request: Readonly<ChatSemanticDeltaAnalysisRequest>
+  request: Readonly<ChatSemanticDeltaAnalysisRequest>,
+  conceptQuery: string
 ): boolean {
   if (evidence.length === 0) {
     return false;
@@ -456,7 +500,7 @@ function isExclusivelyScopedBindingEvidence(
   if (quotes.length === 0) {
     return false;
   }
-  if (quotes.every(isScopedBindingOnly)) {
+  if (quotes.every((quote) => isScopedBindingOnly(quote, conceptQuery))) {
     return true;
   }
   const current = request.conversation.find(
@@ -465,7 +509,7 @@ function isExclusivelyScopedBindingEvidence(
   if (current === undefined || current.role !== "user") {
     return false;
   }
-  if (!isScopedBindingOnly(current.content)) {
+  if (!isScopedBindingOnly(current.content, conceptQuery)) {
     return false;
   }
   return evidence.every(

@@ -1176,4 +1176,33 @@ pass("durable personal definitions remain proposal-eligible");
   pass("binder-only messages stay suppressed");
 }
 
+// Concept-linked durability: an unrelated marker elsewhere in the message
+// is NOT evidence about the proposal's concept. All three negatives bind
+// X locally and say nothing durable/personal about X.
+{
+  for (const message of [
+    "设 X 为一个未知变量。这个问题对我来说很难。",
+    "设 X 为一个未知变量。这个问题一直很难。",
+    "设 X 为一个未知变量。对我来说，Y 是某种自由。"
+  ]) {
+    const request = analysisRequest([{
+      id: "user-1",
+      role: "user",
+      content: message
+    }]);
+    const parsed = parseChatSemanticDeltaAnalysisJson(
+      modelProposal({
+        conceptQuery: "X",
+        proposedMeaning: "unknown variable",
+        messageId: "user-1",
+        quote: message
+      }),
+      request
+    );
+    assert.equal(parsed.kind, "no_meaningful_change",
+      `unrelated marker must not keep a binder-only X proposal alive: ${JSON.stringify(message)}`);
+  }
+  pass("markers unrelated to the proposal concept do not keep proposals alive");
+}
+
 console.log(`chat-semantic-delta: ${passes} PASS`);

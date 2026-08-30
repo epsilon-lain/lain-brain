@@ -1104,4 +1104,76 @@ pass("durable personal definitions remain proposal-eligible");
   pass("cross-message durable evidence keeps the proposal");
 }
 
+// A binder clause must not suppress an INDEPENDENT personal-semantic
+// clause in the same message. "对我来说，X 是某种自由。" is the
+// declarative semantic frame current main treats as meaningful
+// user-authored semantic content.
+{
+  const mixed = "设 X 为一个未知变量。对我来说，X 是某种自由。";
+  const request = analysisRequest([{
+    id: "user-1",
+    role: "user",
+    content: mixed
+  }]);
+  const parsed = parseChatSemanticDeltaAnalysisJson(
+    modelProposal({
+      conceptQuery: "X",
+      proposedMeaning: "a kind of freedom for the user",
+      messageId: "user-1",
+      quote: mixed
+    }),
+    request
+  );
+  assert.equal(parsed.kind, "possible_principal_change",
+    "mixed binder + personal-semantic message must stay proposal-eligible");
+  assert.equal(parsed.changeKind, "personal_definition");
+  pass("binder clause does not suppress an independent personal-semantic clause");
+}
+
+// English mixed form: the same structure with the English personal frame.
+{
+  const mixed = "Let x be an unknown variable. For me, x represents freedom.";
+  const request = analysisRequest([{
+    id: "user-1",
+    role: "user",
+    content: mixed
+  }]);
+  const parsed = parseChatSemanticDeltaAnalysisJson(
+    modelProposal({
+      conceptQuery: "x",
+      proposedMeaning: "freedom",
+      messageId: "user-1",
+      quote: mixed
+    }),
+    request
+  );
+  assert.equal(parsed.kind, "possible_principal_change",
+    "English mixed binder + personal frame must stay proposal-eligible");
+  assert.equal(parsed.changeKind, "personal_definition");
+  pass("English mixed binder + personal frame stays proposal-eligible");
+}
+
+// Binder-only messages remain suppressed — unchanged conservative behavior.
+{
+  for (const binder of ["设 X 为一个未知变量", "Let x be an unknown variable"]) {
+    const request = analysisRequest([{
+      id: "user-1",
+      role: "user",
+      content: binder
+    }]);
+    const parsed = parseChatSemanticDeltaAnalysisJson(
+      modelProposal({
+        conceptQuery: "X",
+        proposedMeaning: "unknown variable",
+        messageId: "user-1",
+        quote: binder
+      }),
+      request
+    );
+    assert.equal(parsed.kind, "no_meaningful_change",
+      `binder-only message stays suppressed: ${JSON.stringify(binder)}`);
+  }
+  pass("binder-only messages stay suppressed");
+}
+
 console.log(`chat-semantic-delta: ${passes} PASS`);

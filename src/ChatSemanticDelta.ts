@@ -397,9 +397,15 @@ export const SCOPED_BINDING_PATTERN = new RegExp([
   "\\blet\\s+[A-Za-z_][A-Za-z0-9_']{0,7}\\s*(?:be\\b|=)"
 ].join("|"), "iu");
 
-/** Durable framing that keeps a definition proposal alive. */
+/**
+ * Durable framing that keeps a definition proposal alive. Includes the
+ * declarative personal-semantic frames current main treats as meaningful
+ * user-authored content ("对我来说，X 是某种自由。" / "For me, x
+ * represents freedom."): a binder clause elsewhere in the same message
+ * must not suppress an independent personal-semantic clause.
+ */
 const DURABLE_DEFINITION_MARKER_PATTERN =
-  /(以后|一直|通常|的定义|就是指|总是)/u;
+  /(以后|一直|通常|的定义|就是指|总是|对我来说|对我而言|在我看来|for\s+me)/iu;
 
 /** Does this user text carry a scoped-binding frame? */
 export function isScopedBindingStatement(text: string): boolean {

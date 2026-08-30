@@ -864,7 +864,10 @@ assert.equal(await session.send(), "sent");
 assert.equal(session.candidateCount, 0);
 assert.equal(session.getCandidateNotes().length, 0);
 assert.equal(vaultWrites.length, 0);
-assert.equal(markdownVaultScans, 0);
+// M2B.6a-v0: the contextual-sense experiment performs ONE read-only
+// concept-index scan per session (cached for subsequent sends).
+// No vault writes of any kind.
+assert.equal(markdownVaultScans, 1);
 assert.equal(requestLog.length, 2);
 assert.equal(requestLog.some((request) =>
   request.messages.some((message) =>

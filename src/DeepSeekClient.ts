@@ -505,7 +505,8 @@ export function createNormalChatSystemPrompt(
   semanticPriorContext?: string,
   foregroundContext: Readonly<NormalChatForegroundContext> = {
     mode: "legacy_fallback"
-  }
+  },
+  senseContext?: string
 ): string {
   const parts: string[] = [
     "This request is ordinary Lain Brain conversation, not candidate-note " +
@@ -546,6 +547,12 @@ export function createNormalChatSystemPrompt(
     parts.push("");
     parts.push(foregroundContext.activatedContext);
   }
+
+  if (senseContext !== undefined && senseContext.trim() !== "") {
+    parts.push("");
+    parts.push(senseContext);
+  }
+
   parts.push("");
   parts.push(COMPLETE_LATEX_FORMAT_RULES);
 
@@ -559,7 +566,8 @@ export async function askDeepSeek(
   semanticPriorContext?: string,
   foregroundContext: Readonly<NormalChatForegroundContext> = {
     mode: "legacy_fallback"
-  }
+  },
+  senseContext?: string
 ): Promise<string> {
   return requestDeepSeek(apiKey, [
     {
@@ -567,7 +575,8 @@ export async function askDeepSeek(
       content: createNormalChatSystemPrompt(
         noteContext,
         semanticPriorContext,
-        foregroundContext
+        foregroundContext,
+        senseContext
       )
     },
     ...conversationHistory

@@ -290,6 +290,11 @@ export function parseChatSemanticDeltaAnalysisJson(
     evidence: parseEvidence(value.evidence, request)
   };
   if (value.changeKind === "personal_definition") {
+    if (isExclusivelyScopedBindingEvidence(common.evidence, request)) {
+      // Scoped bindings ("设 X 为…", "let x = …") are local reasoning
+      // scope, not durable personal semantics.
+      return Object.freeze({ kind: "no_meaningful_change" });
+    }
     return deepFreeze({
       ...common,
       changeKind: "personal_definition" as const,
@@ -355,6 +360,113 @@ export function parseChatSemanticDeltaAnalysisJson(
     });
   }
   return Object.freeze({ kind: "no_meaningful_change" });
+}
+
+// ── Scoped-binding durability gate ─────────────────────────────────────
+//
+// LOCAL DISCOURSE MEANING != PERSONAL SEMANTIC MEANING.
+//
+// Binder statements introduce or constrain a symbol inside a LOCAL
+// reasoning scope. They do not, by themselves, establish durable personal
+// semantics:
+//   "设 X 为一个未知变量" / "令 G 为一个群" / "记 f 为这个映射" /
+//   "假设 n 是偶数" / "let x be a group" / "let x = 3"
+//
+// They must not create a personal_definition proposal like
+// "Concept X → userDefinition: unknown variable". A personal_definition
+// whose entire evidence is binder-framed is downgraded to
+// no_meaningful_change. Durable framing ("以后我说 X 就是指…",
+// "对我来说 X 一直表示…") keeps the proposal alive.
+//
+// Guards keep compound words out of the verb set (设计/设想/设定,
+// 记住/记录/记得, 命令/下令). Symbols are short Latin tokens, matching
+// the mathematical binder use. Quotes are exact substrings of user
+// messages.
+
+export const SCOPED_BINDING_PATTERN = new RegExp([
+  // 设 X 为 Y / 令 G 为 Y / 记 f 为 Y
+  // (no \b after 为/是: between two CJK word chars there is no boundary)
+  "(?:^|[，。！？;；\\s])" +
+    "(?:设(?!计|想|法|置|备|立|定)" +
+    "|令(?!人|牌|状)" +
+    "|记(?!住|忆|录|得|载))" +
+    "\\s*[A-Za-z][A-Za-z0-9_']{0,7}\\s*(?:为|是)",
+  // 假设 n 是偶数 / 假设 n 为 0
+  "(?:^|[，。！？;；\\s])假设\\s*[A-Za-z][A-Za-z0-9_']{0,7}\\s*(?:是|为)",
+  // let x be … / let x = …
+  "\\blet\\s+[A-Za-z_][A-Za-z0-9_']{0,7}\\s*(?:be\\b|=)"
+].join("|"), "iu");
+
+/** Durable framing that keeps a definition proposal alive. */
+const DURABLE_DEFINITION_MARKER_PATTERN =
+  /(以后|一直|通常|的定义|就是指|总是)/u;
+
+/** Does this user text carry a scoped-binding frame? */
+export function isScopedBindingStatement(text: string): boolean {
+  return SCOPED_BINDING_PATTERN.test(text);
+}
+
+function isScopedBindingOnly(text: string): boolean {
+  return isScopedBindingStatement(text) &&
+    !DURABLE_DEFINITION_MARKER_PATTERN.test(text);
+}
+
+function evidenceQuote(
+  span: Readonly<UserTextProvenance>,
+  request: Readonly<ChatSemanticDeltaAnalysisRequest>
+): string | undefined {
+  if (span.sourceKind !== "message_span") {
+    return undefined;
+  }
+  if (span.startOffset === undefined || span.endOffset === undefined) {
+    return undefined;
+  }
+  const message = request.conversation.find(
+    (candidate) => candidate.id === span.messageId
+  );
+  if (message === undefined) {
+    return undefined;
+  }
+  return message.content.slice(span.startOffset, span.endOffset);
+}
+
+/**
+ * True when the proposal's entire evidence support is binder-framed:
+ * every quoted span is a scoped binding (with no durable framing), or all
+ * evidence comes from the current user message and that whole message is a
+ * scoped binding. The fallback catches partial quotes that omit the binder
+ * word ("X 为一个未知变量" quoted out of "设 X 为一个未知变量").
+ */
+function isExclusivelyScopedBindingEvidence(
+  evidence: readonly UserTextProvenance[],
+  request: Readonly<ChatSemanticDeltaAnalysisRequest>
+): boolean {
+  if (evidence.length === 0) {
+    return false;
+  }
+  const quotes = evidence
+    .map((span) => evidenceQuote(span, request))
+    .filter((quote): quote is string => quote !== undefined);
+  if (quotes.length === 0) {
+    return false;
+  }
+  if (quotes.every(isScopedBindingOnly)) {
+    return true;
+  }
+  const current = request.conversation.find(
+    (message) => message.id === request.currentUserMessageId
+  );
+  if (current === undefined || current.role !== "user") {
+    return false;
+  }
+  if (!isScopedBindingOnly(current.content)) {
+    return false;
+  }
+  return evidence.every(
+    (span) =>
+      span.sourceKind === "message_span" &&
+      span.messageId === request.currentUserMessageId
+  );
 }
 
 function sourceMessageIds(evidence: readonly UserTextProvenance[]): string[] {

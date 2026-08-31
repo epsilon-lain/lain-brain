@@ -42,6 +42,70 @@ const LEXICAL_STOP_SURFACES = new Set([
 const CJK_RUN_PATTERN = "[一-鿿㐀-䶿]{2,}";
 const ALPHA_WORD_PATTERN = "[a-zA-ZÀ-ɏ]{4,}";
 
+// ── Underspecified retrieval surface gate ──────────────────────────────
+//
+// UNDERSPECIFIED DISCOURSE REFERENCE != HISTORICAL RETRIEVAL RELEVANCE.
+//
+// Demonstratives and generic discourse scaffolding may remain in the raw
+// user utterance, the SemanticSpec, and local/coreference reasoning — but
+// they must not, BY THEMSELVES, retrieve a cross-chat historical episode.
+// This gate is used at the HISTORICAL RETRIEVAL boundary only; it is not
+// a general language filter. A phrase that combines a demonstrative with
+// specific material ("这个算法", "这个定理") is specific and stays usable;
+// only purely underspecified surfaces are blocked.
+//
+// CJK rule: a surface is underspecified when EVERY character is a generic
+// discourse character (demonstrative, interrogative, particle, pronoun,
+// connective, copula). This blocks "这个" as well as its n-gram
+// derivatives ("这个怎", "个怎么", "怎么样") without blocking "这个算法".
+// ────────────────────────────────────────────────────────────────────────
+
+const UNDERSPECIFIED_CJK_CHARS = new Set([
+  "这", "那", "哪", "些", "什", "么", "怎", "样", "何", "谁",
+  "呢", "吗", "吧", "啊", "呀", "的", "了", "个", "是", "就",
+  "也", "都", "很", "没", "不", "但", "因", "所", "以", "如",
+  "果", "还", "而", "且", "或", "与", "并", "我", "你", "他",
+  "她", "它", "们", "为", "有", "可", "已", "经", "自", "己",
+  "一", "只", "又", "才", "再", "之", "其", "在", "要", "会",
+  "能"
+]);
+
+const UNDERSPECIFIED_ENGLISH_SURFACES = new Set([
+  "this", "that", "it", "these", "those", "what", "which", "who",
+  "whom", "how", "why", "when", "where", "about", "thing", "things",
+  "one", "ones", "please", "just", "maybe", "something", "anything",
+  "everything", "nothing"
+]);
+
+/**
+ * Is this surface purely underspecified discourse scaffolding?
+ * Shared by query-seed derivation, anchor derivation, and retrieval-time
+ * scoring so all historical retrieval channels apply one notion.
+ */
+export function isUnderspecifiedRetrievalSurface(surface: string): boolean {
+  const normalized = surface
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(
+      /^[\s，。！？,.!?;；:："'“‘”’]+|[\s，。！？,.!?;；:："'“‘”’]+$/gu,
+      ""
+    )
+    .trim();
+  if (normalized === "") {
+    return true;
+  }
+  if (/^[a-zà-ɏ]+$/u.test(normalized)) {
+    return UNDERSPECIFIED_ENGLISH_SURFACES.has(normalized);
+  }
+  if (/^[㐀-鿿]+$/u.test(normalized)) {
+    return [...normalized].every((ch) =>
+      UNDERSPECIFIED_CJK_CHARS.has(ch)
+    );
+  }
+  // Mixed or other scripts: treat as specific (conservative).
+  return false;
+}
+
 // ── Types ──────────────────────────────────────────────────────────────
 
 export type TemporalIntent =
@@ -185,11 +249,19 @@ export function extractLexicalSurfaces(text: string): readonly string[] {
 /**
  * Derive lexical retrieval seeds from the current utterance text.
  * Channel 1 in the M2B.5 design: deterministic and zero-cost.
+ *
+ * Underspecified surfaces (demonstrative/interrogative scaffolding and
+ * their n-gram derivatives) are removed here, at the retrieval-seed
+ * boundary: they must not seed historical retrieval on their own.
+ * extractLexicalSurfaces itself is unchanged.
  */
 export function deriveLexicalSeedSurfaces(
   utteranceText: string
 ): readonly string[] {
-  return extractLexicalSurfaces(utteranceText);
+  return deepFreeze(
+    extractLexicalSurfaces(utteranceText)
+      .filter((surface) => !isUnderspecifiedRetrievalSurface(surface))
+  );
 }
 
 // ── Query Construction ─────────────────────────────────────────────────
@@ -249,6 +321,10 @@ export function buildSemanticRetrievalQuery(
       continue;
     }
     const key = surface.normalize("NFKC").toLocaleLowerCase();
+    // Generic discourse references must not act as cross-chat retrieval
+    // keys (the SemanticSpec itself is untouched). Variable-role symbols
+    // still seed open slots: slots are not retrieval keys.
+    const retrievableRef = !isUnderspecifiedRetrievalSurface(surface);
 
     if (
       symbol.role === "entity" ||
@@ -256,7 +332,7 @@ export function buildSemanticRetrievalQuery(
       symbol.role === "domain" ||
       symbol.role === "collection"
     ) {
-      if (!seenSubjects.has(key)) {
+      if (retrievableRef && !seenSubjects.has(key)) {
         seenSubjects.add(key);
         subjectRefs.push({ surface, roleHint: symbol.role });
       }
@@ -266,7 +342,7 @@ export function buildSemanticRetrievalQuery(
       symbol.role === "function" ||
       symbol.role === "operator"
     ) {
-      if (!seenRelations.has(key)) {
+      if (retrievableRef && !seenRelations.has(key)) {
         seenRelations.add(key);
         relationRefs.push({
           surface,

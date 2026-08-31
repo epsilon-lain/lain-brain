@@ -29,7 +29,10 @@ import type {
   SemanticSymbol
 } from "./SemanticSpec";
 import type { UserTextProvenance } from "./KnowledgeProtocol";
-import { extractLexicalSurfaces } from "./SemanticRetrievalQuery";
+import {
+  extractLexicalSurfaces,
+  isUnderspecifiedRetrievalSurface
+} from "./SemanticRetrievalQuery";
 import type { SemanticRetrievalQuery } from "./SemanticRetrievalQuery";
 
 // We only import the type; createSemanticSpec is not needed for slicing
@@ -198,12 +201,12 @@ export function deriveAnchors(
     }
 
     // Always include user-defined symbols as anchors
-    if (symbol.userDefined === true) {
+    if (symbol.userDefined === true && !isStopAnchor(surface)) {
       anchors.add(surface);
     }
 
     // Include unresolved symbols (genuinely ambiguous user language)
-    if (symbol.role === "unresolved") {
+    if (symbol.role === "unresolved" && !isStopAnchor(surface)) {
       anchors.add(surface);
     }
 
@@ -273,7 +276,9 @@ function extractMeaningfulPhrases(text: string): string[] {
   const cjkRegex = /[一-鿿㐀-䶿]{2,}/g;
   let match: RegExpExecArray | null;
   while ((match = cjkRegex.exec(text)) !== null) {
-    results.push(match[0]);
+    if (!isStopAnchor(match[0])) {
+      results.push(match[0]);
+    }
   }
 
   // Extract alphabetic sequences (4+ chars, likely meaningful)
@@ -299,7 +304,8 @@ function isStopAnchor(value: string): boolean {
     return true;
   }
 
-  return STOP_ANCHORS.has(normalized);
+  return STOP_ANCHORS.has(normalized) ||
+    isUnderspecifiedRetrievalSurface(normalized);
 }
 
 // ── Evidence Text Anchors (M2B.5) ────────────────────────────────────────────────────────────
@@ -761,6 +767,13 @@ function scoreEpisodeLexical(
       continue;
     }
 
+    // Compatibility gate for legacy/dirty episodes: an underspecified
+    // anchor ("这个"/"this") never contributes historical relevance,
+    // even when the raw user text contains it.
+    if (isUnderspecifiedRetrievalSurface(normalizedAnchor)) {
+      continue;
+    }
+
     // Exact match of the full anchor in the user text
     if (normalizedText.includes(normalizedAnchor)) {
       // Longer anchors are more specific — bonus proportional to length
@@ -931,11 +944,17 @@ function scoreSeedSurfaces(
     if (normalizedSeed.length < MIN_ANCHOR_LENGTH) {
       continue;
     }
+    if (isUnderspecifiedRetrievalSurface(normalizedSeed)) {
+      continue;
+    }
 
     let best = 0;
     for (const anchor of episode.anchors) {
       const normalizedAnchor = normalizeSurface(anchor);
       if (normalizedAnchor.length === 0) {
+        continue;
+      }
+      if (isUnderspecifiedRetrievalSurface(normalizedAnchor)) {
         continue;
       }
       if (normalizedAnchor === normalizedSeed) {
@@ -979,10 +998,16 @@ function scoreStructuralSymbols(
     if (symbolSurface === "") {
       continue;
     }
+    if (isUnderspecifiedRetrievalSurface(symbolSurface)) {
+      continue;
+    }
 
     for (const ref of query.subjectRefs) {
       const refSurface = normalizeSurface(ref.surface);
       if (refSurface === "") {
+        continue;
+      }
+      if (isUnderspecifiedRetrievalSurface(refSurface)) {
         continue;
       }
       if (symbolSurface === refSurface) {
@@ -1009,6 +1034,9 @@ function scoreStructuralSymbols(
     for (const ref of query.relationRefs) {
       const refSurface = normalizeSurface(ref.surface);
       if (refSurface === "") {
+        continue;
+      }
+      if (isUnderspecifiedRetrievalSurface(refSurface)) {
         continue;
       }
       if (symbolSurface === refSurface) {

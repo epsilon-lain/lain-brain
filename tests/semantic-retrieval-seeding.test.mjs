@@ -39,7 +39,8 @@ const built = await esbuild.build({
       "export {",
       "  buildSemanticRetrievalQuery,",
       "  deriveLexicalSeedSurfaces,",
-      "  createEmptySemanticRetrievalQuery",
+      "  createEmptySemanticRetrievalQuery,",
+      "  isUnderspecifiedRetrievalSurface",
       "} from './src/SemanticRetrievalQuery';"
     ].join("\n"),
     resolveDir: process.cwd(),
@@ -96,7 +97,8 @@ const {
   renderPriorsForPrompt,
   buildSemanticRetrievalQuery,
   deriveLexicalSeedSurfaces,
-  createEmptySemanticRetrievalQuery
+  createEmptySemanticRetrievalQuery,
+  isUnderspecifiedRetrievalSurface
 } = mod.exports;
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -583,6 +585,231 @@ function makeSpec({ symbols = [], expressions = [], statements = [],
   const rendered = renderPriorsForPrompt([rescued]);
   assert.ok(rendered.includes("not authoritative"),
     "H: rendered priors keep the authority disclaimer");
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// UNDERSPECIFIED DISCOURSE REFERENCE != HISTORICAL RETRIEVAL RELEVANCE
+// ═════════════════════════════════════════════════════════════════════
+
+// A dirty-history Khabib episode whose legacy anchors/symbols include
+// generic demonstratives. Generic discourse surfaces alone must never
+// retrieve it.
+
+const KHABIB_EVIDENCE = [
+  makeUserEvidence("msg-k1", "这个打不过 Khabib"),
+  makeUserEvidence("msg-k2", "那个也没戏")
+];
+const KHABIB_SPEC = makeSpec({
+  sourceRefs: makeSourceRefs([
+    { messageId: "msg-k1", snapshot: "这个打不过 Khabib" }
+  ]),
+  symbols: [
+    { id: "s-khabib", surface: "Khabib", role: "entity", userDefined: true,
+      sourceRefIds: ["sr-1"] },
+    // Legacy generic symbol surfaces — must not become retrieval keys.
+    { id: "s-zhege", surface: "这个", role: "unresolved", sourceRefIds: ["sr-1"] },
+    { id: "s-nage", surface: "那个", role: "unresolved", sourceRefIds: ["sr-1"] }
+  ],
+  expressions: [{ id: "e-khabib", kind: "symbol_ref", symbolId: "s-khabib" }],
+  statements: [],
+  ambiguities: []
+});
+const KHABIB_EPISODE = createSemanticPriorEpisode({
+  evidenceRefs: KHABIB_EVIDENCE,
+  semanticSpec: KHABIB_SPEC,
+  semanticSessionId: "sess-khabib",
+  semanticRevision: 1
+});
+const KHABIB_STATE = addEpisodeToState(
+  createEmptySemanticPriorState(),
+  KHABIB_EPISODE
+);
+
+// ── NEGATIVE: underspecified utterances must not resurrect the Khabib
+//    episode from generic discourse anchors. ────────────────────────────
+
+for (const utterance of ["这个怎么样？", "那个呢？", "这个呢？"]) {
+  const query = buildSemanticRetrievalQuery({ utteranceText: utterance });
+  const result = retrieveRelevantPriorsStructured(
+    KHABIB_STATE, utterance, query
+  );
+  assert.strictEqual(result.length, 0,
+    `underspecified utterance must not retrieve Khabib: ${JSON.stringify(utterance)}`);
+}
+
+// ── NEGATIVE: raw-text lexical bypass. An old episode whose only anchor
+//    is exactly "这个" must not be retrieved by "这个怎么样？", even with
+//    empty query seedSurfaces. ──────────────────────────────────────────
+
+{
+  const dirtyEpisode = {
+    id: "spe-dirty-anchor",
+    createdAt: 1,
+    evidenceRefs: [],
+    anchors: ["这个"],
+    semanticSpec: KHABIB_SPEC,
+    semanticSessionId: "sess-dirty",
+    semanticRevision: 1
+  };
+  const dirtyState = {
+    schemaVersion: 1,
+    episodes: [dirtyEpisode]
+  };
+  const emptyQuery = createEmptySemanticRetrievalQuery();
+  assert.strictEqual(emptyQuery.seedSurfaces.length, 0);
+  const result = retrieveRelevantPriorsStructured(
+    dirtyState, "这个怎么样？", emptyQuery
+  );
+  assert.strictEqual(result.length, 0,
+    "anchor '这个' alone must never score against '这个怎么样？'");
+}
+
+// ── POSITIVE: a concrete referential surface in the same utterance still
+//    retrieves the Khabib episode. ──────────────────────────────────────
+
+for (const utterance of ["Khabib 这个人怎么样？", "Khabib 怎么样？"]) {
+  const query = buildSemanticRetrievalQuery({ utteranceText: utterance });
+  const result = retrieveRelevantPriorsStructured(
+    KHABIB_STATE, utterance, query
+  );
+  assert.ok(result.some((episode) => episode.id === KHABIB_EPISODE.id),
+    `Khabib episode must stay retrievable: ${JSON.stringify(utterance)}`);
+}
+
+// ── POSITIVE: normal non-demonstrative retrieval remains intact. ───────
+
+{
+  const evidence = [makeUserEvidence("msg-b", "lain 最喜欢素子姐姐")];
+  const spec = makeSpec({
+    sourceRefs: makeSourceRefs([{ messageId: "msg-b", snapshot: "lain 最喜欢素子姐姐" }]),
+    symbols: [
+      { id: "s-motoko", surface: "素子姐姐", role: "entity", userDefined: true,
+        sourceRefIds: ["sr-1"] }
+    ],
+    expressions: [{ id: "e-motoko", kind: "symbol_ref", symbolId: "s-motoko" }],
+    statements: [{ id: "st-motoko", kind: "assertion", exprId: "e-motoko" }],
+    ambiguities: []
+  });
+  const episode = createSemanticPriorEpisode({
+    evidenceRefs: evidence, semanticSpec: spec,
+    semanticSessionId: "sess-motoko", semanticRevision: 1
+  });
+  const state = addEpisodeToState(createEmptySemanticPriorState(), episode);
+  const result = retrieveRelevantPriors(state, "lain 最喜欢什么喵？");
+  assert.strictEqual(result.length, 1,
+    "preference episode still retrieves via 最喜欢/lain");
+  assert.strictEqual(result[0].id, episode.id);
+}
+
+// ── Shared notion: unit surface classification. ────────────────────────
+
+for (const surface of [
+  "这个", "那个", "这", "那", "怎么样", "这个怎", "个怎么",
+  "什么", "为什么", "哪些", "我们", "this", "that", "it", "what",
+  "about", "which"
+]) {
+  assert.strictEqual(isUnderspecifiedRetrievalSurface(surface), true,
+    `underspecified: ${JSON.stringify(surface)}`);
+}
+for (const surface of [
+  "这个算法", "这个定理", "这个人", "Khabib", "最喜欢", "喜欢",
+  "素子姐姐", "algorithm", "group", "khabib"
+]) {
+  assert.strictEqual(isUnderspecifiedRetrievalSurface(surface), false,
+    `specific: ${JSON.stringify(surface)}`);
+}
+
+// ── Channel A: lexical query seeds. A purely underspecified utterance
+//    yields no historical retrieval seeds at all. ───────────────────────
+
+{
+  assert.deepStrictEqual(
+    [...deriveLexicalSeedSurfaces("这个怎么样？")], [],
+    "purely underspecified utterance yields no seeds"
+  );
+  assert.deepStrictEqual(
+    [...deriveLexicalSeedSurfaces("what about this?")], [],
+    "purely underspecified English utterance yields no seeds"
+  );
+  const specific = deriveLexicalSeedSurfaces("这个算法");
+  assert.ok(specific.includes("算法"),
+    "specific material inside a demonstrative phrase still seeds");
+}
+
+// ── Channel B: anchor derivation never persists underspecified surfaces
+//    as standalone anchors — including userDefined/unresolved symbols. ───
+
+{
+  const genericSpec = makeSpec({
+    sourceRefs: makeSourceRefs([{ messageId: "msg-g", snapshot: "这个" }]),
+    symbols: [
+      { id: "s-g1", surface: "这个", role: "unresolved", sourceRefIds: ["sr-1"] },
+      { id: "s-g2", surface: "那个", role: "entity", userDefined: true,
+        sourceRefIds: ["sr-1"] }
+    ],
+    expressions: [],
+    statements: [],
+    ambiguities: []
+  });
+  const anchors = deriveAnchors(genericSpec);
+  assert.ok(!anchors.includes("这个"),
+    "unresolved symbol 这个 must not become an anchor");
+  assert.ok(!anchors.includes("那个"),
+    "userDefined symbol 那个 must not become an anchor");
+
+  const evidenceAnchors = deriveEvidenceTextAnchors(
+    [makeUserEvidence("msg-e", "这个怎么样？")]
+  );
+  assert.ok(evidenceAnchors.every(
+    (anchor) => !isUnderspecifiedRetrievalSurface(anchor)
+  ), "evidence anchors never contain underspecified surfaces");
+}
+
+// ── Structural guard: a generic subjectRef/relationRef must not act as a
+//    cross-chat retrieval key, neither at query build nor at scoring. ────
+
+{
+  const specWithZhege = makeSpec({
+    sourceRefs: makeSourceRefs([{ messageId: "msg-z", snapshot: "这个" }]),
+    symbols: [
+      { id: "s-z", surface: "这个", role: "entity", sourceRefIds: ["sr-1"] }
+    ],
+    expressions: [],
+    statements: [],
+    ambiguities: []
+  });
+  const query = buildSemanticRetrievalQuery({
+    utteranceText: "这个怎么样？",
+    semanticSpec: specWithZhege
+  });
+  assert.ok(query.subjectRefs.every(
+    (ref) => !isUnderspecifiedRetrievalSurface(ref.surface)
+  ), "generic subjectRef must not enter the query");
+
+  // Scoring-level guard: an episode whose only symbol is 这个 must not
+  // gain structural relevance from a hand-built generic subjectRef.
+  // (Evidence about Khabib keeps the lexical channel silent for the
+  // unrelated utterance, isolating the structural channel.)
+  const episode = createSemanticPriorEpisode({
+    evidenceRefs: [makeUserEvidence("msg-z", "Khabib")],
+    semanticSpec: specWithZhege,
+    semanticSessionId: "sess-z",
+    semanticRevision: 1
+  });
+  const state = addEpisodeToState(createEmptySemanticPriorState(), episode);
+  const handBuiltQuery = {
+    seedSurfaces: [],
+    subjectRefs: [{ surface: "这个" }],
+    relationRefs: [],
+    openSlots: [],
+    temporalIntent: "unspecified",
+    retrievalIntent: "understand_context"
+  };
+  const result = retrieveRelevantPriorsStructured(
+    state, "无关的文本", handBuiltQuery
+  );
+  assert.strictEqual(result.length, 0,
+    "generic structural ref must not create historical relevance");
 }
 
 console.log("semantic-retrieval-seeding.test.mjs PASS");

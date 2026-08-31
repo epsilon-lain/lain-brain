@@ -1205,4 +1205,99 @@ pass("durable personal definitions remain proposal-eligible");
   pass("markers unrelated to the proposal concept do not keep proposals alive");
 }
 
+// Proximity is not a semantic relation: comma-joined clauses put X and the
+// marker in one clause, but the marker does not frame X. These must stay
+// suppressed, exactly like their sentence-separated counterparts.
+{
+  for (const message of [
+    "设 X 为一个未知变量，这个问题对我来说很难。",
+    "设 X 为一个未知变量，这个问题一直很难。",
+    "设 X 为一个未知变量，对我来说 Y 是某种自由。",
+    "设 X 为一个未知变量。这个问题对我来说很难。",
+    "设 X 为一个未知变量。这个问题一直很难。",
+    "设 X 为一个未知变量。对我来说，Y 是某种自由。"
+  ]) {
+    const request = analysisRequest([{
+      id: "user-1",
+      role: "user",
+      content: message
+    }]);
+    const parsed = parseChatSemanticDeltaAnalysisJson(
+      modelProposal({
+        conceptQuery: "X",
+        proposedMeaning: "unknown variable",
+        messageId: "user-1",
+        quote: message
+      }),
+      request
+    );
+    assert.equal(parsed.kind, "no_meaningful_change",
+      `same-clause marker without framing X must stay suppressed: ${JSON.stringify(message)}`);
+  }
+  pass("proximity without a concept-linked frame does not keep proposals alive");
+}
+
+// Mixed positives: binder + concept-linked frame, comma-joined or
+// sentence-separated, must remain proposal-eligible.
+{
+  for (const message of [
+    "设 X 为一个未知变量，对我来说，X 是某种自由。",
+    "设 X 为一个未知变量。对我来说，X 是某种自由。",
+    "设 X 为一个未知变量，以后我说 X 就是指未知变量。",
+    "设 X 为一个未知变量。以后我说 X 就是指未知变量。"
+  ]) {
+    const request = analysisRequest([{
+      id: "user-1",
+      role: "user",
+      content: message
+    }]);
+    const parsed = parseChatSemanticDeltaAnalysisJson(
+      modelProposal({
+        conceptQuery: "X",
+        proposedMeaning: "a kind of freedom",
+        messageId: "user-1",
+        quote: message
+      }),
+      request
+    );
+    assert.equal(parsed.kind, "possible_principal_change",
+      `concept-linked frame alongside a binder stays eligible: ${JSON.stringify(message)}`);
+    assert.equal(parsed.changeKind, "personal_definition");
+  }
+  pass("concept-linked frames alongside binders stay proposal-eligible");
+}
+
+// Pure concept-linked frames: the seven preserved positive forms.
+{
+  for (const message of [
+    "对我来说，X 是某种自由。",
+    "对我而言，X 表示自由。",
+    "在我看来，X 是某种自由。",
+    "X 对我来说是某种自由。",
+    "以后我说 X，就是指未知变量。",
+    "X 一直表示未知变量。",
+    "For me, x represents freedom."
+  ]) {
+    const request = analysisRequest([{
+      id: "user-1",
+      role: "user",
+      content: message
+    }]);
+    const parsed = parseChatSemanticDeltaAnalysisJson(
+      modelProposal({
+        conceptQuery: message.includes("x represents")
+          ? "x"
+          : "X",
+        proposedMeaning: "freedom",
+        messageId: "user-1",
+        quote: message
+      }),
+      request
+    );
+    assert.equal(parsed.kind, "possible_principal_change",
+      `preserved positive frame must stay eligible: ${JSON.stringify(message)}`);
+  }
+  pass("pure concept-linked frames remain proposal-eligible");
+}
+
 console.log(`chat-semantic-delta: ${passes} PASS`);

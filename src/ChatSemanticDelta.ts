@@ -290,10 +290,18 @@ export function parseChatSemanticDeltaAnalysisJson(
     evidence: parseEvidence(value.evidence, request)
   };
   if (value.changeKind === "personal_definition") {
+    const conceptQuery = requireLabel("Concept query", value.conceptQuery);
+    if (isExclusivelyScopedBindingEvidence(
+      common.evidence, request, conceptQuery
+    )) {
+      // Scoped bindings ("设 X 为…", "let x = …") are local reasoning
+      // scope, not durable personal semantics.
+      return Object.freeze({ kind: "no_meaningful_change" });
+    }
     return deepFreeze({
       ...common,
       changeKind: "personal_definition" as const,
-      conceptQuery: requireLabel("Concept query", value.conceptQuery),
+      conceptQuery,
       proposedMeaning: requireText("Proposed meaning", value.proposedMeaning)
     });
   }
@@ -355,6 +363,192 @@ export function parseChatSemanticDeltaAnalysisJson(
     });
   }
   return Object.freeze({ kind: "no_meaningful_change" });
+}
+
+// ── Scoped-binding durability gate ─────────────────────────────────────
+//
+// LOCAL DISCOURSE MEANING != PERSONAL SEMANTIC MEANING.
+//
+// Binder statements introduce or constrain a symbol inside a LOCAL
+// reasoning scope. They do not, by themselves, establish durable personal
+// semantics:
+//   "设 X 为一个未知变量" / "令 G 为一个群" / "记 f 为这个映射" /
+//   "假设 n 是偶数" / "let x be a group" / "let x = 3"
+//
+// They must not create a personal_definition proposal like
+// "Concept X → userDefinition: unknown variable". A personal_definition
+// whose entire evidence is binder-framed is downgraded to
+// no_meaningful_change. Durable framing ("以后我说 X 就是指…",
+// "对我来说 X 一直表示…") keeps the proposal alive.
+//
+// Guards keep compound words out of the verb set (设计/设想/设定,
+// 记住/记录/记得, 命令/下令). Symbols are short Latin tokens, matching
+// the mathematical binder use. Quotes are exact substrings of user
+// messages.
+
+export const SCOPED_BINDING_PATTERN = new RegExp([
+  // 设 X 为 Y / 令 G 为 Y / 记 f 为 Y
+  // (no \b after 为/是: between two CJK word chars there is no boundary)
+  "(?:^|[，。！？;；\\s])" +
+    "(?:设(?!计|想|法|置|备|立|定)" +
+    "|令(?!人|牌|状)" +
+    "|记(?!住|忆|录|得|载))" +
+    "\\s*[A-Za-z][A-Za-z0-9_']{0,7}\\s*(?:为|是)",
+  // 假设 n 是偶数 / 假设 n 为 0
+  "(?:^|[，。！？;；\\s])假设\\s*[A-Za-z][A-Za-z0-9_']{0,7}\\s*(?:是|为)",
+  // let x be … / let x = …
+  "\\blet\\s+[A-Za-z_][A-Za-z0-9_']{0,7}\\s*(?:be\\b|=)"
+].join("|"), "iu");
+
+/**
+ * Concept-linked durable/personal semantic FRAMES.
+ *
+ * Proximity/co-occurrence is not a semantic relation. A durable/personal
+ * marker counts as evidence about the proposal's concept only when the
+ * concept occupies the semantic subject/referent position of a recognized
+ * frame. Comma-joined clauses like "设 X 为一个未知变量，这个问题对我来
+ * 说很难。" put X and the marker in one clause without the marker framing
+ * X — such text stays binder-only. False negatives are safer than
+ * manufacturing a durable personal definition from local mathematical
+ * syntax.
+ */
+const PERSONAL_FRAME_MARKERS = "(?:对我来说|对我而言|在我看来)";
+const SEMANTIC_LINK_VERBS =
+  "(?:就是指|是指|表示|代表|意味着|指|就是|是|为)";
+
+/** Clause boundaries: sentence punctuation and line breaks, never commas. */
+const CLAUSE_SPLIT_PATTERN = /[。！？!?；;\n.]+/u;
+
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * One recognizer per preserved frame shape, with the proposal's concept
+ * symbol in the subject/referent position:
+ *   对我来说，X 是某种自由。            X 对我来说是某种自由。
+ *   以后我说 X，就是指未知变量。        X 一直表示未知变量。
+ *   X 的定义是未知变量。                For me, x represents freedom.
+ */
+function conceptLinkedSemanticFramePattern(conceptQuery: string): RegExp {
+  const normalized = conceptQuery.normalize("NFKC").trim();
+  const latin = /^[A-Za-z_][A-Za-z0-9_']{0,7}$/iu.test(normalized);
+  const literal = escapeRegExpLiteral(normalized);
+  // Anchored symbol: needs its own boundary (frame provides none before).
+  const symbolAnchored = latin
+    ? `(?:^|[^a-z0-9])${literal}(?:[^a-z0-9]|$)`
+    : literal;
+  // Suffix-only symbol: a frame separator/gap class already precedes it,
+  // so a leading boundary would conflict with the class it consumed.
+  const symbolSuffix = latin
+    ? `${literal}(?:[^a-z0-9]|$)`
+    : literal;
+  const frames = [
+    // marker first: 对我来说，X 是某种自由。
+    `${PERSONAL_FRAME_MARKERS}[，,\\s]+${symbolSuffix}` +
+      `\\s*${SEMANTIC_LINK_VERBS}`,
+    // symbol first: X 对我来说是某种自由。
+    `${symbolAnchored}[，,\\s]{0,3}${PERSONAL_FRAME_MARKERS}` +
+      `[，,\\s]{0,3}${SEMANTIC_LINK_VERBS}`,
+    // durable, marker first: 以后我说 X，就是指未知变量。
+    `(?:以后|从现在起|通常)[^。！？!?；;\\n]{0,10}${symbolSuffix}` +
+      `[，,\\s]*${SEMANTIC_LINK_VERBS}`,
+    // durable, symbol first: X 一直表示未知变量。
+    `${symbolAnchored}[，,\\s]{0,3}(?:一直|总是|通常)` +
+      `[，,\\s]{0,3}${SEMANTIC_LINK_VERBS}`,
+    // definitional: X 的定义是未知变量。
+    `${symbolAnchored}[，,\\s]{0,3}(?:的|之)?定义[，,\\s]{0,3}(?:是|为|就是)`,
+    // English: For me, x represents freedom.
+    // (\s* after the symbol: its trailing boundary already consumed the
+    // separating space.)
+    `\\bfor\\s+me[，,\\s]+${symbolSuffix}\\s*` +
+    "(?:is|means|represents|stands\\s+for)\\b"
+  ];
+  return new RegExp(`(?:${frames.join("|")})`, latin ? "iu" : "u");
+}
+
+/**
+ * True when some clause of the text carries a recognized durable/personal
+ * frame whose subject/referent is the proposal's concept symbol.
+ */
+function hasDurablePersonalSemanticsForConcept(
+  text: string,
+  conceptQuery: string
+): boolean {
+  const frame = conceptLinkedSemanticFramePattern(conceptQuery);
+  return text
+    .split(CLAUSE_SPLIT_PATTERN)
+    .some((clause) => frame.test(clause));
+}
+
+/** Does this user text carry a scoped-binding frame? */
+export function isScopedBindingStatement(text: string): boolean {
+  return SCOPED_BINDING_PATTERN.test(text);
+}
+
+function isScopedBindingOnly(text: string, conceptQuery: string): boolean {
+  return isScopedBindingStatement(text) &&
+    !hasDurablePersonalSemanticsForConcept(text, conceptQuery);
+}
+
+function evidenceQuote(
+  span: Readonly<UserTextProvenance>,
+  request: Readonly<ChatSemanticDeltaAnalysisRequest>
+): string | undefined {
+  if (span.sourceKind !== "message_span") {
+    return undefined;
+  }
+  if (span.startOffset === undefined || span.endOffset === undefined) {
+    return undefined;
+  }
+  const message = request.conversation.find(
+    (candidate) => candidate.id === span.messageId
+  );
+  if (message === undefined) {
+    return undefined;
+  }
+  return message.content.slice(span.startOffset, span.endOffset);
+}
+
+/**
+ * True when the proposal's entire evidence support is binder-framed:
+ * every quoted span is a scoped binding (with no concept-linked durable
+ * framing), or all evidence comes from the current user message and that
+ * whole message is a scoped binding. The fallback catches partial quotes
+ * that omit the binder word ("X 为一个未知变量" quoted out of "设 X 为一
+ * 个未知变量").
+ */
+function isExclusivelyScopedBindingEvidence(
+  evidence: readonly UserTextProvenance[],
+  request: Readonly<ChatSemanticDeltaAnalysisRequest>,
+  conceptQuery: string
+): boolean {
+  if (evidence.length === 0) {
+    return false;
+  }
+  const quotes = evidence
+    .map((span) => evidenceQuote(span, request))
+    .filter((quote): quote is string => quote !== undefined);
+  if (quotes.length === 0) {
+    return false;
+  }
+  if (quotes.every((quote) => isScopedBindingOnly(quote, conceptQuery))) {
+    return true;
+  }
+  const current = request.conversation.find(
+    (message) => message.id === request.currentUserMessageId
+  );
+  if (current === undefined || current.role !== "user") {
+    return false;
+  }
+  if (!isScopedBindingOnly(current.content, conceptQuery)) {
+    return false;
+  }
+  return evidence.every(
+    (span) =>
+      span.sourceKind === "message_span" &&
+      span.messageId === request.currentUserMessageId
+  );
 }
 
 function sourceMessageIds(evidence: readonly UserTextProvenance[]): string[] {

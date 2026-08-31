@@ -951,4 +951,353 @@ const evidenceAnalysis = (request, title = "Lain Time") => ({
   pass("shared chat panel wires proposal, edit, reject, evidence, and ambiguity controls without raw JSON");
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// SCOPED BINDING != DURABLE SEMANTIC DEFINITION
+// ═════════════════════════════════════════════════════════════════════════
+
+// Binder statements introduce or constrain a symbol inside a LOCAL
+// reasoning scope. They must not produce a durable personal_definition
+// proposal. Each form below quotes the exact binder message.
+
+for (const binder of [
+  "设 X 为一个未知变量",
+  "令 G 为一个群",
+  "记 f 为这个映射",
+  "假设 n 是偶数",
+  "Let x be a group",
+  "Let x = 3"
+]) {
+  const request = analysisRequest([{
+    id: "user-1",
+    role: "user",
+    content: binder
+  }]);
+  const parsed = parseChatSemanticDeltaAnalysisJson(
+    modelProposal({
+      conceptQuery: binder.split(/\s+/u)[1],
+      proposedMeaning: "binder-introduced meaning",
+      messageId: "user-1",
+      quote: binder
+    }),
+    request
+  );
+  assert.equal(parsed.kind, "no_meaningful_change",
+    `binder form must stay scoped: ${JSON.stringify(binder)}`);
+}
+pass("scoped binder forms never become durable definition proposals");
+
+// Partial quotes that omit the binder word are caught through the
+// current-message fallback.
+{
+  const request = analysisRequest([{
+    id: "user-1",
+    role: "user",
+    content: "设 X 为一个未知变量"
+  }]);
+  const parsed = parseChatSemanticDeltaAnalysisJson(
+    modelProposal({
+      conceptQuery: "X",
+      proposedMeaning: "unknown variable",
+      messageId: "user-1",
+      quote: "X 为一个未知变量"
+    }),
+    request
+  );
+  assert.equal(parsed.kind, "no_meaningful_change");
+  pass("partial binder quote is caught via the current-message fallback");
+}
+
+// Compound words containing the binder characters are not binders.
+{
+  const request = analysisRequest([{
+    id: "user-1",
+    role: "user",
+    content: "我记住 X 是一个变量，设计 Y 为实验代号。"
+  }]);
+  const parsed = parseChatSemanticDeltaAnalysisJson(
+    modelProposal({
+      conceptQuery: "X",
+      proposedMeaning: "variable",
+      messageId: "user-1",
+      quote: "我记住 X 是一个变量，设计 Y 为实验代号。"
+    }),
+    request
+  );
+  assert.equal(parsed.kind, "possible_principal_change",
+    "记住/设计 are compound words, not binders — LLM proposal stands");
+  pass("compound words (记住/设计) do not trigger the scoped-binding gate");
+}
+
+// Positive controls: durable framing keeps the proposal alive.
+for (const durable of [
+  "以后我说 X，就是指一个未知变量",
+  "对我来说，X 一直表示未知变量"
+]) {
+  const request = analysisRequest([{
+    id: "user-1",
+    role: "user",
+    content: durable
+  }]);
+  const parsed = parseChatSemanticDeltaAnalysisJson(
+    modelProposal({
+      conceptQuery: "X",
+      proposedMeaning: "unknown variable",
+      messageId: "user-1",
+      quote: durable
+    }),
+    request
+  );
+  assert.equal(parsed.kind, "possible_principal_change",
+    `durable framing must stay durable: ${JSON.stringify(durable)}`);
+  assert.equal(parsed.changeKind, "personal_definition");
+}
+pass("durable personal definitions remain proposal-eligible");
+
+// Mixed message: a scoped binder plus durable framing in one message keeps
+// the proposal (the durable clause is the support).
+{
+  const mixed = "设 X 为一个未知变量。以后我说 X 就是指未知变量。";
+  const request = analysisRequest([{
+    id: "user-1",
+    role: "user",
+    content: mixed
+  }]);
+  const parsed = parseChatSemanticDeltaAnalysisJson(
+    modelProposal({
+      conceptQuery: "X",
+      proposedMeaning: "unknown variable",
+      messageId: "user-1",
+      quote: mixed
+    }),
+    request
+  );
+  assert.equal(parsed.kind, "possible_principal_change");
+  pass("durable framing alongside a binder keeps the proposal");
+}
+
+// Evidence split across messages: a durable statement elsewhere keeps the
+// proposal even when the current message is a binder.
+{
+  const request = analysisRequest([
+    { id: "user-1", role: "user", content: "以后我说 X 就是指未知变量。" },
+    { id: "user-2", role: "user", content: "设 X 为一个未知变量" }
+  ]);
+  const parsed = parseChatSemanticDeltaAnalysisJson(
+    JSON.stringify({
+      outcome: "possible_principal_change",
+      changeKind: "personal_definition",
+      conceptQuery: "X",
+      proposedMeaning: "unknown variable",
+      reason: "durable framing in the earlier message",
+      confidence: 0.9,
+      explicitness: "explicit",
+      tentative: false,
+      evidence: [
+        { messageId: "user-1", quote: "以后我说 X 就是指未知变量。" },
+        { messageId: "user-2", quote: "设 X 为一个未知变量" }
+      ]
+    }),
+    request
+  );
+  assert.equal(parsed.kind, "possible_principal_change",
+    "durable evidence outside the binder message keeps the proposal");
+  pass("cross-message durable evidence keeps the proposal");
+}
+
+// A binder clause must not suppress an INDEPENDENT personal-semantic
+// clause in the same message. "对我来说，X 是某种自由。" is the
+// declarative semantic frame current main treats as meaningful
+// user-authored semantic content.
+{
+  const mixed = "设 X 为一个未知变量。对我来说，X 是某种自由。";
+  const request = analysisRequest([{
+    id: "user-1",
+    role: "user",
+    content: mixed
+  }]);
+  const parsed = parseChatSemanticDeltaAnalysisJson(
+    modelProposal({
+      conceptQuery: "X",
+      proposedMeaning: "a kind of freedom for the user",
+      messageId: "user-1",
+      quote: mixed
+    }),
+    request
+  );
+  assert.equal(parsed.kind, "possible_principal_change",
+    "mixed binder + personal-semantic message must stay proposal-eligible");
+  assert.equal(parsed.changeKind, "personal_definition");
+  pass("binder clause does not suppress an independent personal-semantic clause");
+}
+
+// English mixed form: the same structure with the English personal frame.
+{
+  const mixed = "Let x be an unknown variable. For me, x represents freedom.";
+  const request = analysisRequest([{
+    id: "user-1",
+    role: "user",
+    content: mixed
+  }]);
+  const parsed = parseChatSemanticDeltaAnalysisJson(
+    modelProposal({
+      conceptQuery: "x",
+      proposedMeaning: "freedom",
+      messageId: "user-1",
+      quote: mixed
+    }),
+    request
+  );
+  assert.equal(parsed.kind, "possible_principal_change",
+    "English mixed binder + personal frame must stay proposal-eligible");
+  assert.equal(parsed.changeKind, "personal_definition");
+  pass("English mixed binder + personal frame stays proposal-eligible");
+}
+
+// Binder-only messages remain suppressed — unchanged conservative behavior.
+{
+  for (const binder of ["设 X 为一个未知变量", "Let x be an unknown variable"]) {
+    const request = analysisRequest([{
+      id: "user-1",
+      role: "user",
+      content: binder
+    }]);
+    const parsed = parseChatSemanticDeltaAnalysisJson(
+      modelProposal({
+        conceptQuery: "X",
+        proposedMeaning: "unknown variable",
+        messageId: "user-1",
+        quote: binder
+      }),
+      request
+    );
+    assert.equal(parsed.kind, "no_meaningful_change",
+      `binder-only message stays suppressed: ${JSON.stringify(binder)}`);
+  }
+  pass("binder-only messages stay suppressed");
+}
+
+// Concept-linked durability: an unrelated marker elsewhere in the message
+// is NOT evidence about the proposal's concept. All three negatives bind
+// X locally and say nothing durable/personal about X.
+{
+  for (const message of [
+    "设 X 为一个未知变量。这个问题对我来说很难。",
+    "设 X 为一个未知变量。这个问题一直很难。",
+    "设 X 为一个未知变量。对我来说，Y 是某种自由。"
+  ]) {
+    const request = analysisRequest([{
+      id: "user-1",
+      role: "user",
+      content: message
+    }]);
+    const parsed = parseChatSemanticDeltaAnalysisJson(
+      modelProposal({
+        conceptQuery: "X",
+        proposedMeaning: "unknown variable",
+        messageId: "user-1",
+        quote: message
+      }),
+      request
+    );
+    assert.equal(parsed.kind, "no_meaningful_change",
+      `unrelated marker must not keep a binder-only X proposal alive: ${JSON.stringify(message)}`);
+  }
+  pass("markers unrelated to the proposal concept do not keep proposals alive");
+}
+
+// Proximity is not a semantic relation: comma-joined clauses put X and the
+// marker in one clause, but the marker does not frame X. These must stay
+// suppressed, exactly like their sentence-separated counterparts.
+{
+  for (const message of [
+    "设 X 为一个未知变量，这个问题对我来说很难。",
+    "设 X 为一个未知变量，这个问题一直很难。",
+    "设 X 为一个未知变量，对我来说 Y 是某种自由。",
+    "设 X 为一个未知变量。这个问题对我来说很难。",
+    "设 X 为一个未知变量。这个问题一直很难。",
+    "设 X 为一个未知变量。对我来说，Y 是某种自由。"
+  ]) {
+    const request = analysisRequest([{
+      id: "user-1",
+      role: "user",
+      content: message
+    }]);
+    const parsed = parseChatSemanticDeltaAnalysisJson(
+      modelProposal({
+        conceptQuery: "X",
+        proposedMeaning: "unknown variable",
+        messageId: "user-1",
+        quote: message
+      }),
+      request
+    );
+    assert.equal(parsed.kind, "no_meaningful_change",
+      `same-clause marker without framing X must stay suppressed: ${JSON.stringify(message)}`);
+  }
+  pass("proximity without a concept-linked frame does not keep proposals alive");
+}
+
+// Mixed positives: binder + concept-linked frame, comma-joined or
+// sentence-separated, must remain proposal-eligible.
+{
+  for (const message of [
+    "设 X 为一个未知变量，对我来说，X 是某种自由。",
+    "设 X 为一个未知变量。对我来说，X 是某种自由。",
+    "设 X 为一个未知变量，以后我说 X 就是指未知变量。",
+    "设 X 为一个未知变量。以后我说 X 就是指未知变量。"
+  ]) {
+    const request = analysisRequest([{
+      id: "user-1",
+      role: "user",
+      content: message
+    }]);
+    const parsed = parseChatSemanticDeltaAnalysisJson(
+      modelProposal({
+        conceptQuery: "X",
+        proposedMeaning: "a kind of freedom",
+        messageId: "user-1",
+        quote: message
+      }),
+      request
+    );
+    assert.equal(parsed.kind, "possible_principal_change",
+      `concept-linked frame alongside a binder stays eligible: ${JSON.stringify(message)}`);
+    assert.equal(parsed.changeKind, "personal_definition");
+  }
+  pass("concept-linked frames alongside binders stay proposal-eligible");
+}
+
+// Pure concept-linked frames: the seven preserved positive forms.
+{
+  for (const message of [
+    "对我来说，X 是某种自由。",
+    "对我而言，X 表示自由。",
+    "在我看来，X 是某种自由。",
+    "X 对我来说是某种自由。",
+    "以后我说 X，就是指未知变量。",
+    "X 一直表示未知变量。",
+    "For me, x represents freedom."
+  ]) {
+    const request = analysisRequest([{
+      id: "user-1",
+      role: "user",
+      content: message
+    }]);
+    const parsed = parseChatSemanticDeltaAnalysisJson(
+      modelProposal({
+        conceptQuery: message.includes("x represents")
+          ? "x"
+          : "X",
+        proposedMeaning: "freedom",
+        messageId: "user-1",
+        quote: message
+      }),
+      request
+    );
+    assert.equal(parsed.kind, "possible_principal_change",
+      `preserved positive frame must stay eligible: ${JSON.stringify(message)}`);
+  }
+  pass("pure concept-linked frames remain proposal-eligible");
+}
+
 console.log(`chat-semantic-delta: ${passes} PASS`);

@@ -28,6 +28,7 @@ import {
 import type {
   SemanticPropagationCoordinator
 } from "./SemanticPropagationCoordinator";
+import { openConceptMigrationWorkspace } from "./BrainMigrationWorkspaceModal";
 
 function section(container: HTMLElement, title: string): HTMLElement {
   const result = container.createDiv();
@@ -119,6 +120,14 @@ export class ConceptMaintenanceLookupModal extends Modal {
         return;
       }
       void this.openPath(path);
+    });
+    button(actions, "Prepare Concept Migration", () => {
+      const path = this.app.workspace.getActiveFile()?.path;
+      if (path === undefined) {
+        this.setMessage("No active Markdown note.");
+        return;
+      }
+      void this.openMigrationPath(path);
     });
     button(actions, "Find Concept", () => this.renderLookup(), "mod-cta");
 
@@ -212,6 +221,19 @@ export class ConceptMaintenanceLookupModal extends Modal {
       loaded.persisted.conceptNode,
       this.semanticPropagation
     ).open();
+  }
+
+  private async openMigrationPath(vaultPath: string): Promise<void> {
+    const opened = await openConceptMigrationWorkspace(
+      this.app,
+      this.discovered,
+      vaultPath
+    );
+    if (!opened.ok) {
+      this.setMessage(opened.error, true);
+      return;
+    }
+    this.close();
   }
 }
 

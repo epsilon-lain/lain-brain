@@ -53,6 +53,8 @@ export interface ConceptUnresolvedItem {
   readonly id: string;
   readonly kind: ConceptUnresolvedKind;
   readonly text: string;
+  /** Exact non-authoritative material retained for later semantic review. */
+  readonly sourceMaterial?: string;
   readonly alternatives: readonly string[];
   readonly status: ConceptUnresolvedStatus;
   readonly resolution?: string;
@@ -205,6 +207,18 @@ function requireContentText(name: string, value: string): string {
   }
 
   return normalized;
+}
+
+function requireExactContentText(name: string, value: string): string {
+  if (
+    value.trim() === "" ||
+    value.length > 100_000 ||
+    UNSAFE_CONTENT_CONTROL_CHARACTERS.test(value)
+  ) {
+    throw new Error(`${name} must be non-empty safe content.`);
+  }
+
+  return value;
 }
 
 function normalizeIdentity(value: string): string {
@@ -410,6 +424,9 @@ function normalizeUnresolvedItem(
   const resolution = item.resolution === undefined
     ? undefined
     : requireText("Resolution", item.resolution);
+  const sourceMaterial = item.sourceMaterial === undefined
+    ? undefined
+    : requireExactContentText("Unresolved source material", item.sourceMaterial);
   if (item.status === "resolved" && resolution === undefined) {
     throw new Error("Resolved items require a resolution.");
   }
@@ -420,6 +437,7 @@ function normalizeUnresolvedItem(
     id: requireText("Unresolved item ID", item.id, 200),
     kind: item.kind,
     text: requireText("Unresolved item", item.text),
+    ...(sourceMaterial === undefined ? {} : { sourceMaterial }),
     alternatives: Object.freeze(
       [...new Map(item.alternatives.map((value) => {
         const text = requireText("Meaning alternative", value);

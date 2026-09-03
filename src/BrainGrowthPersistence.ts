@@ -14,11 +14,22 @@ import type { UserTextProvenance } from "./KnowledgeProtocol";
 
 export const BRAIN_GROWTH_PERSISTENCE_SCHEMA_VERSION = 1 as const;
 
-export interface ConceptPersistenceOrigin {
+export interface CandidateConceptPersistenceOrigin {
   readonly candidateId: string;
   readonly candidateRevision: number;
   readonly approvedAt: string;
 }
+
+export interface OrdinaryMarkdownMigrationOrigin {
+  readonly kind: "ordinary_markdown_migration";
+  readonly sourceVaultPath: string;
+  readonly preparedAt: string;
+  readonly sourceMarkdownHash: string;
+}
+
+export type ConceptPersistenceOrigin =
+  | CandidateConceptPersistenceOrigin
+  | OrdinaryMarkdownMigrationOrigin;
 
 export interface PersistedConceptNote {
   readonly conceptNode: ConceptNode;
@@ -75,8 +86,301 @@ const MANAGED_FRONTMATTER_KEYS = new Set([
   "lain-brain-concept-aliases",
   "lain-brain-concept-relationships",
   "lain-brain-concept-unresolved",
-  "lain-brain-candidate-id"
+  "lain-brain-candidate-id",
+  "lain-brain-migration-source"
 ]);
+
+function isFrontmatterDelimiter(
+  line: string | undefined,
+  allowByteOrderMark = false
+): boolean {
+  if (line === undefined) {
+    return false;
+  }
+  const value = allowByteOrderMark
+    ? line.replace(/^\uFEFF/u, "")
+    : line;
+  return /^---[\t ]*$/u.test(value);
+}
+
+function hasTopLevelMappingSeparator(line: string): boolean {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]!;
+    if (doubleQuoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        doubleQuoted = false;
+      }
+      continue;
+    }
+    if (singleQuoted) {
+      if (character === "'" && line[index + 1] === "'") {
+        index += 1;
+      } else if (character === "'") {
+        singleQuoted = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      doubleQuoted = true;
+      continue;
+    }
+    if (character === "'") {
+      singleQuoted = true;
+      continue;
+    }
+    if (
+      character === "#" &&
+      (index === 0 || /[\t ]/u.test(line[index - 1]!))
+    ) {
+      return false;
+    }
+    if (
+      character === ":" &&
+      (line[index + 1] === undefined || /[\t ]/u.test(line[index + 1]!))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+interface TopLevelFrontmatterField {
+  readonly key: string;
+  readonly valueText: string;
+}
+
+function topLevelFrontmatterField(
+  line: string
+): TopLevelFrontmatterField | undefined {
+  const match = line.match(
+    /^(?:([A-Za-z0-9-]+)|"([A-Za-z0-9-]+)"|'([A-Za-z0-9-]+)')[\t ]*:(?=[\t ]|$)/u
+  );
+  const key = match?.[1] ?? match?.[2] ?? match?.[3];
+  return key === undefined || match === null
+    ? undefined
+    : { key, valueText: line.slice(match[0].length) };
+}
+
+function hasEscapedDoubleQuotedTopLevelKey(line: string): boolean {
+  if (!line.startsWith('"')) {
+    return false;
+  }
+  let escaped = false;
+  let sawEscape = false;
+  for (let index = 1; index < line.length; index += 1) {
+    const character = line[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      sawEscape = true;
+      continue;
+    }
+    if (character === '"') {
+      return sawEscape &&
+        /^[\t ]*:(?=[\t ]|$)/u.test(line.slice(index + 1));
+    }
+  }
+  return false;
+}
+
+function hasYamlAnchorOrAlias(line: string): boolean {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]!;
+    if (doubleQuoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        doubleQuoted = false;
+      }
+      continue;
+    }
+    if (singleQuoted) {
+      if (character === "'" && line[index + 1] === "'") {
+        index += 1;
+      } else if (character === "'") {
+        singleQuoted = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      doubleQuoted = true;
+      continue;
+    }
+    if (character === "'") {
+      singleQuoted = true;
+      continue;
+    }
+    if (
+      character === "#" &&
+      (index === 0 || /[\t ]/u.test(line[index - 1]!))
+    ) {
+      return false;
+    }
+    if (character !== "&" && character !== "*") {
+      continue;
+    }
+    const previous = line[index - 1];
+    const next = line[index + 1];
+    if (
+      (previous === undefined || /[\t \[{},]/u.test(previous)) &&
+      next !== undefined &&
+      !/[\t \[\]{},]/u.test(next)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasUnclosedFlowCollection(valueText: string): boolean {
+  const value = valueText.trimStart();
+  const expectedClosings: string[] = [];
+  let foundCollection = false;
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (doubleQuoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        doubleQuoted = false;
+      }
+      continue;
+    }
+    if (singleQuoted) {
+      if (character === "'" && value[index + 1] === "'") {
+        index += 1;
+      } else if (character === "'") {
+        singleQuoted = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      doubleQuoted = true;
+      continue;
+    }
+    if (character === "'") {
+      singleQuoted = true;
+      continue;
+    }
+    if (
+      character === "#" &&
+      (index === 0 || /[\t ]/u.test(value[index - 1]!))
+    ) {
+      break;
+    }
+    if (character === "[") {
+      foundCollection = true;
+      expectedClosings.push("]");
+      continue;
+    }
+    if (character === "{") {
+      foundCollection = true;
+      expectedClosings.push("}");
+      continue;
+    }
+    if (character === "]" || character === "}") {
+      if (!foundCollection) {
+        continue;
+      }
+      if (expectedClosings.pop() !== character) {
+        return true;
+      }
+      if (expectedClosings.length === 0) {
+        return false;
+      }
+    }
+  }
+
+  return foundCollection && expectedClosings.length > 0;
+}
+
+function requireBlockMappingFrontmatter(lines: readonly string[]): void {
+  const firstContent = lines.find((line) =>
+    line.trim() !== "" && !/^[\t ]*#/u.test(line)
+  );
+  if (firstContent === undefined) {
+    return;
+  }
+  if (
+    /^[\t ]/u.test(firstContent) ||
+    /^[{[]/u.test(firstContent) ||
+    /^-(?:[\t ]|$)/u.test(firstContent) ||
+    /^[!?&*|>@`]/u.test(firstContent)
+  ) {
+    throw new Error(
+      "Concept persistence requires block-mapping YAML frontmatter."
+    );
+  }
+  if (!hasTopLevelMappingSeparator(firstContent)) {
+    throw new Error(
+      "Concept persistence requires block-mapping YAML frontmatter."
+    );
+  }
+  if (lines.some((line) => /^\?(?:[\t ]|$)/u.test(line))) {
+    throw new Error(
+      "Concept persistence cannot safely rewrite explicit YAML keys."
+    );
+  }
+  if (lines.some((line) =>
+    /^[!&*]/u.test(line) || hasEscapedDoubleQuotedTopLevelKey(line)
+  )) {
+    throw new Error(
+      "Concept persistence cannot safely rewrite complex YAML keys."
+    );
+  }
+  if (lines.some((line) =>
+    /^\.\.\.(?:[\t ]*(?:#.*)?)$/u.test(line)
+  )) {
+    throw new Error(
+      "Concept persistence cannot safely rewrite a closed YAML document."
+    );
+  }
+
+  const managedFields = lines.map(topLevelFrontmatterField).filter(
+    (field): field is TopLevelFrontmatterField =>
+      field !== undefined && MANAGED_FRONTMATTER_KEYS.has(field.key)
+  );
+  if (
+    managedFields.some((field) =>
+      hasUnclosedFlowCollection(field.valueText)
+    ) ||
+    (managedFields.length > 0 && lines.some(hasYamlAnchorOrAlias))
+  ) {
+    throw new Error(
+      "Concept persistence cannot safely rewrite managed YAML structures."
+    );
+  }
+}
+
+function isMigrationOrigin(
+  origin: Readonly<ConceptPersistenceOrigin>
+): origin is OrdinaryMarkdownMigrationOrigin {
+  return "kind" in origin && origin.kind === "ordinary_markdown_migration";
+}
 
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
@@ -364,28 +668,33 @@ function updateFrontmatter(
 ): string {
   const newline = markdown.includes("\r\n") ? "\r\n" : "\n";
   const lines = markdown.split(/\r?\n/u);
-  let bodyLines = lines;
+  const hasByteOrderMark = lines[0]?.startsWith("\uFEFF") === true;
+  let bodyLines = hasByteOrderMark
+    ? [lines[0]!.slice(1), ...lines.slice(1)]
+    : lines;
   let existingFrontmatter: string[] = [];
 
-  if (lines[0]?.trim() === "---") {
+  if (isFrontmatterDelimiter(lines[0], true)) {
     const closingIndex = lines.slice(1).findIndex(
-      (line) => line.trim() === "---"
+      (line) => isFrontmatterDelimiter(line)
     );
 
     if (closingIndex !== -1) {
       const absoluteClosingIndex = closingIndex + 1;
-      existingFrontmatter = lines.slice(1, absoluteClosingIndex).filter(
-        (line) => {
-          const key = line.match(/^([^:#]+):/u)?.[1]?.trim();
-          return key === undefined || !MANAGED_FRONTMATTER_KEYS.has(key);
-        }
+      const frontmatterLines = lines.slice(1, absoluteClosingIndex);
+      requireBlockMappingFrontmatter(frontmatterLines);
+      existingFrontmatter = stripManagedFrontmatterFields(
+        frontmatterLines
       );
       bodyLines = lines.slice(absoluteClosingIndex + 1);
     }
   }
 
+  const originFrontmatter = isMigrationOrigin(origin)
+    ? [`lain-brain-migration-source: ${JSON.stringify(origin.sourceVaultPath)}`]
+    : [`lain-brain-candidate-id: ${JSON.stringify(origin.candidateId)}`];
   const frontmatter = [
-    "---",
+    hasByteOrderMark ? "\uFEFF---" : "---",
     ...existingFrontmatter,
     "lain-brain-type: concept-node",
     `lain-brain-concept-id: ${JSON.stringify(node.id)}`,
@@ -396,11 +705,55 @@ function updateFrontmatter(
     `lain-brain-concept-unresolved: ${node.unresolvedItems.filter(
       (item) => item.status === "open"
     ).length}`,
-    `lain-brain-candidate-id: ${JSON.stringify(origin.candidateId)}`,
+    ...originFrontmatter,
     "---"
   ];
 
   return [...frontmatter, ...bodyLines].join(newline).trimEnd();
+}
+
+function stripManagedFrontmatterFields(lines: readonly string[]): string[] {
+  const retained: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index]!;
+    const field = topLevelFrontmatterField(line);
+    if (
+      field === undefined ||
+      !MANAGED_FRONTMATTER_KEYS.has(field.key)
+    ) {
+      retained.push(line);
+      index += 1;
+      continue;
+    }
+
+    index += 1;
+    while (index < lines.length) {
+      const continuation = lines[index]!;
+      if (
+        continuation.trim() === "" ||
+        /^[\t ]/u.test(continuation) ||
+        /^-(?:\s|$)/u.test(continuation)
+      ) {
+        index += 1;
+        continue;
+      }
+      if (/^#/u.test(continuation)) {
+        const nextContent = lines.slice(index + 1).find((candidate) =>
+          candidate.trim() !== "" && !/^#/u.test(candidate)
+        );
+        if (
+          nextContent !== undefined &&
+          (/^[\t ]/u.test(nextContent) || /^-(?:\s|$)/u.test(nextContent))
+        ) {
+          index += 1;
+          continue;
+        }
+      }
+      break;
+    }
+  }
+  return retained;
 }
 
 /**
@@ -413,13 +766,21 @@ export function serializeConceptNodeIntoMarkdown(
   origin: Readonly<ConceptPersistenceOrigin>
 ): string {
   const withoutOldProjection = markdown.replace(DATA_PATTERN, "").trimEnd();
+  const projectedOrigin: ConceptPersistenceOrigin = isMigrationOrigin(origin)
+    ? {
+        kind: "ordinary_markdown_migration",
+        sourceVaultPath: origin.sourceVaultPath,
+        preparedAt: origin.preparedAt,
+        sourceMarkdownHash: origin.sourceMarkdownHash
+      }
+    : {
+        candidateId: origin.candidateId,
+        candidateRevision: origin.candidateRevision,
+        approvedAt: origin.approvedAt
+      };
   const projection: ConceptPersistenceProjection = {
     schemaVersion: BRAIN_GROWTH_PERSISTENCE_SCHEMA_VERSION,
-    origin: {
-      candidateId: origin.candidateId,
-      candidateRevision: origin.candidateRevision,
-      approvedAt: origin.approvedAt
-    },
+    origin: projectedOrigin,
     concept: projectConceptNode(node)
   };
   const encoded = encodeURIComponent(JSON.stringify(projection));
@@ -428,8 +789,10 @@ export function serializeConceptNodeIntoMarkdown(
     node,
     origin
   );
+  const newline = markdown.includes("\r\n") ? "\r\n" : "\n";
 
-  return `${readableMarkdown}\n\n${DATA_PREFIX}${encoded}${DATA_SUFFIX}\n`;
+  return `${readableMarkdown}${newline}${newline}` +
+    `${DATA_PREFIX}${encoded}${DATA_SUFFIX}${newline}`;
 }
 
 /** Load one supported concept note without scanning or writing the Vault. */
@@ -453,13 +816,13 @@ export function deserializeConceptNodeFromMarkdown(
 function hasConceptFrontmatter(markdown: string): boolean {
   const lines = markdown.split(/\r?\n/u);
 
-  if (lines[0]?.trim() !== "---") {
+  if (!isFrontmatterDelimiter(lines[0], true)) {
     return false;
   }
 
   for (let index = 1; index < lines.length; index += 1) {
-    const line = lines[index]!.trim();
-    if (line === "---") {
+    const line = lines[index]!;
+    if (isFrontmatterDelimiter(line)) {
       return false;
     }
     if (/^lain-brain-type:\s*concept-node\s*$/u.test(line)) {
@@ -492,14 +855,35 @@ function loadCurrentProjection(encoded: string): PersistedConceptNote {
   }
 
   const rawOrigin = requireRecord("Concept origin", projection.origin);
-  const origin = deepFreeze({
-    candidateId: requireString("Candidate ID", rawOrigin.candidateId),
-    candidateRevision: requireInteger(
-      "Candidate revision",
-      rawOrigin.candidateRevision
-    ),
-    approvedAt: requireString("Candidate approval time", rawOrigin.approvedAt)
-  });
+  let origin: ConceptPersistenceOrigin;
+  if (rawOrigin.kind === undefined) {
+    origin = deepFreeze({
+      candidateId: requireString("Candidate ID", rawOrigin.candidateId),
+      candidateRevision: requireInteger(
+        "Candidate revision",
+        rawOrigin.candidateRevision
+      ),
+      approvedAt: requireString("Candidate approval time", rawOrigin.approvedAt)
+    });
+  } else if (rawOrigin.kind === "ordinary_markdown_migration") {
+    origin = deepFreeze({
+      kind: "ordinary_markdown_migration",
+      sourceVaultPath: requireString(
+        "Migration source Vault path",
+        rawOrigin.sourceVaultPath
+      ),
+      preparedAt: requireString(
+        "Migration preparation time",
+        rawOrigin.preparedAt
+      ),
+      sourceMarkdownHash: requireString(
+        "Migration source Markdown hash",
+        rawOrigin.sourceMarkdownHash
+      )
+    });
+  } else {
+    throw new Error("Unknown concept persistence origin kind.");
+  }
 
   return deepFreeze({
     conceptNode: normalizeConceptNode(projection.concept),

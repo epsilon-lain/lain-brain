@@ -29,12 +29,18 @@ export interface ObsidianConceptIndexResult {
   readonly scannedMarkdownFiles: number;
 }
 
+export interface ObsidianConceptIndexLoadOptions {
+  /** Bypass Obsidian's cache for confirmation-time identity checks. */
+  readonly freshRead?: boolean;
+}
+
 /**
  * One-shot, read-only discovery. Ordinary Markdown is ignored and no listener,
  * cache, migration, or Vault mutation is installed.
  */
 export async function loadObsidianConceptIndex(
-  app: App
+  app: App,
+  options: Readonly<ObsidianConceptIndexLoadOptions> = {}
 ): Promise<ObsidianConceptIndexResult> {
   const files = [...app.vault.getMarkdownFiles()].sort((left, right) =>
     left.path.localeCompare(right.path)
@@ -45,7 +51,9 @@ export async function loadObsidianConceptIndex(
   for (const file of files) {
     let markdown: string;
     try {
-      markdown = await app.vault.cachedRead(file);
+      markdown = options.freshRead === true
+        ? await app.vault.read(file)
+        : await app.vault.cachedRead(file);
     } catch {
       issues.push(Object.freeze({
         vaultPath: file.path,

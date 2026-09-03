@@ -4,8 +4,10 @@ Confirmed semantic changes and bounded derived maintenance are documented in
 [`SEMANTIC_DELTA.md`](SEMANTIC_DELTA.md).
 
 Brain Growth v1 connects the pure concept-node domain to the existing reviewed
-Candidate Note workflow. It deliberately does not add a database, an AI
-auto-edit path, or a second Vault-write boundary.
+Candidate Note workflow. M2B.7 also adds one explicit, reviewed path for
+upgrading an already existing ordinary Markdown note. It does not add a
+database, an AI auto-edit path, background migration, or an unchecked Vault
+write.
 
 ## Architectural placement
 
@@ -19,7 +21,8 @@ auto-edit path, or a second Vault-write boundary.
   candidate snapshot into a `ConceptNode`; it has no Obsidian dependency and
   performs no write.
 - `BrainGrowthPersistence.ts` owns the versioned Markdown projection and
-  deterministic single-note loader.
+  deterministic single-note loader. Its explicit origin union preserves both
+  legacy candidate creation and `ordinary_markdown_migration` provenance.
 - `BrainGrowthIndex.ts` provides deterministic ID/title/alias lookup with
   explicit not-found, unique, and ambiguous results.
 - `ObsidianConceptIndex.ts` is a one-shot read-only adapter that discovers valid
@@ -32,37 +35,55 @@ auto-edit path, or a second Vault-write boundary.
   Obsidian dependency.
 - `BrainMaintenanceWorkspaceModal.ts` provides the first user-facing lookup,
   inspection, edit, review, and confirmation flow using Obsidian `Modal` and
-  `Setting` controls.
+  `Setting` controls. It is also the explicit entry point for migrating the
+  active ordinary note; ordinary-note lookup and inspection still do nothing
+  by themselves.
 - `ObsidianConceptMaintenance.ts` owns the single reviewed modification
   boundary. It validates the exact original Markdown, stable ID, and expected
   revision immediately before one `vault.modify()` call.
+- `BrainMigration.ts` owns the pure ordinary-note migration draft, the five
+  reviewed semantic mappings, deterministic migration diff and Markdown
+  preview, identity/collision checks, and immutable prepared migration.
+- `BrainMigrationWorkspaceModal.ts` owns the narrow editor -> preview -> Back,
+  Cancel, or Confirm Migration UI. It cannot write except by calling the
+  confirmation adapter.
+- `ObsidianConceptMigration.ts` is the sole ordinary-note migration write
+  boundary. It revalidates the reviewed source, proposal, identity scan, and
+  collision set before exactly one `vault.modify()` call.
 - `BrainDiagnostics.ts` reports structural problems without repairing them.
 - `LainBrainSession.createCandidateNote()` and `createCandidateGroup()` remain
-  the only concept-creation boundaries; confirmed maintenance uses the separate
-  single-existing-note modification boundary above.
+  the only candidate-to-concept creation boundaries. Confirmed maintenance and
+  confirmed ordinary-note migration use their separate, checked
+  single-existing-note modification boundaries above.
 
 ## Reviewed lifecycle
 
 ```text
-User language
-  -> CandidateNote
-  -> user review/edit
-  -> confirmed Create Note or Create Group
-  -> ConceptNode adapter
-  -> Markdown projection written by the existing Vault boundary
-  -> deterministic single-note reload
-  -> read-only index and lookup
-  -> reviewed maintenance update
-  -> new immutable revision
-  -> semantic field-level diff
-  -> explicit Confirm Update
-  -> one checked Vault modification
-  -> deterministic reload
+Reviewed candidate creation:
+  User language -> CandidateNote -> user review/edit
+    -> confirmed Create Note or Create Group
+    -> ConceptNode adapter -> checked Vault create -> deterministic reload
+
+Reviewed maintenance:
+  indexed ConceptNode -> inspect/edit -> Prepare Review
+    -> immutable next revision + semantic field-level diff
+    -> explicit Confirm Update -> one checked Vault modification
+    -> deterministic reload
+
+Explicit ordinary-note migration:
+  ordinary Markdown -> explicit Prepare Concept Migration
+    -> choose stable ID + review five semantic mappings
+    -> pure immutable preview + semantic migration diff + Markdown preview
+    -> Back / Cancel (zero writes), or explicit Confirm Migration
+    -> source/proposal/identity/collision rechecks
+    -> one checked Vault modification of the same file
+    -> deterministic reload and one-shot index discovery
 ```
 
-Preview, regeneration, adapter invocation, and serialization are pure/in-memory
-operations. Cancelling the existing confirmation modal performs no conversion
-or Vault write. A conversion failure happens before `vault.create()` and cannot
+Preview, regeneration, candidate-to-concept adapter invocation, and
+serialization are pure/in-memory operations. Cancelling the existing
+confirmation modal performs no conversion or Vault write. A conversion failure
+happens before `vault.create()` and cannot
 leave a partially persisted concept.
 
 Candidates retain exact source-message snapshots alongside their source IDs so
@@ -142,8 +163,8 @@ disturbing the human-readable candidate body.
 
 `deserializeConceptNodeFromMarkdown()` reads exactly one note, validates the
 supported schema and provenance through the domain constructors, deeply freezes
-the result, and reconstructs both the `ConceptNode` and candidate origin. It
-does not scan the Vault or write anything.
+the result, and reconstructs both the `ConceptNode` and its candidate or
+ordinary-note migration origin. It does not scan the Vault or write anything.
 
 `inspectConceptMarkdown()` is the non-throwing compatibility boundary. It
 returns `ordinary_markdown`, a validated `concept_node`, or a typed invalid
@@ -181,7 +202,9 @@ also ambiguous rather than silently collapsed.
 `loadObsidianConceptIndex()` reads Markdown files in deterministic vault-path
 order, validates concept metadata, and returns records plus structured load
 issues. Ordinary Markdown remains ordinary Markdown. The adapter calls only
-`getMarkdownFiles()` and `cachedRead()` and performs no migration or write.
+`getMarkdownFiles()` plus a Vault read and performs no migration or write.
+Ordinary discovery uses `cachedRead()`; confirmation-time identity checks opt
+into `read()` so a stale cache cannot authorize a migration.
 
 ## Reviewed maintenance
 
@@ -260,6 +283,103 @@ history.
 Concept-level diagnostics and same-label warnings are displayed read-only. They
 never repair, merge, or persist anything.
 
+## Explicit ordinary-note migration
+
+The Concept Maintenance lookup exposes **Prepare Concept Migration** only as an
+explicit action for the active Markdown file. Opening, reading, indexing,
+searching, or inspecting an ordinary note leaves it ordinary and performs no
+write. Loading the migration workspace captures its safe Vault-relative path
+and exact Markdown snapshot, but still does not prepare a ConceptNode.
+
+The initial migration draft deliberately has no stable ID. The filename supplies
+only an editable title handle, aliases start empty, and the complete original
+Markdown begins in the unresolved bucket. Preview is rejected until the user
+enters a stable ConceptNode ID. A matching title or alias never supplies that
+identity.
+
+The five explicit mappings are kept structurally separate:
+
+1. **Personal definition - authoritative** becomes one
+   `ConceptUserDefinition` only when the user supplies reviewed text. Its exact
+   reviewed snapshot receives `user_edit` provenance.
+2. **Exact user evidence - not yet a definition** becomes user evidence with
+   separate `user_edit` provenance. It is never promoted implicitly.
+3. **Generated / AI interpretation - non-authoritative** becomes a generated
+   interpretation entry and can never become personal meaning through this
+   route.
+4. **Standard / external meaning - non-authoritative** becomes a standard
+   definition entry and remains separate from personal meaning.
+5. **Unresolved / ambiguous material** keeps the ConceptNode ambiguous through
+   an open meaning item whose optional `sourceMaterial` retains the exact
+   reviewed text. This is the conservative default for the full source note;
+   arbitrary prose is never silently treated as a personal definition.
+
+Migration does not invent chat-message provenance for note-only text.
+User-reviewed personal text uses `sourceKind = "user_edit"`; generated,
+external, and unresolved entries refer only to the reviewed migration source.
+The persistence projection records an `ordinary_markdown_migration` origin with
+the source Vault path, preparation time, and source-Markdown hash. The readable
+original note body and unmanaged frontmatter are retained while the normal
+versioned ConceptNode projection and managed frontmatter are added.
+
+`prepareConceptMigration()` is pure and returns a deeply frozen object containing
+the source path, byte-exact source Markdown, reviewed draft, chosen identity,
+five-part mapping, proposed revision-1 ConceptNode, migration origin, semantic
+diff, label collisions, and resulting Markdown. **Preview**, **Back**, and
+**Cancel** remain in memory and perform zero Vault writes.
+
+The canonical label-collision snapshot is included in the deterministic
+migration ID and checked during reconstruction. An ordinary cloned-object
+mutation therefore cannot remove or replace the reviewed warnings while
+retaining a valid prepared projection.
+
+Only `persistConfirmedConceptMigration()` may cross the migration write
+boundary. It first captures a deeply frozen copy of the prepared proposal and
+confirmation before any `await`, so mutation of a structural clone during a
+Vault callback cannot change later checks or the Markdown written. Before
+modifying the file it requires:
+
+- the same valid Vault-relative path;
+- a non-empty `confirmed_concept_migration` marker matching migration ID, path,
+  and stable concept ID;
+- a deterministic reconstruction of the reviewed draft, mapping, diff, origin,
+  revision-1 node with empty history, and exact Markdown projection;
+- a first uncached re-read showing that the file is still ordinary Markdown and
+  exactly byte-equal to the reviewed snapshot;
+- two uncached, issue-free one-shot identity scans in which the chosen stable ID
+  is absent and whose complete snapshots are equal;
+- a title/alias collision set exactly equal to the one shown in preview during
+  both identity scans;
+- an uncached source re-read between the scans; and
+- a third uncached ordinary-note, byte-equal re-read immediately before
+  modification.
+
+Every failed precondition returns a typed failure before `vault.modify()`.
+Confirmation attempts on the same Obsidian `App` are serialized so two local
+migrations cannot simultaneously claim the same stable ID. A successful
+confirmation calls `vault.modify()` exactly once on the original file; it never
+creates, deletes, renames, merges, or retries a note. Existing title or alias
+collisions are shown with the other stable IDs and may proceed only as a
+deliberately distinct identity. A new or changed collision after preview is
+stale review; the workspace refreshes its index and requires preview again.
+
+The Vault API has no compare-and-swap operation. Another plugin, client, or
+external process can still change the source after the final source read, or
+introduce an ID after the second identity scan, before `vault.modify()` begins.
+The local confirmation lock cannot close that external interval.
+
+Frontmatter is preserved only when its YAML root and managed fields can be
+rewritten safely without a YAML parser. Flow-map/root-sequence roots, explicit
+or complex tagged/escaped keys, YAML document-end markers, managed anchor/alias
+dependencies, and multiline flow values on managed keys are rejected during
+preparation rather than rewritten into invalid YAML. Existing BOM/CRLF style,
+nested fields, block scalars, unmanaged block-mapping fields, and balanced
+single-line managed arrays are handled deterministically.
+
+After success the workspace reloads the one-shot index. The same persisted
+projection is discoverable by `loadObsidianConceptIndex()` after restart, using
+the chosen stable ID rather than the filename, title, or aliases.
+
 ## Integrity diagnostics
 
 `diagnoseBrain()` is pure and read-only. It reports:
@@ -283,17 +403,23 @@ write files.
 - Generated and external meanings never overwrite user meaning.
 - Title and alias equality do not establish concept identity.
 - Ambiguity and conflict remain explicit.
-- Preview, generation, loading, lookup, diagnostics, update preparation, and
-  restore preparation perform no Vault write.
-- Confirmed Create Note/Create Group are the only creation paths. Confirmed
-  Concept Maintenance is the only existing-note semantic modification path.
+- Preview, generation, loading, lookup, diagnostics, update preparation,
+  restore preparation, and migration preparation perform no Vault write.
+- Confirmed Create Note/Create Group are the only candidate creation paths.
+  Confirmed Concept Maintenance and Confirmed Migration are the only reviewed
+  existing-note semantic modification paths.
 - Opening, editing, preparing, reviewing, going back, cancelling, stale
-  confirmation, and invalid persistence all produce zero maintenance writes.
+  confirmation, and invalid persistence all produce zero maintenance or
+  migration writes.
+- Ordinary Markdown is not a ConceptNode; reading is not migration; AI
+  interpretation is not user meaning; a migration preview is not a write; only
+  an exact explicit confirmation can alter the selected ordinary note.
 
 ## Deliberate limits
 
 - The workspace deliberately has no automatic merge UI or AI suggestion action.
-- No automatic migration of existing candidate or Vault notes is attempted.
+- Ordinary-note migration is explicit, manual, and one note at a time. There is
+  no automatic, batch, startup, background, or AI-authored mapping path.
 - The Vault index is one-shot and metadata-only; it is not semantic search and
   does not persist a secondary database.
 - Current Create Note safely persists source evidence and generated
@@ -301,13 +427,15 @@ write files.
   promote an exact evidence span or manual edit to personal meaning.
 - No title-based concept merge, ontology, graph traversal, LLM call, cloud sync,
   or model training is included.
-- Title changes are not exposed by this workspace, and no file is renamed.
-- External definitions and AI interpretations are inspectable but not editable
-  in v1; this keeps non-authoritative layers from being promoted accidentally.
+- Migration and maintenance do not rename files or merge notes. Title changes
+  are not exposed by the maintenance workspace.
+- For existing ConceptNodes, external definitions and AI interpretations remain
+  inspectable but not editable in the maintenance workspace. Migration review
+  can map them explicitly, but only into their separate non-authoritative
+  layers.
 - Obsidian GUI smoke testing was not performed by the automated environment;
   the actual Modal DOM and Vault boundary are covered by deterministic shims.
 
-The next milestone should add one explicit **ordinary-note-to-ConceptNode
-migration review** that lets a user choose a stable identity and semantic layer
-mapping before any existing Markdown note is upgraded. It must reuse the same
-preview, semantic-diff, and explicit-confirmation boundaries.
+The next migration milestone should refine the implemented review with
+source-anchored, finer-grained mappings while preserving the same no-inference,
+preview, semantic diff, and explicit-confirmation boundaries.

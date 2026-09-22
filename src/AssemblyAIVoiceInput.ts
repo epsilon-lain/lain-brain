@@ -24,21 +24,14 @@ export interface AssemblyAIVoiceCallbacks {
   ) => void;
 }
 
-interface AssemblyAITurnMessage {
-  type: "Turn";
-  turn_order?: number;
-  transcript?: string;
-  end_of_turn?: boolean;
+interface AssemblyAIMessage {
+  type?: unknown;
+  turn_order?: unknown;
+  transcript?: unknown;
+  end_of_turn?: unknown;
+  error?: unknown;
+  message?: unknown;
 }
-
-interface AssemblyAITerminationMessage {
-  type: "Termination";
-}
-
-type AssemblyAIMessage =
-  | AssemblyAITurnMessage
-  | AssemblyAITerminationMessage
-  | { type?: string; error?: string; message?: string };
 
 export function buildAssemblyAIStreamingUrl(
   token: string,

@@ -183,18 +183,16 @@ export class AssemblyAIVoiceInput {
     this.transition("connecting", "Requesting microphone access...");
 
     try {
-      const [token, stream] = await Promise.all([
-        createTemporaryToken(config.apiKey.trim()),
-        navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          },
-          video: false
-        })
-      ]);
+      const token = await createTemporaryToken(config.apiKey.trim());
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        video: false
+      });
 
       this.stream = stream;
       const socket = new WebSocket(
@@ -204,12 +202,13 @@ export class AssemblyAIVoiceInput {
       this.socket = socket;
 
       socket.addEventListener("open", () => {
-        try {
-          this.startAudioPipeline(stream, socket);
-          this.transition("recording", "Listening with AssemblyAI...");
-        } catch (error) {
-          this.fail(error);
-        }
+        void this.startAudioPipeline(stream, socket)
+          .then(() => {
+            this.transition("recording", "Listening with AssemblyAI...");
+          })
+          .catch((error: unknown) => {
+            this.fail(error);
+          });
       });
 
       socket.addEventListener("message", (event) => {
@@ -268,11 +267,14 @@ export class AssemblyAIVoiceInput {
     this.transition("idle");
   }
 
-  private startAudioPipeline(
+  private async startAudioPipeline(
     stream: MediaStream,
     socket: WebSocket
-  ): void {
+  ): Promise<void> {
     const audioContext = new AudioContext();
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
     const sourceNode = audioContext.createMediaStreamSource(stream);
     const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
     const muteNode = audioContext.createGain();

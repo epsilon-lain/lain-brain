@@ -8,6 +8,10 @@ import {
 } from "./SelectableText";
 import type { VisionImageFile } from "./OpenAIVisionClient";
 import {
+  AssemblyAIVoiceInput,
+  type AssemblyAIVoiceState
+} from "./AssemblyAIVoiceInput";
+import {
   CHAT_STRUCTURAL_RELATION_TYPES,
   type ChatSemanticDeltaProposalTarget
 } from "./ChatSemanticDelta";
@@ -27,6 +31,10 @@ export class LainBrainChatPanel {
   private readonly inputPrefix: HTMLSpanElement;
   private readonly attachmentPreviewEl: HTMLDivElement;
   private readonly attachmentButton: HTMLButtonElement;
+  private readonly voiceButton: HTMLButtonElement;
+  private readonly voiceStatusEl: HTMLDivElement;
+  private readonly voiceInput: AssemblyAIVoiceInput;
+  private voiceBaseDraft = "";
   private readonly fileInput: HTMLInputElement;
   private readonly noteLabel: HTMLElement;
   private readonly clearButton: HTMLButtonElement;
@@ -178,6 +186,64 @@ export class LainBrainChatPanel {
     this.attachmentButton.style.padding = "0";
     this.attachmentButton.style.marginLeft = "0.35rem";
 
+    this.voiceButton = inputLine.createEl("button");
+    this.voiceButton.type = "button";
+    this.voiceButton.setAttr(
+      "aria-label",
+      "Start AssemblyAI voice input"
+    );
+    this.voiceButton.setAttr(
+      "title",
+      "Start AssemblyAI voice input"
+    );
+    setIcon(this.voiceButton, "mic");
+    this.voiceButton.style.flexShrink = "0";
+    this.voiceButton.style.width = "24px";
+    this.voiceButton.style.height = "24px";
+    this.voiceButton.style.display = "inline-flex";
+    this.voiceButton.style.alignItems = "center";
+    this.voiceButton.style.justifyContent = "center";
+    this.voiceButton.style.padding = "0";
+    this.voiceButton.style.marginLeft = "0.25rem";
+
+    this.voiceStatusEl = this.transcriptEl.createDiv();
+    this.voiceStatusEl.style.display = "none";
+    this.voiceStatusEl.style.fontSize = "0.75rem";
+    this.voiceStatusEl.style.color = "var(--text-muted)";
+    this.voiceStatusEl.style.paddingTop = "0.2rem";
+
+    this.voiceInput = new AssemblyAIVoiceInput(
+      () => this.session.getAssemblyAIVoiceConfig(),
+      {
+        onTranscript: (transcript) => {
+          const prefix = this.voiceBaseDraft.trimEnd();
+          this.session.setDraft(
+            prefix === ""
+              ? transcript
+              : prefix + "\n" + transcript
+          );
+        },
+        onStateChange: (state, detail) => {
+          this.renderVoiceState(state, detail);
+        }
+      }
+    );
+
+    this.voiceButton.addEventListener("click", () => {
+      if (this.voiceInput.currentState === "recording") {
+        void this.voiceInput.stop();
+        return;
+      }
+
+      if (
+        this.voiceInput.currentState === "idle" ||
+        this.voiceInput.currentState === "error"
+      ) {
+        this.voiceBaseDraft = this.session.draft;
+        void this.voiceInput.start();
+      }
+    });
+
     this.fileInput = inputLine.createEl("input");
     this.fileInput.type = "file";
     this.fileInput.accept = "image/png,image/jpeg,image/webp,image/gif";
@@ -251,6 +317,7 @@ export class LainBrainChatPanel {
 
   destroy(): void {
     this.unsubscribe();
+    void this.voiceInput.destroy();
     this.selectableCleanup();
     this.revokeAttachmentPreviews();
     this.markdownRenderer.destroy();
@@ -258,6 +325,49 @@ export class LainBrainChatPanel {
 
   focus(): void {
     this.input.focus();
+  }
+
+  private renderVoiceState(
+    state: AssemblyAIVoiceState,
+    detail?: string
+  ): void {
+    const active = state === "recording";
+
+    setIcon(this.voiceButton, active ? "square" : "mic");
+    this.voiceButton.setAttr(
+      "aria-label",
+      active
+        ? "Stop AssemblyAI voice input"
+        : "Start AssemblyAI voice input"
+    );
+    this.voiceButton.setAttr(
+      "title",
+      detail ??
+        (active
+          ? "Stop AssemblyAI voice input"
+          : "Start AssemblyAI voice input")
+    );
+    this.voiceButton.style.color = active
+      ? "var(--text-error)"
+      : "inherit";
+    this.voiceStatusEl.style.display =
+      state === "idle" ? "none" : "";
+    this.voiceStatusEl.style.color =
+      state === "error"
+        ? "var(--text-error)"
+        : "var(--text-muted)";
+    this.voiceStatusEl.setText(
+      detail ??
+        (state === "connecting"
+          ? "Connecting to AssemblyAI..."
+          : state === "recording"
+            ? "Listening with AssemblyAI..."
+            : state === "stopping"
+              ? "Finalizing transcript..."
+              : state === "error"
+                ? "AssemblyAI voice input failed."
+                : "")
+    );
   }
 
   private render(): void {
@@ -336,6 +446,22 @@ export class LainBrainChatPanel {
     this.input.readOnly = this.session.loading;
     this.attachmentButton.disabled = this.session.loading;
     this.attachmentButton.style.display =
+      selectionContext === undefined ? "inline-flex" : "none";
+
+    const voiceConfig = this.session.getAssemblyAIVoiceConfig();
+    const voiceBusy =
+      this.voiceInput.currentState === "connecting" ||
+      this.voiceInput.currentState === "stopping";
+    this.voiceButton.disabled = voiceBusy ||
+      (
+        this.voiceInput.currentState !== "recording" &&
+        (
+          this.session.loading ||
+          !voiceConfig.enabled ||
+          voiceConfig.apiKey.trim() === ""
+        )
+      );
+    this.voiceButton.style.display =
       selectionContext === undefined ? "inline-flex" : "none";
   }
 

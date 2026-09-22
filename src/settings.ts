@@ -40,6 +40,9 @@ export type LeanExecutionMode = "native" | "wsl";
 
 export interface LainBrainSettings {
   deepSeekApiKey: string;
+  assemblyAIVoiceEnabled: boolean;
+  assemblyAIApiKey: string;
+  assemblyAISpeechModel: string;
   imageProviderProfiles: ProviderProfile[];
   activeImageProviderId: string | null;
   userDisplayName: string;
@@ -64,6 +67,9 @@ export interface LainBrainSettings {
 
 export const DEFAULT_SETTINGS: LainBrainSettings = {
   deepSeekApiKey: "",
+  assemblyAIVoiceEnabled: true,
+  assemblyAIApiKey: "",
+  assemblyAISpeechModel: "universal-3-5-pro",
   imageProviderProfiles: createDefaultProviderProfiles(),
   activeImageProviderId: null,
   userDisplayName: DEFAULT_USER_DISPLAY_NAME,
@@ -168,6 +174,16 @@ export function migrateLainBrainSettings(
     deepSeekApiKey: typeof value.deepSeekApiKey === "string"
       ? value.deepSeekApiKey
       : "",
+    assemblyAIVoiceEnabled:
+      value.assemblyAIVoiceEnabled !== false,
+    assemblyAIApiKey: typeof value.assemblyAIApiKey === "string"
+      ? value.assemblyAIApiKey
+      : "",
+    assemblyAISpeechModel:
+      typeof value.assemblyAISpeechModel === "string" &&
+      value.assemblyAISpeechModel.trim() !== ""
+        ? value.assemblyAISpeechModel.trim()
+        : "universal-3-5-pro",
     imageProviderProfiles: normalized.profiles,
     activeImageProviderId,
     userDisplayName,

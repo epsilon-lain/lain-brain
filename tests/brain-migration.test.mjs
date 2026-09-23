@@ -415,6 +415,50 @@ for (const [conceptId, sourceMarkdown] of [
       "---",
       "# Escaped managed key"
     ].join("\n")
+  ],
+  [
+    "concept-managed-nested-multiline-flow-value",
+    [
+      "---",
+      "lain-brain-concept-aliases:",
+      "- [",
+      '  "stale-one",',
+      '  "stale-two"',
+      "]",
+      "plain-key: keep-me",
+      "---",
+      "# Nested multiline flow value"
+    ].join("\n")
+  ],
+  [
+    "concept-mixed-map-sequence-root",
+    [
+      "---",
+      "plain-key: scalar-value",
+      "- invalid-root-sequence-entry",
+      "---",
+      "# Mixed YAML roots"
+    ].join("\n")
+  ],
+  [
+    "concept-tab-indented-frontmatter",
+    [
+      "---",
+      "plain-key:",
+      "\tinvalid-tab-indentation: value",
+      "---",
+      "# Tab-indented YAML"
+    ].join("\n")
+  ],
+  [
+    "concept-unterminated-managed-quote",
+    [
+      "---",
+      'lain-brain-concept-id: "unterminated',
+      "plain-key: keep-me",
+      "---",
+      "# Unterminated managed scalar"
+    ].join("\n")
   ]
 ]) {
   const unsupportedRoot = prepare({ conceptId, sourceMarkdown });
@@ -727,6 +771,78 @@ assert.equal(scanRaceResult.code, "stale_source");
 assert.equal(scanRaceSourceReads, 3);
 assert.equal(scanRaceFixture.calls.length, 0);
 
+// A TFile is mutable. If its path changes while the final uncached read is
+// awaiting, confirmation must not pass that redirected object to modify().
+const filePathRaceFixture = makeVault([
+  { path: sourcePath, markdown: sourceMarkdown },
+  { path: "Notes/Redirected.md", markdown: "# Must remain untouched" }
+]);
+const filePathRacePrepared = prepare();
+const filePathRaceRead = filePathRaceFixture.app.vault.read;
+let filePathRaceSourceReads = 0;
+filePathRaceFixture.app.vault.read = async (file) => {
+  if (file.path !== sourcePath) {
+    return filePathRaceRead(file);
+  }
+  filePathRaceSourceReads += 1;
+  const markdown = await filePathRaceRead(file);
+  if (filePathRaceSourceReads === 5) {
+    file.path = "Notes/Redirected.md";
+  }
+  return markdown;
+};
+const filePathRaceResult = await api.persistConfirmedConceptMigration(
+  filePathRaceFixture.app,
+  {
+    prepared: filePathRacePrepared,
+    confirmation: confirmationFor(filePathRacePrepared)
+  }
+);
+assert.equal(filePathRaceResult.ok, false);
+assert.equal(filePathRaceResult.code, "source_path_changed");
+assert.equal(filePathRaceFixture.calls.length, 0);
+assert.equal(
+  filePathRaceFixture.markdown("Notes/Redirected.md"),
+  "# Must remain untouched"
+);
+
+// Replacing the selected TFile with a byte-identical object during confirmation
+// is still a stale note identity and must not redirect authorization to it.
+const fileIdentityRaceFixture = makeVault([
+  { path: sourcePath, markdown: sourceMarkdown }
+]);
+const fileIdentityRacePrepared = prepare();
+const fileIdentityRaceRead = fileIdentityRaceFixture.app.vault.read;
+let fileIdentityRaceSourceReads = 0;
+let fileIdentityWasReplaced = false;
+fileIdentityRaceFixture.app.vault.read = async (file) => {
+  const markdown = await fileIdentityRaceRead(file);
+  if (file.path === sourcePath) {
+    fileIdentityRaceSourceReads += 1;
+    if (fileIdentityRaceSourceReads === 2) {
+      fileIdentityWasReplaced = true;
+      fileIdentityRaceFixture.entries.set(sourcePath, {
+        file: { path: sourcePath },
+        markdown: sourceMarkdown,
+        readError: false
+      });
+    }
+  }
+  return markdown;
+};
+const fileIdentityRaceResult = await api.persistConfirmedConceptMigration(
+  fileIdentityRaceFixture.app,
+  {
+    prepared: fileIdentityRacePrepared,
+    confirmation: confirmationFor(fileIdentityRacePrepared)
+  }
+);
+assert.equal(fileIdentityWasReplaced, true);
+assert.equal(fileIdentityRaceResult.ok, false);
+assert.equal(fileIdentityRaceResult.code, "source_file_changed");
+assert.equal(fileIdentityRaceFixture.calls.length, 0);
+assert.equal(fileIdentityRaceFixture.markdown(sourcePath), sourceMarkdown);
+
 // An identity introduced after the first index scan's file snapshot is
 // non-colliding by itself, but it proves that the reviewed identity view moved.
 // The second complete scan must detect that race before any write.
@@ -973,6 +1089,88 @@ const futurePreviewResult = await api.persistConfirmedConceptMigration(
 );
 assert.equal(futurePreviewResult.code, "invalid_prepared_projection");
 assert.equal(futurePreviewFixture.calls.length, 0);
+
+// Reserved projection data is valid only as one terminal record paired with
+// concept frontmatter. Code-fence text, trailing-body records, and duplicates
+// must never be accepted as a reloadable ConceptNode.
+const existingProjection = existing.markdown.match(
+  /<!-- lain-brain-concept-data:v1:[^\s]+ -->/u
+)[0];
+const otherProjection = candidateMarkdown(
+  "concept-other-projection",
+  "Other projection"
+).markdown.match(/<!-- lain-brain-concept-data:v1:[^\s]+ -->/u)[0];
+const fakeProjectionCases = [
+  [
+    "projection-only",
+    ["# Ordinary note", "", existingProjection].join("\n")
+  ],
+  [
+    "projection-in-fence",
+    ["# Ordinary note", "", "```html", existingProjection, "```"].join("\n")
+  ],
+  [
+    "non-terminal-projection",
+    `${existing.markdown}\n# Content appended after the hidden projection`
+  ],
+  [
+    "duplicate-v1-projections",
+    `${existing.markdown.trimEnd()}\n${otherProjection}\n`
+  ]
+];
+for (const [name, markdown] of fakeProjectionCases) {
+  const inspection = api.inspectConceptMarkdown(markdown);
+  assert.equal(inspection.kind, "invalid_concept", name);
+  assert.equal(inspection.code, "invalid_concept_metadata", name);
+  const prepared = prepare({
+    sourceMarkdown: markdown,
+    conceptId: `concept-fake-${name}`
+  });
+  assert.equal(prepared.kind, "failed", name);
+  assert.equal(prepared.code, "source_invalid_concept_metadata", name);
+}
+assert.throws(() => api.serializeConceptNodeIntoMarkdown(
+  fakeProjectionCases.find(([name]) => name === "duplicate-v1-projections")[1],
+  existing.concept,
+  existing.origin
+));
+
+const futureProjection = existingProjection.replace(
+  "lain-brain-concept-data:v1:",
+  "lain-brain-concept-data:v9:"
+);
+for (const [name, markdown] of [
+  [
+    "supported-then-future",
+    `${existing.markdown.trimEnd()}\n${futureProjection}\n`
+  ],
+  [
+    "future-then-supported",
+    `${futureMarkdown.trimEnd()}\n${existingProjection}\n`
+  ]
+]) {
+  const inspection = api.inspectConceptMarkdown(markdown);
+  assert.equal(inspection.kind, "invalid_concept", name);
+  assert.equal(inspection.code, "unsupported_schema_version", name);
+}
+
+const quotedConceptTypeMarkdown = [
+  "---",
+  '"lain-brain-type": "concept-node"',
+  "---",
+  "# Missing canonical projection"
+].join("\n");
+const quotedTypeInspection = api.inspectConceptMarkdown(
+  quotedConceptTypeMarkdown
+);
+assert.equal(quotedTypeInspection.kind, "invalid_concept");
+assert.equal(quotedTypeInspection.code, "invalid_concept_metadata");
+const quotedTypePreparation = prepare({
+  sourceMarkdown: quotedConceptTypeMarkdown,
+  conceptId: "concept-quoted-type-marker"
+});
+assert.equal(quotedTypePreparation.kind, "failed");
+assert.equal(quotedTypePreparation.code, "source_invalid_concept_metadata");
 
 // Legacy candidate origins still round-trip without being reclassified.
 const legacyReload = api.deserializeConceptNodeFromMarkdown(existing.markdown);

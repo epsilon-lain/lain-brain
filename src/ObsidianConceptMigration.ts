@@ -30,6 +30,7 @@ export type ConceptMigrationLoadFailureCode =
   | "invalid_source_path"
   | "source_not_found"
   | "source_read_failed"
+  | "source_path_changed"
   | "source_not_ordinary"
   | "source_invalid_concept_metadata"
   | "source_unsupported_schema_version";
@@ -112,6 +113,15 @@ export async function loadOrdinaryNoteForMigration(
       : await app.vault.cachedRead(file);
   } catch {
     return loadFailure("source_read_failed", "Migration note could not be read");
+  }
+  if (
+    file.path !== vaultPath ||
+    app.vault.getFileByPath(vaultPath) !== file
+  ) {
+    return loadFailure(
+      "source_path_changed",
+      "Migration note path changed while it was being read"
+    );
   }
 
   const inspected = inspectConceptMarkdown(markdown);

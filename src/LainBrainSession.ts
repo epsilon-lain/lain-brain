@@ -1,5 +1,12 @@
 import type { App, TFile } from "obsidian";
 import {
+  AssemblyAIVoiceInput
+} from "./AssemblyAIVoiceInput";
+import type {
+  AssemblyAIVoiceConfig,
+  AssemblyAIVoiceState
+} from "./AssemblyAIVoiceInput";
+import {
   validateVisionImage,
   VisionProviderRouter
 } from "./OpenAIVisionClient";
@@ -262,6 +269,24 @@ import {
 import type {
   LeanGenerationResult
 } from "./DeepSeekClient";
+import { ChatSpace } from "./ChatSpace";
+import type { ChatSpaceSegment } from "./ChatSpace";
+import { MacroExecutor } from "./MacroExecutor";
+import { MacroMatcher, normalizeMacroText } from "./MacroMatcher";
+import { MacroRegistry } from "./MacroRegistry";
+import type { StoredMacroRegistry } from "./MacroRegistry";
+import {
+  buildMacroDefinitionPreview,
+  generateMacroDefinitionCandidate,
+  validateMacroDefinitionCandidate
+} from "./MacroDefinitionInterpreter";
+import type {
+  MacroDefinitionGenerator,
+  MacroDefinitionPreview
+} from "./MacroDefinitionInterpreter";
+import type { MacroDefinition } from "./MacroTypes";
+import { analyzeVoiceSubmitTail } from "./VoiceSubmitTail";
+import { ChatSpaceSubmissionGate } from "./ChatSpaceSubmissionGate";
 
 export interface LainBrainImageAttachmentMetadata {
   filename: string;
@@ -625,7 +650,39 @@ export type LainBrainLoadingMode = "chat" | null;
 export type LainBrainLargeViewMode = "chat" | "candidate";
 export type LainBrainCandidateViewMode = "edit" | "preview";
 export type LainBrainSendResult =
-  "sent" | "blocked" | "needs-vision-confirmation";
+  "sent" | "blocked" | "needs-vision-confirmation" | "failed";
+
+export type MacroExecutionOutcome =
+  | { readonly kind: "appended"; readonly segment: ChatSpaceSegment | null }
+  | { readonly kind: "review" }
+  | { readonly kind: "executed" | "failed" | "ignored" | "conflict"; readonly submittedText?: string };
+
+export type VoiceSubmitReviewAction = "submit" | "keep" | "discard";
+
+export interface VoiceSubmitReviewState {
+  readonly candidate: string;
+  readonly body: string;
+  readonly originalText: string;
+}
+
+export type MacroDefinitionState =
+  | { readonly kind: "idle" }
+  | { readonly kind: "awaiting_description" }
+  | {
+      readonly kind: "generating";
+      readonly description: string;
+    }
+  | {
+      readonly kind: "preview";
+      readonly description: string;
+      readonly candidate: MacroDefinition;
+      readonly preview: MacroDefinitionPreview;
+    }
+  | {
+      readonly kind: "error";
+      readonly description?: string;
+      readonly message: string;
+    };
 
 /**
  * Ephemeral formalization preview for an un-applied suggestion.
@@ -648,6 +705,18 @@ export interface SuggestionFormalizationPreview {
 export class LainBrainSession {
   private readonly messages: StoredMessage[] = [];
   private readonly listeners = new Set<SessionListener>();
+  private readonly chatSpace = new ChatSpace();
+  private macroRegistry = new MacroRegistry();
+  private readonly macroExecutor = new MacroExecutor(this.chatSpace);
+  private readonly chatSpaceSubmissionGate = new ChatSpaceSubmissionGate<LainBrainSendResult>();
+  private readonly processedFinalizedTurnIds = new Set<string>();
+  private readonly processedMacroDefinitionTurnIds = new Set<string>();
+  private activeFinalizedSubmissionText?: string;
+  private macroDefinitionState: MacroDefinitionState = { kind: "idle" };
+  private macroDefinitionPreviewPending = false;
+  private macroDefinitionRequestId = 0;
+  private voiceSubmitReview?: VoiceSubmitReviewState;
+  private macroRegistrySaveCallback?: (registry: StoredMacroRegistry) => void;
   private activeFile: TFile | null = null;
   private activeNoteContext?: DeepSeekNoteContext;
   private noteRevision = 0;
@@ -665,6 +734,14 @@ export class LainBrainSession {
     brainDisplayName: DEFAULT_BRAIN_DISPLAY_NAME,
     hasCompletedNamingOnboarding: false
   });
+  private getAssemblyAIVoice: () => AssemblyAIVoiceConfig = () => ({
+    enabled: false,
+    apiKey: "",
+    speechModel: "universal-3-5-pro"
+  });
+  private voiceInput?: AssemblyAIVoiceInput;
+  private voiceInputState: AssemblyAIVoiceState = "idle";
+  private voiceInputDetail?: string;
   private chatSemanticSession?: ChatSemanticSession;
   private chatSemanticAnalyzer: ChatSemanticAnalyzer = analyzeChatSemantics;
   private semanticPriorState: SemanticPriorState =
@@ -732,6 +809,7 @@ export class LainBrainSession {
     status?: number;
     message: string;
   } | null = null;
+  private lastForegroundSendFailed = false;
 
   activeCandidateId: string | null = null;
   private generalDraft = "";
@@ -788,7 +866,9 @@ export class LainBrainSession {
     private classifyClaims: typeof classifyCandidateClaims =
       classifyCandidateClaims,
     private generateLean: typeof generateLeanStatement =
-      generateLeanStatement
+      generateLeanStatement,
+    private interpretMacroDefinition: MacroDefinitionGenerator =
+      generateMacroDefinitionCandidate
   ) {}
 
   get loading(): boolean {
@@ -833,6 +913,126 @@ export class LainBrainSession {
   ): void {
     this.getPersonalNaming = provider;
     this.notify();
+  }
+
+  setAssemblyAIVoiceConfigProvider(
+    provider: () => AssemblyAIVoiceConfig
+  ): void {
+    this.getAssemblyAIVoice = provider;
+    this.notify();
+  }
+
+  getAssemblyAIVoiceConfig(): AssemblyAIVoiceConfig {
+    return this.getAssemblyAIVoice();
+  }
+
+  getVoiceInputState(): AssemblyAIVoiceState {
+    return this.voiceInputState;
+  }
+
+  getVoiceInputDetail(): string | undefined {
+    return this.voiceInputDetail;
+  }
+
+  getVoiceSubmitReview():
+    Readonly<VoiceSubmitReviewState> | undefined {
+    return this.voiceSubmitReview;
+  }
+
+  resolveVoiceSubmitReview(
+    action: VoiceSubmitReviewAction
+  ): boolean {
+    const review = this.voiceSubmitReview;
+    if (review === undefined) {
+      return false;
+    }
+
+    if (action === "submit") {
+      if (review.body !== "") {
+        this.chatSpace.finalizeVoiceTurn(review.body);
+      }
+      this.voiceSubmitReview = undefined;
+      this.notify();
+      void this.submitChatSpace();
+      return true;
+    }
+
+    if (action === "keep") {
+      if (review.originalText.trim() !== "") {
+        this.chatSpace.finalizeVoiceTurn(review.originalText);
+      }
+      this.voiceSubmitReview = undefined;
+      this.notify();
+      return true;
+    }
+
+    this.voiceSubmitReview = undefined;
+    this.notify();
+    return true;
+  }
+
+  clearVoiceSubmitReview(): void {
+    if (this.voiceSubmitReview === undefined) {
+      return;
+    }
+    this.voiceSubmitReview = undefined;
+    this.notify();
+  }
+
+  async startVoiceInput(): Promise<void> {
+    await this.getVoiceInput().start();
+  }
+
+  async stopVoiceInput(): Promise<void> {
+    await this.getVoiceInput().stop();
+  }
+
+  destroyVoiceInput(): void {
+    void this.voiceInput?.destroy();
+    this.voiceInput = undefined;
+    this.voiceInputState = "idle";
+    this.voiceInputDetail = undefined;
+  }
+
+  private getVoiceInput(): AssemblyAIVoiceInput {
+    if (this.voiceInput !== undefined) {
+      return this.voiceInput;
+    }
+
+    this.voiceInput = new AssemblyAIVoiceInput(
+      () => this.getAssemblyAIVoice(),
+      {
+        onTranscript: () => {
+          // Compatibility hook only. Chat Space ingests finalized turns
+          // through onFinalizedTurn so cumulative transcripts are never
+          // appended as segments.
+        },
+        onPartialTranscript: (transcript) => {
+          this.chatSpace.setPartialVoiceText(transcript);
+          this.notify();
+        },
+        onFinalizedTurn: (turn) => {
+          this.chatSpace.setPartialVoiceText("");
+          if (!this.handleMacroDefinitionInput(
+            turn.transcript,
+            turn.turnId
+          )) {
+            this.ingestFinalizedVoiceTurn(
+              turn.transcript,
+              new Date().toISOString(),
+              turn.turnId
+            );
+          }
+        },
+        onStateChange: (state, detail) => {
+          this.voiceInputState = state;
+          this.voiceInputDetail = detail;
+          this.notify();
+        }
+      }
+    );
+
+    return this.voiceInput;
   }
 
   setChatSemanticAnalyzer(analyzer: ChatSemanticAnalyzer): void {
@@ -1792,6 +1992,360 @@ export class LainBrainSession {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  getChatSpace(): readonly ChatSpaceSegment[] {
+    return this.chatSpace.getSegments();
+  }
+
+  getChatSpaceText(): string { return this.chatSpace.text(); }
+
+  getChatSpacePartialVoiceText(): string { return this.chatSpace.partialText; }
+
+  setMacroRegistrySaveCallback(callback: (registry: StoredMacroRegistry) => void): void {
+    this.macroRegistrySaveCallback = callback;
+  }
+
+  setMacroRegistry(registry: StoredMacroRegistry | undefined): void {
+    this.macroRegistry = new MacroRegistry(registry);
+  }
+
+  getMacroRegistry(): StoredMacroRegistry { return this.macroRegistry.serialize(); }
+
+  getMacroDefinitionPhrase(): string {
+    return this.macroRegistry.definitionPhrase;
+  }
+
+  setMacroDefinitionPhrase(phrase: string): boolean {
+    if (!this.macroRegistry.setDefinitionPhrase(phrase)) {
+      return false;
+    }
+    this.macroRegistrySaveCallback?.(this.macroRegistry.serialize());
+    this.notify();
+    return true;
+  }
+
+  getMacroDefinitionState(): MacroDefinitionState {
+    return this.macroDefinitionState;
+  }
+
+  isMacroDefinitionActive(): boolean {
+    return this.macroDefinitionState.kind !== "idle";
+  }
+
+  beginMacroDefinition(): boolean {
+    if (this.macroDefinitionState.kind !== "idle") {
+      return false;
+    }
+    this.macroDefinitionState = { kind: "awaiting_description" };
+    this.notify();
+    return true;
+  }
+
+  tryOpenMacroDefinitionPreview(): boolean {
+    if (!this.macroDefinitionPreviewPending) {
+      return false;
+    }
+    this.macroDefinitionPreviewPending = false;
+    return true;
+  }
+
+  handleMacroDefinitionInput(
+    text: string,
+    turnId?: string
+  ): boolean {
+    if (turnId !== undefined) {
+      if (this.processedMacroDefinitionTurnIds.has(turnId)) {
+        return true;
+      }
+    }
+
+    const state = this.macroDefinitionState;
+    if (state.kind === "preview" || state.kind === "generating") {
+      if (turnId !== undefined) {
+        this.processedMacroDefinitionTurnIds.add(turnId);
+      }
+      return true;
+    }
+
+    if (state.kind === "awaiting_description" || state.kind === "error") {
+      const description = text.trim();
+      if (description === "") {
+        return false;
+      }
+      if (turnId !== undefined) {
+        this.processedMacroDefinitionTurnIds.add(turnId);
+      }
+      void this.submitMacroDefinitionDescription(description);
+      return true;
+    }
+
+    if (state.kind === "idle") {
+      const trigger = this.parseMacroDefinitionTrigger(text);
+      if (trigger === null) {
+        return false;
+      }
+      if (turnId !== undefined) {
+        this.processedMacroDefinitionTurnIds.add(turnId);
+      }
+      if (trigger.description === "") {
+        this.macroDefinitionState = { kind: "awaiting_description" };
+      } else {
+        void this.submitMacroDefinitionDescription(trigger.description);
+      }
+      this.notify();
+      return true;
+    }
+
+    return false;
+  }
+
+  async submitMacroDefinitionDescription(
+    description: string
+  ): Promise<void> {
+    const value = description.trim();
+    if (value === "") {
+      this.macroDefinitionState = {
+        kind: "error",
+        message: "Describe the macro before continuing."
+      };
+      this.notify();
+      return;
+    }
+
+    const requestId = ++this.macroDefinitionRequestId;
+    const apiKey = this.getApiKey().trim();
+    this.macroDefinitionState = { kind: "generating", description: value };
+    this.notify();
+
+    if (apiKey === "") {
+      this.macroDefinitionState = {
+        kind: "error",
+        description: value,
+        message: "Add a DeepSeek API key before defining a macro."
+      };
+      this.notify();
+      return;
+    }
+
+    try {
+      const generated = await this.interpretMacroDefinition(
+        apiKey,
+        value,
+        this.macroRegistry.macros
+      );
+      if (
+        this.macroDefinitionState.kind !== "generating" ||
+        this.macroDefinitionRequestId !== requestId
+      ) {
+        return;
+      }
+      if (!generated.ok) {
+        this.macroDefinitionState = {
+          kind: "error",
+          description: value,
+          message: generated.error
+        };
+        this.notify();
+        return;
+      }
+
+      const validated = validateMacroDefinitionCandidate(
+        generated.macro,
+        this.macroRegistry.macros
+      );
+      if (!validated.ok) {
+        this.macroDefinitionState = {
+          kind: "error",
+          description: value,
+          message: validated.error
+        };
+        this.notify();
+        return;
+      }
+
+      this.macroDefinitionState = {
+        kind: "preview",
+        description: value,
+        candidate: validated.macro,
+        preview: buildMacroDefinitionPreview(validated.macro)
+      };
+      this.macroDefinitionPreviewPending = true;
+    } catch (error) {
+      if (
+        this.macroDefinitionState.kind !== "generating" ||
+        this.macroDefinitionRequestId !== requestId
+      ) {
+        return;
+      }
+      this.macroDefinitionState = {
+        kind: "error",
+        description: value,
+        message: error instanceof Error
+          ? error.message
+          : "Macro definition provider failed."
+      };
+    }
+    this.notify();
+  }
+
+  confirmMacroDefinition(): boolean {
+    const state = this.macroDefinitionState;
+    if (state.kind !== "preview") {
+      return false;
+    }
+    this.macroRegistry.replace(state.candidate);
+    this.macroRegistrySaveCallback?.(this.macroRegistry.serialize());
+    this.macroDefinitionState = { kind: "idle" };
+    this.macroDefinitionPreviewPending = false;
+    this.notify();
+    return true;
+  }
+
+  cancelMacroDefinition(): void {
+    this.macroDefinitionRequestId += 1;
+    this.macroDefinitionState = { kind: "idle" };
+    this.macroDefinitionPreviewPending = false;
+    this.notify();
+  }
+
+  private parseMacroDefinitionTrigger(
+    text: string
+  ): { readonly description: string } | null {
+    const phrase = normalizeMacroText(this.macroRegistry.definitionPhrase);
+    const normalized = normalizeMacroText(text);
+    if (normalized === phrase) {
+      return { description: "" };
+    }
+    if (normalized.startsWith(phrase)) {
+      const remainder = normalized.slice(phrase.length);
+      if (remainder === "") {
+        return { description: "" };
+      }
+      const separator = remainder[0] ?? "";
+      if (separator === " " || separator === "," ||
+          separator === ":" || separator === ";") {
+        const description = remainder.slice(1).trim();
+        return description === "" ? null : { description };
+      }
+    }
+    return null;
+  }
+
+  setChatSpacePartialVoiceText(text: string): void {
+    this.chatSpace.setPartialVoiceText(text);
+    this.notify();
+  }
+
+  appendKeyboardChatSpaceText(text: string, createdAt?: string): ChatSpaceSegment | null {
+    const segment = this.chatSpace.appendKeyboardText(text, createdAt);
+    this.notify();
+    return segment;
+  }
+
+  /** Accept only finalized voice turns. Partial text is intentionally separate. */
+  ingestFinalizedVoiceTurn(text: string, createdAt?: string, turnId?: string): MacroExecutionOutcome {
+    if (turnId !== undefined) {
+      if (this.processedFinalizedTurnIds.has(turnId)) return { kind: "ignored" };
+      this.processedFinalizedTurnIds.add(turnId);
+    }
+    return this.ingestChatSpaceTurn(text, "voice", createdAt, turnId);
+  }
+
+  ingestKeyboardChatSpaceTurn(text: string, createdAt?: string): MacroExecutionOutcome {
+    return this.ingestChatSpaceTurn(text, "keyboard", createdAt, undefined);
+  }
+
+  private ingestChatSpaceTurn(
+    text: string,
+    source: "voice" | "keyboard",
+    createdAt?: string,
+    turnId?: string
+  ): MacroExecutionOutcome {
+    this.voiceSubmitReview = undefined;
+    if (this.chatSpaceSubmissionGate.busy && this.activeFinalizedSubmissionText === text) {
+      return { kind: "ignored" };
+    }
+
+    if (source === "voice") {
+      const tail = analyzeVoiceSubmitTail(text);
+      if (tail.kind === "uncertain") {
+        this.voiceSubmitReview = {
+          candidate: tail.candidate,
+          body: tail.body,
+          originalText: text
+        };
+        this.notify();
+        return { kind: "review" };
+      }
+    }
+
+    const matcher = new MacroMatcher(this.macroRegistry.macros);
+    const match = matcher.match(text);
+    if (match.kind === "conflict") {
+      this.addAssistantNotice("That macro is ambiguous. Please resolve the macro conflict first.");
+      return { kind: "conflict" };
+    }
+    if (match.kind === "match") {
+      const isTrailing = match.macro.patterns.some((pattern) =>
+        pattern.kind === "trailing" &&
+        new RegExp(`(?:^|[\\s,])${pattern.phrase.normalize("NFKC").toLocaleLowerCase()}$`)
+          .test(match.normalizedText));
+      if (isTrailing && match.macro.actions.some((action) => action.kind === "submit_to_brain")) {
+        const phrase = match.consumedText;
+        const suffix = text.toLocaleLowerCase().lastIndexOf(phrase.toLocaleLowerCase());
+        const body = suffix > 0 ? text.slice(0, suffix).replace(/[\s,，。!?！？]+$/g, "").trim() : "";
+        if (body !== "") this.chatSpace.appendKeyboardText(body, createdAt);
+      }
+      const execution = this.macroExecutor.execute(match);
+      this.macroRegistrySaveCallback?.(this.macroRegistry.serialize());
+      if (execution.ok && execution.submittedText !== undefined) {
+        this.activeFinalizedSubmissionText = text;
+        void this.submitChatSpace();
+      }
+      this.notify();
+      return { kind: execution.ok ? "executed" : "failed", submittedText: execution.submittedText };
+    }
+    const segment = source === "voice"
+      ? this.chatSpace.finalizeVoiceTurn(text, createdAt)
+      : this.chatSpace.appendKeyboardText(text, createdAt);
+    this.notify();
+    return { kind: segment === null ? "ignored" : "appended", segment };
+  }
+
+  submitChatSpace(): Promise<LainBrainSendResult> {
+    return this.chatSpaceSubmissionGate.run(() => this.submitChatSpaceSnapshot());
+  }
+
+  private async submitChatSpaceSnapshot(): Promise<LainBrainSendResult> {
+    const snapshot = this.chatSpace.snapshot();
+    const text = snapshot.segments.map((segment) => segment.text).join("\n").trim();
+    if (text === "") {
+      this.activeFinalizedSubmissionText = undefined;
+      return "blocked";
+    }
+    const messageCountBefore = this.messages.length;
+    try {
+      this.generalDraft = text;
+      const result = await this.send();
+      if (result === "sent" && this.lastForegroundSendFailed) {
+        this.messages.length = messageCountBefore;
+        return "failed";
+      }
+      if (result === "sent") {
+        this.chatSpace.removeSubmittedSnapshot(snapshot);
+      }
+      return result;
+    } finally {
+      this.activeFinalizedSubmissionText = undefined;
+      this.voiceSubmitReview = undefined;
+      this.notify();
+    }
+  }
+
+  recoverChatSpace(): void {
+    this.macroExecutor.recover();
+    this.notify();
   }
 
   getTranscriptMessages(): readonly LainBrainTranscriptMessage[] {
@@ -5184,6 +5738,8 @@ export class LainBrainSession {
     }
 
     this.messages.length = 0;
+    this.chatSpace.clear();
+    this.voiceSubmitReview = undefined;
     this.generalDraft = "";
     this.pendingAttachments = [];
     this.candidateError = null;
@@ -5302,6 +5858,8 @@ export class LainBrainSession {
   async send(
     confirmedProviderId?: string
   ): Promise<LainBrainSendResult> {
+    this.lastForegroundSendFailed = false;
+
     if (this.selectionEditContext !== undefined) {
       await this.sendSelectionDiscussion();
       return "sent";
@@ -5472,6 +6030,7 @@ export class LainBrainSession {
           semanticDeltaEligible: false
         });
       } catch {
+        this.lastForegroundSendFailed = true;
         this.messages.push({
           id: this.createMessageId(),
           role: "assistant",
@@ -5674,6 +6233,7 @@ export class LainBrainSession {
         );
       }
     } catch (error) {
+      this.lastForegroundSendFailed = true;
       this.captureDeepSeekError(error, "foreground-chat");
       this.messages.push({
         id: this.createMessageId(),

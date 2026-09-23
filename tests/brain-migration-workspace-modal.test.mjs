@@ -350,10 +350,36 @@ assert.equal(migration.prepared.mapping.unresolvedMaterialText, "");
 assert.equal(migration.prepared.concept.userDefinition.text,
   "My exact reviewed definition.");
 assert.equal(writes.length, 0);
+const cancelledConfirm = findButton(
+  migration.contentEl,
+  "Confirm Migration"
+);
 findButton(migration.contentEl, "Cancel").click();
 assert.equal(migration.closed, true);
+cancelledConfirm.events.get("click")({ preventDefault() {} });
+await flush();
 assert.equal(store.get(ordinaryPath), ordinaryMarkdown);
 assert.equal(writes.length, 0);
+
+// A detached Confirm control belongs only to the exact preview that rendered
+// it. After Back and a second preview, the stale control must authorize neither.
+const staleControlMigration = await launchFromMaintenanceLookup();
+findSetting(staleControlMigration.contentEl, "Concept ID")
+  .textControl.inputEl.change("concept-stale-control-a");
+findButton(staleControlMigration.contentEl, "Preview").click();
+const stalePreviewConfirm = findButton(
+  staleControlMigration.contentEl,
+  "Confirm Migration"
+);
+findButton(staleControlMigration.contentEl, "Back").click();
+findSetting(staleControlMigration.contentEl, "Concept ID")
+  .textControl.inputEl.change("concept-stale-control-b");
+findButton(staleControlMigration.contentEl, "Preview").click();
+stalePreviewConfirm.events.get("click")({ preventDefault() {} });
+await flush();
+assert.equal(store.get(ordinaryPath), ordinaryMarkdown);
+assert.equal(writes.length, 0);
+findButton(staleControlMigration.contentEl, "Cancel").click();
 
 // A new reviewed flow crosses the boundary only through Confirm Migration.
 const confirmedMigration = await launchFromMaintenanceLookup();

@@ -35,11 +35,16 @@ import {
   deserializeLeanProofWorkspace
 } from "./LeanProofWorkspace";
 import type { LeanProofWorkspaceState } from "./LeanProofWorkspace";
+import { migrateMacroRegistry } from "./MacroRegistry";
+import type { StoredMacroRegistry } from "./MacroRegistry";
 
 export type LeanExecutionMode = "native" | "wsl";
 
 export interface LainBrainSettings {
   deepSeekApiKey: string;
+  assemblyAIVoiceEnabled: boolean;
+  assemblyAIApiKey: string;
+  assemblyAISpeechModel: string;
   imageProviderProfiles: ProviderProfile[];
   activeImageProviderId: string | null;
   userDisplayName: string;
@@ -60,10 +65,15 @@ export interface LainBrainSettings {
   wslExecutable: string;
   wslDistribution: string;
   wslProjectRoot: string;
+  macroRegistry?: StoredMacroRegistry;
+  hasCompletedMacroOnboarding: boolean;
 }
 
 export const DEFAULT_SETTINGS: LainBrainSettings = {
   deepSeekApiKey: "",
+  assemblyAIVoiceEnabled: true,
+  assemblyAIApiKey: "",
+  assemblyAISpeechModel: "universal-3-5-pro",
   imageProviderProfiles: createDefaultProviderProfiles(),
   activeImageProviderId: null,
   userDisplayName: DEFAULT_USER_DISPLAY_NAME,
@@ -77,7 +87,9 @@ export const DEFAULT_SETTINGS: LainBrainSettings = {
   leanTimeoutSeconds: 30,
   wslExecutable: "wsl.exe",
   wslDistribution: "",
-  wslProjectRoot: "/mnt/c/Users/elonl/Desktop/lain_lean"
+  wslProjectRoot: "/mnt/c/Users/elonl/Desktop/lain_lean",
+  macroRegistry: migrateMacroRegistry(undefined),
+  hasCompletedMacroOnboarding: false
 };
 
 export function removeCustomProviderProfile(
@@ -168,6 +180,16 @@ export function migrateLainBrainSettings(
     deepSeekApiKey: typeof value.deepSeekApiKey === "string"
       ? value.deepSeekApiKey
       : "",
+    assemblyAIVoiceEnabled:
+      value.assemblyAIVoiceEnabled !== false,
+    assemblyAIApiKey: typeof value.assemblyAIApiKey === "string"
+      ? value.assemblyAIApiKey
+      : "",
+    assemblyAISpeechModel:
+      typeof value.assemblyAISpeechModel === "string" &&
+      value.assemblyAISpeechModel.trim() !== ""
+        ? value.assemblyAISpeechModel.trim()
+        : "universal-3-5-pro",
     imageProviderProfiles: normalized.profiles,
     activeImageProviderId,
     userDisplayName,
@@ -210,6 +232,8 @@ export function migrateLainBrainSettings(
     wslProjectRoot: typeof value.wslProjectRoot === "string" &&
       value.wslProjectRoot.trim() !== ""
       ? value.wslProjectRoot.trim()
-      : "/mnt/c/Users/elonl/Desktop/lain_lean"
+      : "/mnt/c/Users/elonl/Desktop/lain_lean",
+    macroRegistry: migrateMacroRegistry(value.macroRegistry),
+    hasCompletedMacroOnboarding: value.hasCompletedMacroOnboarding === true
   };
 }

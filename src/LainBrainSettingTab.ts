@@ -180,6 +180,76 @@ export class LainBrainSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("Macro Definition")
+      .setHeading();
+
+    new Setting(containerEl)
+      .setName("Definition phrase")
+      .setDesc(
+        "Exact phrase that enters macro definition mode from keyboard or a finalized voice turn."
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("定义宏")
+          .setValue(this.plugin.session.getMacroDefinitionPhrase())
+          .onChange((value) => {
+            this.plugin.setMacroDefinitionPhrase(value);
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("AssemblyAI Voice Input")
+      .setHeading();
+
+    new Setting(containerEl)
+      .setName("Enable voice input")
+      .setDesc(
+        "Adds a microphone button to chat. Audio is streamed to " +
+        "AssemblyAI and the finalized transcript enters Chat Space."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.assemblyAIVoiceEnabled)
+          .onChange(async (value) => {
+            this.plugin.settings.assemblyAIVoiceEnabled = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("AssemblyAI API key")
+      .setDesc(
+        "Stored in the local Obsidian plugin data. The microphone WebSocket " +
+        "uses a one-time temporary token instead of exposing this key."
+      )
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text
+          .setPlaceholder("AssemblyAI API key")
+          .setValue(this.plugin.settings.assemblyAIApiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.assemblyAIApiKey = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("AssemblyAI streaming model")
+      .setDesc(
+        "Universal-3.5 Pro supports live Mandarin/English code switching."
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("universal-3-5-pro")
+          .setValue(this.plugin.settings.assemblyAISpeechModel)
+          .onChange(async (value) => {
+            this.plugin.settings.assemblyAISpeechModel =
+              value.trim() || "universal-3-5-pro";
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
       .setName("Detect semantic changes in chat")
       .setDesc(
         "After a successful normal text reply, send at most three recent " +

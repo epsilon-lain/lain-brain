@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
-import { Modal, setIcon } from "obsidian";
+import { Modal, Notice, setIcon } from "obsidian";
+import type { AssemblyAIVoiceState } from "./AssemblyAIVoiceInput";
 import { BrainFormalizationModal } from "./BrainFormalizationModal";
 import { LainBrainMarkdownRenderBatch } from "./LainBrainMarkdownRenderer";
 import {
@@ -17,8 +18,10 @@ import {
 import type {
   ChatAttachment,
   LainBrainImageAttachmentMetadata,
-  LainBrainSession
+  LainBrainSession,
+  MacroDefinitionState
 } from "./LainBrainSession";
+import { MACRO_ONBOARDING_COPY } from "./MacroOnboarding";
 
 export class LainBrainChatPanel {
   private readonly transcriptEl: HTMLDivElement;
@@ -27,6 +30,15 @@ export class LainBrainChatPanel {
   private readonly inputPrefix: HTMLSpanElement;
   private readonly attachmentPreviewEl: HTMLDivElement;
   private readonly attachmentButton: HTMLButtonElement;
+  private readonly voiceButton: HTMLButtonElement;
+  private readonly voiceStatusEl: HTMLDivElement;
+  private readonly macroDefinitionStatusEl: HTMLDivElement;
+  private readonly macroDefinitionCancelButton: HTMLButtonElement;
+  private readonly voiceSubmitReviewEl: HTMLDivElement;
+  private readonly voiceSubmitReviewTextEl: HTMLSpanElement;
+  private readonly voiceSubmitReviewSubmitButton: HTMLButtonElement;
+  private readonly voiceSubmitReviewKeepButton: HTMLButtonElement;
+  private readonly voiceSubmitReviewDiscardButton: HTMLButtonElement;
   private readonly fileInput: HTMLInputElement;
   private readonly noteLabel: HTMLElement;
   private readonly clearButton: HTMLButtonElement;
@@ -61,10 +73,25 @@ export class LainBrainChatPanel {
     toolbar.style.display = "flex";
     toolbar.style.alignItems = "center";
     toolbar.style.justifyContent = "space-between";
+    toolbar.style.flexWrap = "wrap";
     toolbar.style.gap = "0.5rem";
+    toolbar.style.rowGap = "0.35rem";
     toolbar.style.marginBottom = "0.5rem";
 
     this.noteLabel = toolbar.createEl("small");
+    this.noteLabel.style.minWidth = "0";
+    this.noteLabel.style.overflowWrap = "anywhere";
+    this.noteLabel.style.wordBreak = "break-word";
+
+    const macroTutorialButton = toolbar.createEl("button", {
+      text: "Chat Space tutorial"
+    });
+    macroTutorialButton.style.padding = "2px 6px";
+    macroTutorialButton.style.fontSize = "0.75rem";
+    macroTutorialButton.style.lineHeight = "1.2";
+    macroTutorialButton.addEventListener("click", () => {
+      new MacroTutorialModal(this.app, this.session).open();
+    });
 
     const formalizeButton = toolbar.createEl("button", {
       text: "Formalize using Brain concepts"
@@ -178,6 +205,108 @@ export class LainBrainChatPanel {
     this.attachmentButton.style.padding = "0";
     this.attachmentButton.style.marginLeft = "0.35rem";
 
+    this.voiceButton = inputLine.createEl("button");
+    this.voiceButton.type = "button";
+    this.voiceButton.setAttr(
+      "aria-label",
+      "Start AssemblyAI voice input"
+    );
+    this.voiceButton.setAttr(
+      "title",
+      "Start AssemblyAI voice input"
+    );
+    setIcon(this.voiceButton, "mic");
+    this.voiceButton.style.flexShrink = "0";
+    this.voiceButton.style.width = "24px";
+    this.voiceButton.style.height = "24px";
+    this.voiceButton.style.display = "inline-flex";
+    this.voiceButton.style.alignItems = "center";
+    this.voiceButton.style.justifyContent = "center";
+    this.voiceButton.style.padding = "0";
+    this.voiceButton.style.marginLeft = "0.25rem";
+
+    this.voiceStatusEl = this.transcriptEl.createDiv();
+    this.voiceStatusEl.style.display = "none";
+    this.voiceStatusEl.style.fontSize = "0.75rem";
+    this.voiceStatusEl.style.color = "var(--text-muted)";
+    this.voiceStatusEl.style.paddingTop = "0.2rem";
+
+    this.macroDefinitionStatusEl = this.transcriptEl.createDiv();
+    this.macroDefinitionStatusEl.style.display = "none";
+    this.macroDefinitionStatusEl.style.fontSize = "0.75rem";
+    this.macroDefinitionStatusEl.style.paddingTop = "0.2rem";
+
+    this.macroDefinitionCancelButton = this.transcriptEl.createEl(
+      "button",
+      { text: "Cancel macro" }
+    );
+    this.macroDefinitionCancelButton.type = "button";
+    this.macroDefinitionCancelButton.style.display = "none";
+    this.macroDefinitionCancelButton.style.fontSize = "0.75rem";
+    this.macroDefinitionCancelButton.style.padding = "2px 6px";
+    this.macroDefinitionCancelButton.style.marginTop = "0.2rem";
+    this.macroDefinitionCancelButton.addEventListener("click", () => {
+      this.session.cancelMacroDefinition();
+      this.input.focus();
+    });
+
+    this.voiceSubmitReviewEl = this.transcriptEl.createDiv();
+    this.voiceSubmitReviewEl.style.display = "none";
+    this.voiceSubmitReviewEl.style.fontSize = "0.75rem";
+    this.voiceSubmitReviewEl.style.paddingTop = "0.2rem";
+    this.voiceSubmitReviewEl.style.color = "var(--text-warning)";
+
+    this.voiceSubmitReviewTextEl = this.voiceSubmitReviewEl.createSpan();
+    this.voiceSubmitReviewTextEl.style.display = "block";
+    this.voiceSubmitReviewTextEl.style.marginBottom = "0.2rem";
+
+    this.voiceSubmitReviewSubmitButton = this.voiceSubmitReviewEl.createEl(
+      "button",
+      { text: "是 ka，提交正文" }
+    );
+    this.voiceSubmitReviewKeepButton = this.voiceSubmitReviewEl.createEl(
+      "button",
+      { text: "保留原文" }
+    );
+    this.voiceSubmitReviewDiscardButton = this.voiceSubmitReviewEl.createEl(
+      "button",
+      { text: "取消" }
+    );
+    for (const button of [
+      this.voiceSubmitReviewSubmitButton,
+      this.voiceSubmitReviewKeepButton,
+      this.voiceSubmitReviewDiscardButton
+    ]) {
+      button.type = "button";
+      button.style.fontSize = "0.75rem";
+      button.style.padding = "2px 6px";
+      button.style.marginRight = "0.35rem";
+    }
+    this.voiceSubmitReviewSubmitButton.addEventListener("click", () => {
+      this.session.resolveVoiceSubmitReview("submit");
+      this.input.focus();
+    });
+    this.voiceSubmitReviewKeepButton.addEventListener("click", () => {
+      this.session.resolveVoiceSubmitReview("keep");
+      this.input.focus();
+    });
+    this.voiceSubmitReviewDiscardButton.addEventListener("click", () => {
+      this.session.resolveVoiceSubmitReview("discard");
+      this.input.focus();
+    });
+
+    this.voiceButton.addEventListener("click", () => {
+      if (this.session.getVoiceInputState() === "recording") {
+        void this.session.stopVoiceInput();
+        return;
+      }
+
+      const state = this.session.getVoiceInputState();
+      if (state === "idle" || state === "error") {
+        void this.session.startVoiceInput();
+      }
+    });
+
     this.fileInput = inputLine.createEl("input");
     this.fileInput.type = "file";
     this.fileInput.accept = "image/png,image/jpeg,image/webp,image/gif";
@@ -212,7 +341,28 @@ export class LainBrainChatPanel {
         !hasSelectedTextWithin(this.transcriptEl)
       ) {
         event.preventDefault();
-        void this.sendFromInput();
+        if (this.session.getVoiceSubmitReview() !== undefined) {
+          this.input.focus();
+          return;
+        }
+        if (this.session.handleMacroDefinitionInput(this.input.value)) {
+          this.session.setDraft("");
+          this.input.value = "";
+          this.resizeInput();
+          this.input.focus();
+          return;
+        }
+        const outcome = this.session.ingestKeyboardChatSpaceTurn(
+          this.input.value
+        );
+        this.session.setDraft("");
+        this.input.value = "";
+        this.resizeInput();
+        if (outcome.kind === "appended") {
+          void this.session.submitChatSpace().then(() => this.input.focus());
+        } else {
+          this.input.focus();
+        }
       }
     });
 
@@ -260,6 +410,85 @@ export class LainBrainChatPanel {
     this.input.focus();
   }
 
+  private renderVoiceState(
+    state: AssemblyAIVoiceState,
+    detail?: string
+  ): void {
+    const active = state === "recording";
+
+    setIcon(this.voiceButton, active ? "square" : "mic");
+    this.voiceButton.setAttr(
+      "aria-label",
+      active
+        ? "Stop AssemblyAI voice input"
+        : "Start AssemblyAI voice input"
+    );
+    this.voiceButton.setAttr(
+      "title",
+      detail ??
+        (active
+          ? "Stop AssemblyAI voice input"
+          : "Start AssemblyAI voice input")
+    );
+    this.voiceButton.style.color = active
+      ? "var(--text-error)"
+      : "inherit";
+    this.voiceStatusEl.style.display =
+      state === "idle" ? "none" : "";
+    this.voiceStatusEl.style.color =
+      state === "error"
+        ? "var(--text-error)"
+        : "var(--text-muted)";
+    this.voiceStatusEl.setText(
+      detail ??
+        (state === "connecting"
+          ? "Connecting to AssemblyAI..."
+          : state === "recording"
+            ? "Listening with AssemblyAI..."
+            : state === "stopping"
+              ? "Finalizing transcript..."
+              : state === "error"
+                ? "AssemblyAI voice input failed."
+                : "")
+    );
+  }
+
+  private renderMacroDefinitionState(
+    state: MacroDefinitionState
+  ): void {
+    const active = state.kind !== "idle";
+    this.macroDefinitionStatusEl.style.display = active ? "" : "none";
+    this.macroDefinitionCancelButton.style.display =
+      active && state.kind !== "preview" ? "inline-block" : "none";
+
+    if (state.kind === "awaiting_description") {
+      this.macroDefinitionStatusEl.style.color = "var(--text-muted)";
+      this.macroDefinitionStatusEl.setText(
+        `Macro definition mode: describe the new macro, then press Enter. ` +
+        `(Definition phrase: "${this.session.getMacroDefinitionPhrase()}")`
+      );
+      return;
+    }
+
+    if (state.kind === "generating") {
+      this.macroDefinitionStatusEl.style.color = "var(--text-muted)";
+      this.macroDefinitionStatusEl.setText(
+        "Generating a macro definition preview..."
+      );
+      return;
+    }
+
+    if (state.kind === "error") {
+      this.macroDefinitionStatusEl.style.color = "var(--text-error)";
+      this.macroDefinitionStatusEl.setText(
+        `Macro definition failed: ${state.message}`
+      );
+      return;
+    }
+
+    this.macroDefinitionStatusEl.setText("");
+  }
+
   private render(): void {
     const messages = this.session.getChatTranscriptMessages();
     const selectionContext =
@@ -282,6 +511,9 @@ export class LainBrainChatPanel {
               .join(",")}`
         )
         .join("\u0000");
+    const chatSpaceKey = this.session.getChatSpace()
+      .map((segment) => `${segment.id}:${segment.displayIndex}:${segment.text}:${segment.candidateNote}`)
+      .join("\u0001") + `\u0001partial:${this.session.getChatSpacePartialVoiceText()}`;
 
     this.noteLabel.setText(this.session.activeNoteLabel);
     this.inputPrefix.setText(
@@ -295,12 +527,28 @@ export class LainBrainChatPanel {
     this.renderAttachment();
 
     if (
-      this.renderedTranscriptKey !== transcriptKey ||
+      this.renderedTranscriptKey !== `${transcriptKey}\u0002${chatSpaceKey}` ||
       this.renderedLoadingMode !== loadingMode ||
       this.renderedCandidateLoading !== candidateLoading
     ) {
       this.messagesEl.empty();
       this.markdownRenderer.reset();
+
+      const chatSpace = this.session.getChatSpace();
+      if (chatSpace.length > 0 || this.session.getChatSpacePartialVoiceText() !== "") {
+        const heading = this.messagesEl.createEl("strong", { text: "Chat Space" });
+        heading.style.display = "block";
+        chatSpace.forEach((segment) => {
+          const line = this.messagesEl.createDiv({ text: `[${segment.displayIndex}] ${segment.text}` });
+          line.style.whiteSpace = "pre-wrap";
+          if (segment.candidateNote) line.style.color = "var(--text-accent)";
+        });
+        const partial = this.session.getChatSpacePartialVoiceText();
+        if (partial !== "") {
+          const line = this.messagesEl.createDiv({ text: `[…] ${partial}` });
+          line.style.color = "var(--text-muted)";
+        }
+      }
 
       for (const message of messages) {
         this.addTranscriptLine(
@@ -322,7 +570,7 @@ export class LainBrainChatPanel {
         );
       }
 
-      this.renderedTranscriptKey = transcriptKey;
+      this.renderedTranscriptKey = `${transcriptKey}\u0002${chatSpaceKey}`;
       this.renderedLoadingMode = loadingMode;
       this.renderedCandidateLoading = candidateLoading;
       this.scrollToNewestMessage();
@@ -337,6 +585,47 @@ export class LainBrainChatPanel {
     this.attachmentButton.disabled = this.session.loading;
     this.attachmentButton.style.display =
       selectionContext === undefined ? "inline-flex" : "none";
+
+    const voiceState = this.session.getVoiceInputState();
+    const voiceConfig = this.session.getAssemblyAIVoiceConfig();
+    const voiceBusy =
+      voiceState === "connecting" ||
+      voiceState === "stopping";
+    this.voiceButton.disabled = voiceBusy ||
+      (
+        voiceState !== "recording" &&
+        (
+          this.session.loading ||
+          !voiceConfig.enabled ||
+          voiceConfig.apiKey.trim() === ""
+        )
+      );
+    this.voiceButton.style.display =
+      selectionContext === undefined ? "inline-flex" : "none";
+    this.renderVoiceState(
+      voiceState,
+      this.session.getVoiceInputDetail()
+    );
+
+    const macroState = this.session.getMacroDefinitionState();
+    this.renderMacroDefinitionState(macroState);
+    if (
+      macroState.kind === "preview" &&
+      this.session.tryOpenMacroDefinitionPreview()
+    ) {
+      new MacroDefinitionPreviewModal(this.app, this.session).open();
+    }
+
+    const review = this.session.getVoiceSubmitReview();
+    if (review !== undefined) {
+      this.voiceSubmitReviewEl.style.display = "";
+      this.voiceSubmitReviewTextEl.setText(
+        `可能听到提交词 "${review.candidate}"。请选择：是 ka 并提交正文，或保留原文继续编辑。`
+      );
+    } else {
+      this.voiceSubmitReviewEl.style.display = "none";
+      this.voiceSubmitReviewTextEl.setText("");
+    }
   }
 
   private async sendFromInput(): Promise<void> {
@@ -909,6 +1198,135 @@ export class LainBrainChatPanel {
 
   private scrollToNewestMessage(): void {
     this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+  }
+}
+
+class MacroDefinitionPreviewModal extends Modal {
+  constructor(
+    app: App,
+    private session: LainBrainSession
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const state = this.session.getMacroDefinitionState();
+    if (state.kind !== "preview") {
+      this.close();
+      return;
+    }
+
+    const { candidate, preview } = state;
+    this.titleEl.setText("Confirm macro definition");
+    this.contentEl.createEl("h4", { text: candidate.name });
+    this.addPreviewLine("Trigger", preview.triggerPhrases.join(", "));
+    this.addPreviewLine(
+      "Parameters",
+      preview.parameters.length > 0
+        ? preview.parameters.join(", ")
+        : "(none)"
+    );
+    this.addPreviewLine("Actions", preview.actions.join(" → "));
+    this.addPreviewLine(
+      "Writes to chat",
+      preview.writesToChat ? "Yes" : "No"
+    );
+    this.addPreviewLine("Confirmation", preview.confirmation);
+    this.addPreviewLine(
+      "Undo",
+      preview.undoable ? "Restore last step" : "Not undoable"
+    );
+
+    const actions = this.contentEl.createDiv();
+    actions.style.display = "flex";
+    actions.style.justifyContent = "flex-end";
+    actions.style.gap = "0.5rem";
+    actions.style.marginTop = "1rem";
+
+    const cancelButton = actions.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", () => {
+      this.session.cancelMacroDefinition();
+      this.close();
+    });
+
+    const confirmButton = actions.createEl("button", { text: "Save macro" });
+    confirmButton.addClass("mod-cta");
+    confirmButton.addEventListener("click", () => {
+      this.session.confirmMacroDefinition();
+      this.close();
+      new Notice("Macro saved.");
+    });
+  }
+
+  onClose(): void {
+    if (this.session.getMacroDefinitionState().kind === "preview") {
+      this.session.cancelMacroDefinition();
+    }
+    this.contentEl.empty();
+  }
+
+  private addPreviewLine(label: string, value: string): void {
+    const line = this.contentEl.createDiv();
+    line.style.marginBottom = "0.35rem";
+    line.createEl("strong", { text: `${label}: ` });
+    line.createSpan({ text: value });
+  }
+}
+
+class MacroTutorialModal extends Modal {
+  constructor(
+    app: App,
+    private session: LainBrainSession
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.titleEl.setText("Chat Space and voice macros");
+    this.contentEl.createEl("p", { text: MACRO_ONBOARDING_COPY.intro });
+    this.contentEl.createEl("p", { text: MACRO_ONBOARDING_COPY.choose_definition_phrase });
+    this.contentEl.createEl("p", { text: "The built-in ka macro removes itself from the submitted text and submits once. Enter does the same." });
+    this.contentEl.createEl("p", { text: MACRO_ONBOARDING_COPY.define_delete_macro });
+    this.contentEl.createEl("p", { text: MACRO_ONBOARDING_COPY.define_recover_macro });
+    this.contentEl.createEl("p", { text: MACRO_ONBOARDING_COPY.confirm });
+
+    const actions = this.contentEl.createDiv();
+    actions.style.display = "flex";
+    actions.style.flexWrap = "wrap";
+    actions.style.gap = "0.5rem";
+    actions.style.marginTop = "0.75rem";
+
+    const defineRemove = actions.createEl("button", {
+      text: "Define remove line {n}"
+    });
+    defineRemove.addEventListener("click", () => {
+      if (this.session.beginMacroDefinition()) {
+        this.close();
+        new Notice(
+          "Describe the delete macro, e.g. \"remove line {n}\", then press Enter."
+        );
+      }
+    });
+
+    const defineRecover = actions.createEl("button", {
+      text: "Define recover"
+    });
+    defineRecover.addEventListener("click", () => {
+      if (this.session.beginMacroDefinition()) {
+        this.close();
+        new Notice(
+          "Describe the recover macro, e.g. \"restore the last change\", then press Enter."
+        );
+      }
+    });
+
+    const close = actions.createEl("button", { text: "Got it" });
+    close.addEventListener("click", () => this.close());
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    new Notice("Chat Space tutorial closed.");
   }
 }
 

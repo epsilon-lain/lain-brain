@@ -730,7 +730,7 @@ export class LainBrainSession {
   private lastVoiceIntentDurationMs?: number;
   private voiceIntentQueue: Promise<void> = Promise.resolve();
   private deferredVoiceDecisions: Array<{
-    decision: VoiceDecision; createdAt?: string; turnId?: string
+    decision: VoiceDecision; raw: string; createdAt?: string; turnId?: string
   }> = [];
   private voicePrewarmTimer: ReturnType<typeof setTimeout> | null = null;
   private macroRegistrySaveCallback?: (registry: StoredMacroRegistry) => void;
@@ -1079,15 +1079,20 @@ export class LainBrainSession {
           }, 180);
         },
         onFinalizedTurn: (turn) => {
-          this.chatSpace.setPartialVoiceText("");
           if (this.voicePrewarmTimer !== null) {
             clearTimeout(this.voicePrewarmTimer);
             this.voicePrewarmTimer = null;
           }
-          if (!this.handleMacroDefinitionInput(
+          // Keep the finalized words visible while the short intent check runs.
+          this.chatSpace.setPartialVoiceText(turn.transcript);
+          if (this.handleMacroDefinitionInput(
             turn.transcript,
             turn.turnId
           )) {
+            this.chatSpace.setPartialVoiceText("");
+            this.notify();
+          } else {
+            this.notify();
             void this.ingestVoiceTurnWithIntent(
               turn.transcript,
               new Date().toISOString(),
@@ -2133,13 +2138,11 @@ export class LainBrainSession {
 
     const state = this.macroDefinitionState;
     if (state.kind === "preview" || state.kind === "generating") {
-      if (turnId !== undefined) {
-        this.processedMacroDefinitionTurnIds.add(turnId);
-      }
-      return true;
+      // An unrelated turn must still reach Chat Space while the preview is open.
+      return false;
     }
 
-    if (state.kind === "awaiting_description" || state.kind === "error") {
+    if (state.kind === "awaiting_description") {
       const description = text.trim();
       if (description === "") {
         return false;
@@ -2151,7 +2154,7 @@ export class LainBrainSession {
       return true;
     }
 
-    if (state.kind === "idle") {
+    if (state.kind === "idle" || state.kind === "error") {
       const trigger = this.parseMacroDefinitionTrigger(text);
       if (trigger === null) {
         return false;
@@ -2347,21 +2350,32 @@ export class LainBrainSession {
       if (this.voiceSubmitReview !== undefined ||
           this.chatSpaceSubmissionGate.busy) {
         if (this.deferredVoiceDecisions.length < 20) {
-          this.deferredVoiceDecisions.push({ decision, createdAt, turnId });
+          this.deferredVoiceDecisions.push({ decision, raw: text, createdAt, turnId });
+        } else {
+          // A full intent queue may skip AI processing, never the user's words.
+          if (this.chatSpace.partialText === text.trim()) {
+            this.chatSpace.setPartialVoiceText("");
+          }
+          this.chatSpace.addSegment(text, "voice", createdAt);
+          this.notify();
         }
         return { kind: "ignored" } as MacroExecutionOutcome;
       }
-      return this.applyVoiceIntent(decision, createdAt, turnId);
+      return this.applyVoiceIntent(decision, text, createdAt, turnId);
     });
     this.voiceIntentQueue = result.then(() => {}, () => {});
     return result;
   }
 
   private applyVoiceIntent(
-    decision: VoiceDecision, createdAt?: string, turnId?: string
+    decision: VoiceDecision, raw: string, createdAt?: string, turnId?: string
   ): MacroExecutionOutcome {
+    // Do not erase a newer partial that arrived during the async check.
+    if (this.chatSpace.partialText === raw.trim()) {
+      this.chatSpace.setPartialVoiceText("");
+    }
     if (decision.kind === "text") {
-      const segment = this.chatSpace.finalizeVoiceTurn(decision.text, createdAt);
+      const segment = this.chatSpace.addSegment(decision.text, "voice", createdAt);
       this.notify();
       return { kind: segment === null ? "ignored" : "appended", segment };
     }
@@ -2384,7 +2398,7 @@ export class LainBrainSession {
         this.chatSpaceSubmissionGate.busy) return;
     while (this.deferredVoiceDecisions.length > 0) {
       const next = this.deferredVoiceDecisions.shift()!;
-      this.applyVoiceIntent(next.decision, next.createdAt, next.turnId);
+      this.applyVoiceIntent(next.decision, next.raw, next.createdAt, next.turnId);
       if (this.voiceSubmitReview !== undefined ||
           this.chatSpaceSubmissionGate.busy) return;
     }

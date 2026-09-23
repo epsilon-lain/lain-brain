@@ -145,4 +145,44 @@ session.clearChat();
 resolveCleaning({ cleanedText: "old thought", possibleMacro: false });
 assert.equal((await delayed).kind, "ignored");
 assert.equal(session.getChatSpaceText(), "");
+
+// A failed macro definition must not consume subsequent ordinary speech.
+const failedDefinition = makeSession();
+failedDefinition.handleMacroDefinitionInput("定义宏");
+failedDefinition.setVoiceIntentServices({
+  clean: async (raw) => ({ cleanedText: raw, possibleMacro: false }),
+  classify: async () => "text"
+});
+await failedDefinition.submitMacroDefinitionDescription("bad definition");
+assert.equal(failedDefinition.getMacroDefinitionState().kind, "error");
+assert.equal(failedDefinition.handleMacroDefinitionInput("ordinary message", "f:1"), false);
+assert.equal((await failedDefinition.ingestVoiceTurnWithIntent("ordinary message", undefined, "f:1")).kind, "appended");
+assert.equal(failedDefinition.getChatSpaceText(), "ordinary message");
+failedDefinition.getVoiceInput().callbacks.onFinalizedTurn({
+  sessionId: "failed-macro", turnOrder: 2, turnId: "f:2",
+  transcript: "第二句普通语音。"
+});
+await failedDefinition.voiceIntentQueue;
+assert.equal(failedDefinition.getChatSpaceText(), "ordinary message\n第二句普通语音。");
+assert.equal(failedDefinition.handleMacroDefinitionInput("定义宏", "f:3"), true);
+assert.equal(failedDefinition.getMacroDefinitionState().kind, "awaiting_description");
+
+// A final turn remains visible while cleanup is pending and becomes a segment.
+const live = makeSession();
+let finishCleaning;
+live.setVoiceIntentServices({
+  clean: () => new Promise((resolve) => { finishCleaning = resolve; }),
+  classify: async () => "text"
+});
+const callbacks = live.getVoiceInput().callbacks;
+callbacks.onPartialTranscript("你好，今天测试语音输入");
+callbacks.onFinalizedTurn({
+  sessionId: "live", turnOrder: 1, turnId: "live:1",
+  transcript: "你好，今天测试语音输入。"
+});
+assert.equal(live.getChatSpacePartialVoiceText(), "你好，今天测试语音输入。");
+finishCleaning({ cleanedText: "你好，今天测试语音输入。", possibleMacro: false });
+await live.voiceIntentQueue;
+assert.equal(live.getChatSpacePartialVoiceText(), "");
+assert.equal(live.getChatSpaceText(), "你好，今天测试语音输入。");
 console.log("Voice intent integration tests passed.");

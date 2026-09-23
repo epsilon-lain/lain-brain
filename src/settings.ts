@@ -45,6 +45,7 @@ export interface LainBrainSettings {
   assemblyAIVoiceEnabled: boolean;
   assemblyAIApiKey: string;
   assemblyAISpeechModel: string;
+  jevApiKey: string;
   imageProviderProfiles: ProviderProfile[];
   activeImageProviderId: string | null;
   userDisplayName: string;
@@ -74,6 +75,7 @@ export const DEFAULT_SETTINGS: LainBrainSettings = {
   assemblyAIVoiceEnabled: true,
   assemblyAIApiKey: "",
   assemblyAISpeechModel: "universal-3-5-pro",
+  jevApiKey: "",
   imageProviderProfiles: createDefaultProviderProfiles(),
   activeImageProviderId: null,
   userDisplayName: DEFAULT_USER_DISPLAY_NAME,
@@ -190,6 +192,8 @@ export function migrateLainBrainSettings(
       value.assemblyAISpeechModel.trim() !== ""
         ? value.assemblyAISpeechModel.trim()
         : "universal-3-5-pro",
+    jevApiKey: typeof value.jevApiKey === "string"
+      ? value.jevApiKey : "",
     imageProviderProfiles: normalized.profiles,
     activeImageProviderId,
     userDisplayName,

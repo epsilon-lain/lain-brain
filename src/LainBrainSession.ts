@@ -6,6 +6,10 @@ import type {
   AssemblyAIVoiceConfig,
   AssemblyAIVoiceState
 } from "./AssemblyAIVoiceInput";
+import { VoiceIntentBuffer, type VoiceDecision,
+  type VoiceIntentServices } from "./VoiceIntentBuffer";
+import { createVoiceIntentServices } from "./VoiceIntentServices";
+import { findVoiceMacroCandidate, voiceMacroHints } from "./VoiceMacroCandidate";
 import {
   validateVisionImage,
   VisionProviderRouter
@@ -663,6 +667,7 @@ export interface VoiceSubmitReviewState {
   readonly candidate: string;
   readonly body: string;
   readonly originalText: string;
+  readonly commandText?: string;
 }
 
 export type MacroDefinitionState =
@@ -716,6 +721,18 @@ export class LainBrainSession {
   private macroDefinitionPreviewPending = false;
   private macroDefinitionRequestId = 0;
   private voiceSubmitReview?: VoiceSubmitReviewState;
+  private getVoiceJevKey: () => string = () => "";
+  private voiceIntentServices: VoiceIntentServices = createVoiceIntentServices(
+    () => this.getApiKey(), () => this.getVoiceJevKey()
+  );
+  private voiceIntent = this.makeVoiceIntentBuffer();
+  private voiceIntentEpoch = 0;
+  private lastVoiceIntentDurationMs?: number;
+  private voiceIntentQueue: Promise<void> = Promise.resolve();
+  private deferredVoiceDecisions: Array<{
+    decision: VoiceDecision; createdAt?: string; turnId?: string
+  }> = [];
+  private voicePrewarmTimer: ReturnType<typeof setTimeout> | null = null;
   private macroRegistrySaveCallback?: (registry: StoredMacroRegistry) => void;
   private activeFile: TFile | null = null;
   private activeNoteContext?: DeepSeekNoteContext;
@@ -922,6 +939,31 @@ export class LainBrainSession {
     this.notify();
   }
 
+  setVoiceJevKeyProvider(provider: () => string): void {
+    this.getVoiceJevKey = provider;
+  }
+
+  setVoiceIntentServices(services: VoiceIntentServices): void {
+    this.voiceIntentServices = services;
+    this.voiceIntent.clear();
+    this.voiceIntent = this.makeVoiceIntentBuffer();
+  }
+
+  getLastVoiceIntentDurationMs(): number | undefined {
+    return this.lastVoiceIntentDurationMs;
+  }
+
+  private makeVoiceIntentBuffer(): VoiceIntentBuffer {
+    return new VoiceIntentBuffer(
+      this.voiceIntentServices,
+      (text) => new MacroMatcher(this.macroRegistry.macros).match(text).kind === "match",
+      (raw, cleaned, suggested) => findVoiceMacroCandidate(
+        raw, cleaned, this.macroRegistry.macros, suggested
+      ),
+      () => voiceMacroHints(this.macroRegistry.macros)
+    );
+  }
+
   getAssemblyAIVoiceConfig(): AssemblyAIVoiceConfig {
     return this.getAssemblyAIVoice();
   }
@@ -948,11 +990,18 @@ export class LainBrainSession {
     }
 
     if (action === "submit") {
+      if (review.commandText !== undefined) {
+        this.voiceSubmitReview = undefined;
+        this.ingestChatSpaceTurn(review.commandText, "voice");
+        this.drainDeferredVoiceDecisions();
+        return true;
+      }
       if (review.body !== "") {
         this.chatSpace.finalizeVoiceTurn(review.body);
       }
       this.voiceSubmitReview = undefined;
       this.notify();
+      this.drainDeferredVoiceDecisions();
       void this.submitChatSpace();
       return true;
     }
@@ -963,11 +1012,13 @@ export class LainBrainSession {
       }
       this.voiceSubmitReview = undefined;
       this.notify();
+      this.drainDeferredVoiceDecisions();
       return true;
     }
 
     this.voiceSubmitReview = undefined;
     this.notify();
+    this.drainDeferredVoiceDecisions();
     return true;
   }
 
@@ -977,6 +1028,7 @@ export class LainBrainSession {
     }
     this.voiceSubmitReview = undefined;
     this.notify();
+    this.drainDeferredVoiceDecisions();
   }
 
   async startVoiceInput(): Promise<void> {
@@ -988,6 +1040,13 @@ export class LainBrainSession {
   }
 
   destroyVoiceInput(): void {
+    this.voiceIntentEpoch += 1;
+    if (this.voicePrewarmTimer !== null) {
+      clearTimeout(this.voicePrewarmTimer);
+      this.voicePrewarmTimer = null;
+    }
+    this.voiceIntent.clear();
+    this.deferredVoiceDecisions = [];
     void this.voiceInput?.destroy();
     this.voiceInput = undefined;
     this.voiceInputState = "idle";
@@ -1010,14 +1069,26 @@ export class LainBrainSession {
         onPartialTranscript: (transcript) => {
           this.chatSpace.setPartialVoiceText(transcript);
           this.notify();
+          if (this.voicePrewarmTimer !== null) clearTimeout(this.voicePrewarmTimer);
+          const epoch = this.voiceIntentEpoch;
+          this.voicePrewarmTimer = setTimeout(() => {
+            if (epoch === this.voiceIntentEpoch &&
+              this.voiceSubmitReview === undefined) {
+              this.voiceIntent.prewarm(transcript);
+            }
+          }, 180);
         },
         onFinalizedTurn: (turn) => {
           this.chatSpace.setPartialVoiceText("");
+          if (this.voicePrewarmTimer !== null) {
+            clearTimeout(this.voicePrewarmTimer);
+            this.voicePrewarmTimer = null;
+          }
           if (!this.handleMacroDefinitionInput(
             turn.transcript,
             turn.turnId
           )) {
-            this.ingestFinalizedVoiceTurn(
+            void this.ingestVoiceTurnWithIntent(
               turn.transcript,
               new Date().toISOString(),
               turn.turnId
@@ -2252,6 +2323,73 @@ export class LainBrainSession {
     return this.ingestChatSpaceTurn(text, "voice", createdAt, turnId);
   }
 
+  /** Real microphone path: partials may prewarm, only final turns can act. */
+  ingestVoiceTurnWithIntent(
+    text: string, createdAt?: string, turnId?: string
+  ): Promise<MacroExecutionOutcome> {
+    if (turnId !== undefined) {
+      if (this.processedFinalizedTurnIds.has(turnId)) {
+        return Promise.resolve({ kind: "ignored" });
+      }
+      this.processedFinalizedTurnIds.add(turnId);
+    }
+    const epoch = this.voiceIntentEpoch;
+    const receivedAt = Date.now();
+    // Start interpretation immediately; serialize only state mutations.
+    const interpretation = this.voiceIntent.interpret(text)
+      .catch((): VoiceDecision => ({ kind: "text", text }));
+    const result = this.voiceIntentQueue.then(async () => {
+      const decision = await interpretation;
+      if (epoch !== this.voiceIntentEpoch) {
+        return { kind: "ignored" } as MacroExecutionOutcome;
+      }
+      this.lastVoiceIntentDurationMs = Date.now() - receivedAt;
+      if (this.voiceSubmitReview !== undefined ||
+          this.chatSpaceSubmissionGate.busy) {
+        if (this.deferredVoiceDecisions.length < 20) {
+          this.deferredVoiceDecisions.push({ decision, createdAt, turnId });
+        }
+        return { kind: "ignored" } as MacroExecutionOutcome;
+      }
+      return this.applyVoiceIntent(decision, createdAt, turnId);
+    });
+    this.voiceIntentQueue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  private applyVoiceIntent(
+    decision: VoiceDecision, createdAt?: string, turnId?: string
+  ): MacroExecutionOutcome {
+    if (decision.kind === "text") {
+      const segment = this.chatSpace.finalizeVoiceTurn(decision.text, createdAt);
+      this.notify();
+      return { kind: segment === null ? "ignored" : "appended", segment };
+    }
+    if (decision.kind === "command") {
+      return this.ingestChatSpaceTurn(decision.text, "voice", createdAt, turnId);
+    }
+    this.voiceSubmitReview = {
+      candidate: decision.candidate,
+      body: decision.body,
+      originalText: decision.raw,
+      commandText: decision.command
+    };
+    this.notify();
+    void this.stopVoiceInput();
+    return { kind: "review" };
+  }
+
+  private drainDeferredVoiceDecisions(): void {
+    if (this.voiceSubmitReview !== undefined ||
+        this.chatSpaceSubmissionGate.busy) return;
+    while (this.deferredVoiceDecisions.length > 0) {
+      const next = this.deferredVoiceDecisions.shift()!;
+      this.applyVoiceIntent(next.decision, next.createdAt, next.turnId);
+      if (this.voiceSubmitReview !== undefined ||
+          this.chatSpaceSubmissionGate.busy) return;
+    }
+  }
+
   ingestKeyboardChatSpaceTurn(text: string, createdAt?: string): MacroExecutionOutcome {
     return this.ingestChatSpaceTurn(text, "keyboard", createdAt, undefined);
   }
@@ -2314,10 +2452,18 @@ export class LainBrainSession {
   }
 
   submitChatSpace(): Promise<LainBrainSendResult> {
-    return this.chatSpaceSubmissionGate.run(() => this.submitChatSpaceSnapshot());
+    const pending = this.chatSpaceSubmissionGate.run(
+      () => this.submitChatSpaceSnapshot()
+    );
+    void pending.then(
+      () => this.drainDeferredVoiceDecisions(),
+      () => this.drainDeferredVoiceDecisions()
+    );
+    return pending;
   }
 
   private async submitChatSpaceSnapshot(): Promise<LainBrainSendResult> {
+    this.voiceIntent.clear();
     const snapshot = this.chatSpace.snapshot();
     const text = snapshot.segments.map((segment) => segment.text).join("\n").trim();
     if (text === "") {
@@ -5736,6 +5882,15 @@ export class LainBrainSession {
     if (this.loading) {
       return;
     }
+
+    this.voiceIntentEpoch += 1;
+    if (this.voicePrewarmTimer !== null) {
+      clearTimeout(this.voicePrewarmTimer);
+      this.voicePrewarmTimer = null;
+    }
+    this.voiceIntent.clear();
+    this.deferredVoiceDecisions = [];
+    this.lastVoiceIntentDurationMs = undefined;
 
     this.messages.length = 0;
     this.chatSpace.clear();

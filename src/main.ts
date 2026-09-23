@@ -67,6 +67,7 @@ export default class LainBrainPlugin extends Plugin {
       apiKey: this.settings.assemblyAIApiKey,
       speechModel: this.settings.assemblyAISpeechModel
     }));
+    this.session.setVoiceJevKeyProvider(() => this.settings.jevApiKey);
     this.session.setChatSemanticDeltaAnalysisEnabledProvider(
       () => this.settings.chatSemanticDeltaAnalysisEnabled
     );

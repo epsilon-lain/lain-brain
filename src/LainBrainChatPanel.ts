@@ -620,7 +620,12 @@ export class LainBrainChatPanel {
     if (review !== undefined) {
       this.voiceSubmitReviewEl.style.display = "";
       this.voiceSubmitReviewTextEl.setText(
-        `可能听到提交词 "${review.candidate}"。请选择：是 ka 并提交正文，或保留原文继续编辑。`
+        review.commandText !== undefined
+          ? `听到「${review.originalText}」，可能是宏「${review.commandText}」。请选择执行、保留原文或取消。`
+          : `可能听到提交词 "${review.candidate}"。请选择：是 ka 并提交正文，或保留原文继续编辑。`
+      );
+      this.voiceSubmitReviewSubmitButton.setText(
+        review.commandText !== undefined ? "执行宏" : "是 ka，提交正文"
       );
     } else {
       this.voiceSubmitReviewEl.style.display = "none";

@@ -250,6 +250,20 @@ export class LainBrainSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("Jev API key for possible voice macros")
+      .setDesc("Optional. Classifies ambiguous standalone voice commands. " +
+        "If unavailable or uncertain, the turn waits for your choice.")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.setPlaceholder("TypeSafe API key")
+          .setValue(this.plugin.settings.jevApiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.jevApiKey = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
       .setName("Detect semantic changes in chat")
       .setDesc(
         "After a successful normal text reply, send at most three recent " +

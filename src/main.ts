@@ -28,6 +28,7 @@ import type { BrainFormalizationMemory } from "./BrainFormalizationMemory";
 import type { LeanProofWorkspaceState } from "./LeanProofWorkspace";
 import { SpawnLeanRunner } from "./LeanRunner";
 import { LainBrainNamingModal } from "./LainBrainNamingModal";
+import { BrainFormalizationModal } from "./BrainFormalizationModal";
 import {
   applyPersonalNames,
   NamingOnboardingSession,
@@ -65,9 +66,15 @@ export default class LainBrainPlugin extends Plugin {
     this.session.setAssemblyAIVoiceConfigProvider(() => ({
       enabled: this.settings.assemblyAIVoiceEnabled,
       apiKey: this.settings.assemblyAIApiKey,
-      speechModel: this.settings.assemblyAISpeechModel
+      speechModel: this.settings.assemblyAISpeechModel,
+      keytermsPrompt: this.settings.assemblyAIKeytermsPromptEnabled
+        ? this.session.getVoiceKeyterms()
+        : []
     }));
     this.session.setVoiceJevKeyProvider(() => this.settings.jevApiKey);
+    this.session.setVoiceAnswerReadAloudEnabled(
+      this.settings.voiceAnswerReadAloudEnabled
+    );
     this.session.setChatSemanticDeltaAnalysisEnabledProvider(
       () => this.settings.chatSemanticDeltaAnalysisEnabled
     );
@@ -175,6 +182,14 @@ export default class LainBrainPlugin extends Plugin {
       name: "Open Lain Brain",
       callback: async () => {
         await this.openLainBrain();
+      }
+    });
+
+    this.addCommand({
+      id: "formalize-using-brain-concepts",
+      name: "Formalize using Brain concepts",
+      callback: () => {
+        new BrainFormalizationModal(this.app, this.session).open();
       }
     });
 

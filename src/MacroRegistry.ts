@@ -52,6 +52,13 @@ export class MacroRegistry {
     this.replace({ ...macro, enabled: false, updatedAt: new Date().toISOString() });
     return true;
   }
+  setEnabled(id: string, enabled: boolean): boolean {
+    const macro = this.state.macros.find((item) => item.id === id);
+    if (macro === undefined) return false;
+    if (id === DEFAULT_KA_MACRO.id && !enabled) return false;
+    this.replace({ ...macro, enabled, updatedAt: new Date().toISOString() });
+    return true;
+  }
   setDefinitionPhrase(phrase: string): boolean {
     if (phrase.trim() === "") return false;
     this.state = { ...this.state, definitionPhrase: phrase.trim() };

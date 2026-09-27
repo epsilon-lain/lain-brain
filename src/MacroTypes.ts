@@ -19,6 +19,11 @@ export interface MacroParameter {
 export type MacroAction =
   | { readonly kind: "submit_to_brain" }
   | { readonly kind: "delete_segment"; readonly segmentId?: string; readonly line?: number | { readonly parameter: string } }
+  | {
+      readonly kind: "delete_segment_range";
+      readonly startLine?: number | { readonly parameter: string };
+      readonly endLine?: number | { readonly parameter: string };
+    }
   | { readonly kind: "replace_segment"; readonly segmentId?: string; readonly text: string }
   | { readonly kind: "truncate_from_segment"; readonly segmentId?: string }
   | { readonly kind: "mark_candidate_note"; readonly segmentId?: string }
@@ -34,6 +39,7 @@ export type MacroConfirmationPolicy =
 export interface MacroDefinition {
   readonly id: string;
   readonly name: string;
+  readonly description?: string;
   readonly patterns: readonly MacroPattern[];
   readonly parameters: readonly MacroParameter[];
   readonly actions: readonly MacroAction[];
@@ -63,7 +69,7 @@ export function isMacroAction(value: unknown): value is MacroAction {
   if (typeof value !== "object" || value === null || !("kind" in value)) return false;
   const kind = (value as { kind: unknown }).kind;
   return typeof kind === "string" && new Set([
-    "submit_to_brain", "delete_segment", "replace_segment", "truncate_from_segment",
+    "submit_to_brain", "delete_segment", "delete_segment_range", "replace_segment", "truncate_from_segment",
     "mark_candidate_note", "unmark_candidate_note", "restore_last_step", "insert_text"
   ]).has(kind);
 }
@@ -71,15 +77,28 @@ export function isMacroAction(value: unknown): value is MacroAction {
 export function validateMacroDefinition(value: unknown): MacroDefinition | null {
   if (typeof value !== "object" || value === null) return null;
   const input = value as Record<string, unknown>;
+  const actions = Array.isArray(input.actions)
+    ? input.actions.map((action) => {
+        if (
+          typeof action === "object" &&
+          action !== null &&
+          !("kind" in action) &&
+          "type" in action
+        ) {
+          return { ...action, kind: (action as { type: unknown }).type };
+        }
+        return action;
+      })
+    : input.actions;
   if (typeof input.id !== "string" || typeof input.name !== "string" ||
       !Array.isArray(input.patterns) || !Array.isArray(input.parameters) ||
-      !Array.isArray(input.actions) || typeof input.createdAt !== "string" ||
+      !Array.isArray(actions) || typeof input.createdAt !== "string" ||
       typeof input.updatedAt !== "string" || typeof input.enabled !== "boolean") return null;
   if (!input.patterns.every((pattern) => {
     if (typeof pattern !== "object" || pattern === null) return false;
     const kind = (pattern as { kind?: unknown }).kind;
     return kind === "exact" || kind === "trailing" || kind === "parameterized";
-  }) || !input.actions.every(isMacroAction)) return null;
+  }) || !actions.every(isMacroAction)) return null;
   const parameters = input.parameters.filter((item): item is MacroParameter => {
     if (typeof item !== "object" || item === null) return false;
     const parameter = item as Record<string, unknown>;
@@ -90,9 +109,12 @@ export function validateMacroDefinition(value: unknown): MacroDefinition | null 
   return Object.freeze({
     id: input.id,
     name: input.name,
+    description: typeof input.description === "string"
+      ? input.description
+      : undefined,
     patterns: input.patterns as MacroPattern[],
     parameters,
-    actions: input.actions as MacroAction[],
+    actions: actions as MacroAction[],
     writesToChat: input.writesToChat === true,
     undoable: input.undoable !== false,
     confirmation: input.confirmation === undefined

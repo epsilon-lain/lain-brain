@@ -34,11 +34,6 @@ export class LainBrainChatPanel {
   private readonly voiceStatusEl: HTMLDivElement;
   private readonly macroDefinitionStatusEl: HTMLDivElement;
   private readonly macroDefinitionCancelButton: HTMLButtonElement;
-  private readonly voiceSubmitReviewEl: HTMLDivElement;
-  private readonly voiceSubmitReviewTextEl: HTMLSpanElement;
-  private readonly voiceSubmitReviewSubmitButton: HTMLButtonElement;
-  private readonly voiceSubmitReviewKeepButton: HTMLButtonElement;
-  private readonly voiceSubmitReviewDiscardButton: HTMLButtonElement;
   private readonly fileInput: HTMLInputElement;
   private readonly noteLabel: HTMLElement;
   private readonly clearButton: HTMLButtonElement;
@@ -83,27 +78,14 @@ export class LainBrainChatPanel {
     this.noteLabel.style.overflowWrap = "anywhere";
     this.noteLabel.style.wordBreak = "break-word";
 
-    const macroTutorialButton = toolbar.createEl("button", {
-      text: "Chat Space tutorial"
+    const defineMacroButton = toolbar.createEl("button", {
+      text: "Define Macro"
     });
-    macroTutorialButton.style.padding = "2px 6px";
-    macroTutorialButton.style.fontSize = "0.75rem";
-    macroTutorialButton.style.lineHeight = "1.2";
-    macroTutorialButton.addEventListener("click", () => {
-      new MacroTutorialModal(this.app, this.session).open();
-    });
-
-    const formalizeButton = toolbar.createEl("button", {
-      text: "Formalize using Brain concepts"
-    });
-    formalizeButton.style.padding = "2px 6px";
-    formalizeButton.style.fontSize = "0.75rem";
-    formalizeButton.style.lineHeight = "1.2";
-    formalizeButton.addEventListener("click", () => {
-      new BrainFormalizationModal(
-        this.app,
-        this.session
-      ).open();
+    defineMacroButton.style.padding = "2px 6px";
+    defineMacroButton.style.fontSize = "0.75rem";
+    defineMacroButton.style.lineHeight = "1.2";
+    defineMacroButton.addEventListener("click", () => {
+      new DefineMacroModal(this.app, this.session).open();
     });
 
     this.clearButton = toolbar.createEl("button", {
@@ -250,51 +232,6 @@ export class LainBrainChatPanel {
       this.input.focus();
     });
 
-    this.voiceSubmitReviewEl = this.transcriptEl.createDiv();
-    this.voiceSubmitReviewEl.style.display = "none";
-    this.voiceSubmitReviewEl.style.fontSize = "0.75rem";
-    this.voiceSubmitReviewEl.style.paddingTop = "0.2rem";
-    this.voiceSubmitReviewEl.style.color = "var(--text-warning)";
-
-    this.voiceSubmitReviewTextEl = this.voiceSubmitReviewEl.createSpan();
-    this.voiceSubmitReviewTextEl.style.display = "block";
-    this.voiceSubmitReviewTextEl.style.marginBottom = "0.2rem";
-
-    this.voiceSubmitReviewSubmitButton = this.voiceSubmitReviewEl.createEl(
-      "button",
-      { text: "是 ka，提交正文" }
-    );
-    this.voiceSubmitReviewKeepButton = this.voiceSubmitReviewEl.createEl(
-      "button",
-      { text: "保留原文" }
-    );
-    this.voiceSubmitReviewDiscardButton = this.voiceSubmitReviewEl.createEl(
-      "button",
-      { text: "取消" }
-    );
-    for (const button of [
-      this.voiceSubmitReviewSubmitButton,
-      this.voiceSubmitReviewKeepButton,
-      this.voiceSubmitReviewDiscardButton
-    ]) {
-      button.type = "button";
-      button.style.fontSize = "0.75rem";
-      button.style.padding = "2px 6px";
-      button.style.marginRight = "0.35rem";
-    }
-    this.voiceSubmitReviewSubmitButton.addEventListener("click", () => {
-      this.session.resolveVoiceSubmitReview("submit");
-      this.input.focus();
-    });
-    this.voiceSubmitReviewKeepButton.addEventListener("click", () => {
-      this.session.resolveVoiceSubmitReview("keep");
-      this.input.focus();
-    });
-    this.voiceSubmitReviewDiscardButton.addEventListener("click", () => {
-      this.session.resolveVoiceSubmitReview("discard");
-      this.input.focus();
-    });
-
     this.voiceButton.addEventListener("click", () => {
       if (this.session.getVoiceInputState() === "recording") {
         void this.session.stopVoiceInput();
@@ -341,10 +278,6 @@ export class LainBrainChatPanel {
         !hasSelectedTextWithin(this.transcriptEl)
       ) {
         event.preventDefault();
-        if (this.session.getVoiceSubmitReview() !== undefined) {
-          this.input.focus();
-          return;
-        }
         if (this.session.handleMacroDefinitionInput(this.input.value)) {
           this.session.setDraft("");
           this.input.value = "";
@@ -352,8 +285,18 @@ export class LainBrainChatPanel {
           this.input.focus();
           return;
         }
+        const inputText = this.input.value;
+        if (inputText.trim() === "") {
+          this.session.setDraft("");
+          if (this.session.submitChatSpaceIfNotEmpty()) {
+            this.input.focus();
+          } else {
+            this.input.focus();
+          }
+          return;
+        }
         const outcome = this.session.ingestKeyboardChatSpaceTurn(
-          this.input.value
+          inputText
         );
         this.session.setDraft("");
         this.input.value = "";
@@ -459,7 +402,10 @@ export class LainBrainChatPanel {
     const active = state.kind !== "idle";
     this.macroDefinitionStatusEl.style.display = active ? "" : "none";
     this.macroDefinitionCancelButton.style.display =
-      active && state.kind !== "preview" ? "inline-block" : "none";
+      (
+        state.kind === "awaiting_description" ||
+        state.kind === "generating"
+      ) ? "inline-block" : "none";
 
     if (state.kind === "awaiting_description") {
       this.macroDefinitionStatusEl.style.color = "var(--text-muted)";
@@ -513,7 +459,7 @@ export class LainBrainChatPanel {
         .join("\u0000");
     const chatSpaceKey = this.session.getChatSpace()
       .map((segment) => `${segment.id}:${segment.displayIndex}:${segment.text}:${segment.candidateNote}`)
-      .join("\u0001") + `\u0001partial:${this.session.getChatSpacePartialVoiceText()}`;
+      .join("\u0001");
 
     this.noteLabel.setText(this.session.activeNoteLabel);
     this.inputPrefix.setText(
@@ -535,7 +481,7 @@ export class LainBrainChatPanel {
       this.markdownRenderer.reset();
 
       const chatSpace = this.session.getChatSpace();
-      if (chatSpace.length > 0 || this.session.getChatSpacePartialVoiceText() !== "") {
+      if (chatSpace.length > 0) {
         const heading = this.messagesEl.createEl("strong", { text: "Chat Space" });
         heading.style.display = "block";
         chatSpace.forEach((segment) => {
@@ -543,14 +489,20 @@ export class LainBrainChatPanel {
           line.style.whiteSpace = "pre-wrap";
           if (segment.candidateNote) line.style.color = "var(--text-accent)";
         });
-        const partial = this.session.getChatSpacePartialVoiceText();
-        if (partial !== "") {
-          const line = this.messagesEl.createDiv({ text: `[…] ${partial}` });
-          line.style.color = "var(--text-muted)";
-        }
       }
 
       for (const message of messages) {
+        if (
+          message.operationId !== undefined &&
+          this.session.isAbandonedSubmitOperation(message.operationId)
+        ) {
+          const marker = this.messagesEl.createDiv({
+            text: "↩ recovered / abandoned branch"
+          });
+          marker.style.color = "var(--text-muted)";
+          marker.style.fontSize = "0.7rem";
+          marker.style.marginBottom = "0.25rem";
+        }
         this.addTranscriptLine(
           message.role,
           message.content,
@@ -616,21 +568,6 @@ export class LainBrainChatPanel {
       new MacroDefinitionPreviewModal(this.app, this.session).open();
     }
 
-    const review = this.session.getVoiceSubmitReview();
-    if (review !== undefined) {
-      this.voiceSubmitReviewEl.style.display = "";
-      this.voiceSubmitReviewTextEl.setText(
-        review.commandText !== undefined
-          ? `听到「${review.originalText}」，可能是宏「${review.commandText}」。请选择执行、保留原文或取消。`
-          : `可能听到提交词 "${review.candidate}"。请选择：是 ka 并提交正文，或保留原文继续编辑。`
-      );
-      this.voiceSubmitReviewSubmitButton.setText(
-        review.commandText !== undefined ? "执行宏" : "是 ka，提交正文"
-      );
-    } else {
-      this.voiceSubmitReviewEl.style.display = "none";
-      this.voiceSubmitReviewTextEl.setText("");
-    }
   }
 
   private async sendFromInput(): Promise<void> {
@@ -1203,6 +1140,275 @@ export class LainBrainChatPanel {
 
   private scrollToNewestMessage(): void {
     this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+  }
+}
+
+class DefineMacroModal extends Modal {
+  private unsubscribe?: () => void;
+  private diagnosticEl?: HTMLDivElement;
+
+  constructor(
+    app: App,
+    private session: LainBrainSession
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.titleEl.setText("Define Macro");
+    this.contentEl.createEl("p", {
+      text: "Describe what should be heard and what it should do, in your own words."
+    });
+
+    const textarea = this.contentEl.createEl("textarea");
+    textarea.rows = 4;
+    textarea.style.width = "100%";
+    textarea.style.resize = "vertical";
+    textarea.setAttr("aria-label", "Macro description");
+
+    const actions = this.contentEl.createDiv();
+    actions.style.display = "flex";
+    actions.style.flexWrap = "wrap";
+    actions.style.gap = "0.5rem";
+    actions.style.margin = "0.5rem 0";
+
+    const parseButton = actions.createEl("button", { text: "Parse & preview" });
+    parseButton.addClass("mod-cta");
+    parseButton.addEventListener("click", () => {
+      void this.session.submitMacroDefinitionDescription(textarea.value);
+    });
+
+    const closeButton = actions.createEl("button", { text: "Close" });
+    closeButton.addEventListener("click", () => this.close());
+
+    const listEl = this.contentEl.createDiv();
+    listEl.style.marginTop = "0.5rem";
+
+    this.diagnosticEl = this.contentEl.createDiv();
+    this.diagnosticEl.style.marginTop = "0.5rem";
+    this.diagnosticEl.style.color = "var(--text-muted)";
+    this.diagnosticEl.style.whiteSpace = "pre-wrap";
+
+    const update = (): void => {
+      listEl.empty();
+      for (const macro of this.session.getMacroRegistry().macros) {
+        const row = listEl.createDiv();
+        row.style.display = "flex";
+        row.style.alignItems = "center";
+        row.style.gap = "0.5rem";
+        row.createEl("span", {
+          text: `${macro.enabled ? "●" : "○"} ${macro.name}`
+        });
+        const disable = row.createEl("button", {
+          text: macro.enabled ? "Disable" : "Enable"
+        });
+        disable.disabled = macro.id === "builtin-ka";
+        disable.addEventListener("click", () => {
+          const target = !macro.enabled;
+          const ok = this.session.setMacroEnabled(macro.id, target);
+          const after = this.session.getMacroRegistry().macros
+            .find((item) => item.id === macro.id);
+          this.diagnosticEl?.setText(
+            `BUILD: define-macro-2026-09-26\n` +
+            `macroId: ${macro.id}\n` +
+            `before: ${macro.enabled}\n` +
+            `target: ${target}\n` +
+            `setMacroEnabled: ${ok ? "ok" : "failed"}\n` +
+            `after: ${after?.enabled ?? "missing"}\n` +
+            `saved: ${ok ? "requested" : "skipped"}`
+          );
+        });
+      }
+    };
+
+    this.unsubscribe = this.session.subscribe(update);
+    update();
+  }
+
+  onClose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.contentEl.empty();
+  }
+}
+
+class VoiceCalibrationModal extends Modal {
+  private unsubscribe?: () => void;
+
+  constructor(
+    app: App,
+    private session: LainBrainSession
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.titleEl.setText("Voice macro calibration");
+    const macroId = this.session.getMacroRegistry().macros.find((macro) =>
+      macro.patterns.some((pattern) =>
+        pattern.kind === "trailing" && pattern.phrase === "ka"
+      )
+    )?.id ?? "builtin-ka";
+
+    this.contentEl.createEl("p", {
+      text: "Record a few ka samples and a few ordinary words (car). If ka and car cannot be separated, the voice trigger stays unavailable and turns remain editable text."
+    });
+
+    const statusEl = this.contentEl.createDiv();
+    statusEl.style.marginBottom = "0.5rem";
+
+    const actions = this.contentEl.createDiv();
+    actions.style.display = "flex";
+    actions.style.flexWrap = "wrap";
+    actions.style.gap = "0.5rem";
+
+    const recordKa = actions.createEl("button", { text: "Record ka" });
+    const recordCar = actions.createEl("button", { text: "Record car" });
+    const clear = actions.createEl("button", { text: "Clear samples" });
+    const close = actions.createEl("button", { text: "Close" });
+
+    recordKa.addEventListener("click", () => {
+      this.session.beginVoiceCalibration(macroId, "positive");
+    });
+    recordCar.addEventListener("click", () => {
+      this.session.beginVoiceCalibration(macroId, "negative");
+    });
+    clear.addEventListener("click", () => {
+      this.session.clearVoiceCalibration(macroId);
+    });
+    close.addEventListener("click", () => this.close());
+
+    const update = (): void => {
+      const status = this.session.getVoiceCalibrationStatus(macroId);
+      const pending = this.session.getPendingVoiceCalibration();
+      const lines = [
+        `Calibrated: ${status.calibrated ? "yes" : "no"}`,
+        `ka samples: ${status.positiveCount}`,
+        `car samples: ${status.negativeCount}`,
+        `Separation: ${status.separation.toFixed(2)}`,
+        status.reason
+      ];
+      if (pending !== undefined) {
+        lines.push(
+          `Recording ${pending.label === "positive" ? "ka" : "car"}...`
+        );
+      }
+      statusEl.setText(lines.join("\n"));
+      statusEl.style.whiteSpace = "pre-wrap";
+    };
+
+    this.unsubscribe = this.session.subscribe(update);
+    update();
+  }
+
+  onClose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.contentEl.empty();
+  }
+}
+
+class VoiceBlindTestModal extends Modal {
+  private unsubscribe?: () => void;
+
+  constructor(
+    app: App,
+    private session: LainBrainSession
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.titleEl.setText("Blind voice test");
+    const macroId = this.session.getMacroRegistry().macros.find((macro) =>
+      macro.patterns.some((pattern) =>
+        pattern.kind === "trailing" && pattern.phrase === "ka"
+      )
+    )?.id ?? "builtin-ka";
+
+    this.contentEl.createEl("p", {
+      text: "Record blind samples for ka and similar/ordinary words. Calibration samples are never reused here."
+    });
+
+    const statusEl = this.contentEl.createDiv();
+    statusEl.style.marginBottom = "0.5rem";
+    statusEl.style.whiteSpace = "pre-wrap";
+
+    const samplesEl = this.contentEl.createDiv();
+    samplesEl.style.marginBottom = "0.5rem";
+    samplesEl.style.maxHeight = "180px";
+    samplesEl.style.overflowY = "auto";
+    samplesEl.style.fontSize = "0.75rem";
+
+    const actions = this.contentEl.createDiv();
+    actions.style.display = "flex";
+    actions.style.flexWrap = "wrap";
+    actions.style.gap = "0.35rem";
+    actions.style.marginBottom = "0.5rem";
+
+    const addButton = (
+      text: string,
+      label: "positive" | "negative",
+      category: "speed" | "volume" | "noise" | "language" | "ordinary"
+    ): void => {
+      const button = actions.createEl("button", { text });
+      button.addEventListener("click", () => {
+        this.session.beginVoiceBlindCapture(macroId, label, category);
+      });
+    };
+
+    addButton("Positive ka", "positive", "speed");
+    addButton("Similar car", "negative", "ordinary");
+    addButton("Cross-language", "negative", "language");
+    addButton("Noise", "negative", "noise");
+    addButton("Fast/slow ordinary", "negative", "speed");
+
+    const clearButton = actions.createEl("button", { text: "Clear blind set" });
+    clearButton.addEventListener("click", () => {
+      this.session.clearVoiceBlindSamples();
+    });
+    const closeButton = actions.createEl("button", { text: "Close" });
+    closeButton.addEventListener("click", () => this.close());
+
+    const update = (): void => {
+      const samples = this.session.getBlindVoiceSamples(macroId);
+      const result = this.session.evaluateVoiceBlind(macroId);
+      const pending = this.session.getPendingVoiceBlindCapture();
+      const lines = [
+        `Positive: ${result.positiveCount}`,
+        `Negative: ${result.negativeCount}`,
+        `False positive: ${result.falsePositiveCount}`,
+        `False negative: ${result.falseNegativeCount}`,
+        `P95 latency: ${result.latencyP95Ms.toFixed(0)} ms`,
+        `Accurate text ka executions: ${this.session.getAccurateVoiceMacroExecutionCount()}`,
+        result.reason
+      ];
+      if (pending !== undefined) {
+        lines.push(
+          `Recording ${pending.label} / ${pending.category}...`
+        );
+      }
+      lines.push(`Total samples: ${samples.length}`);
+      statusEl.setText(lines.join("\n"));
+
+      samplesEl.empty();
+      for (const sample of samples.slice(-20)) {
+        const row = samplesEl.createDiv();
+        row.setText(
+          `[${sample.label}] ${sample.transcript} · ` +
+          `${sample.category} · ${sample.latencyMs.toFixed(0)} ms`
+        );
+      }
+    };
+
+    this.unsubscribe = this.session.subscribe(update);
+    update();
+  }
+
+  onClose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.contentEl.empty();
   }
 }
 

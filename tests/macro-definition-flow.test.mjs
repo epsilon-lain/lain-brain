@@ -263,6 +263,38 @@ function generatorForRemoveAndRecover(_apiKey, description) {
     [...session.getChatSpace().map((segment) => segment.text)],
     ["paragraph 2", "paragraph 3"]
   );
+  assert.equal(
+    session.ingestFinalizedVoiceTurn(
+      "recover",
+      "2026-01-01T00:00:02.000Z",
+      "voice:recover"
+    ).kind,
+    "ignored"
+  );
+}
+
+// Enable/disable persists through the session save callback.
+{
+  const saved = [];
+  const session = makeSession(generatorForRemoveAndRecover);
+  session.setMacroRegistrySaveCallback((registry) => saved.push(registry));
+  session.setMacroRegistry({
+    schemaVersion: 1,
+    definitionPhrase: "定义宏",
+    macros: [VALID_REMOVE_MACRO]
+  });
+  const macroId = VALID_REMOVE_MACRO.id;
+  assert.equal(session.disableMacro(macroId), true);
+  assert.equal(
+    session.getMacroRegistry().macros.find((macro) => macro.id === macroId)?.enabled,
+    false
+  );
+  assert.equal(session.setMacroEnabled(macroId, true), true);
+  assert.equal(
+    session.getMacroRegistry().macros.find((macro) => macro.id === macroId)?.enabled,
+    true
+  );
+  assert.equal(saved.length, 2);
 }
 
 // Invalid JSON is rejected.
@@ -280,6 +312,33 @@ function generatorForRemoveAndRecover(_apiKey, description) {
     actions: [{ kind: "run_arbitrary_code" }]
   });
   assert.equal(illegal.ok, false);
+}
+
+// The model's occasional "type" spelling is normalized to "kind".
+{
+  const typeSpelling = validateMacroDefinitionCandidate({
+    ...VALID_REMOVE_MACRO,
+    actions: [{
+      type: "delete_segment",
+      line: { parameter: "n" }
+    }]
+  });
+  assert.equal(typeSpelling.ok, true);
+  assert.equal(typeSpelling.macro.actions[0].kind, "delete_segment");
+}
+
+// Structured diagnostics report a missing field path and expected type.
+{
+  const missingEnabled = validateMacroDefinitionCandidate({
+    ...VALID_REMOVE_MACRO,
+    enabled: undefined
+  });
+  assert.equal(missingEnabled.ok, false);
+  assert.ok(missingEnabled.diagnostics?.some(
+    (diagnostic) =>
+      diagnostic.path === "$.enabled" &&
+      diagnostic.expected === "boolean"
+  ));
 }
 
 // Trigger conflict against the built-in ka macro is rejected.

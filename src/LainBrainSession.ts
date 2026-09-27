@@ -7,9 +7,24 @@ import type {
   AssemblyAIVoiceState
 } from "./AssemblyAIVoiceInput";
 import { VoiceIntentBuffer, type VoiceDecision,
-  type VoiceIntentServices } from "./VoiceIntentBuffer";
+  type VoiceIntentServices, type VoiceIntentScores } from "./VoiceIntentBuffer";
 import { createVoiceIntentServices } from "./VoiceIntentServices";
 import { findVoiceMacroCandidate, voiceMacroHints } from "./VoiceMacroCandidate";
+import { LocalVoiceVerifier } from "./LocalVoiceVerifier";
+import { SpeechReadAloud } from "./SpeechReadAloud";
+import type {
+  VoiceCalibrationLabel,
+  VoiceCalibrationStatus,
+  VoiceVerificationResult
+} from "./LocalVoiceVerifier";
+import {
+  VoiceBlindEvaluator,
+  VOICE_ACCEPTANCE_CRITERIA
+} from "./VoiceBlindEvaluator";
+import type {
+  BlindVoiceSample,
+  VoiceBlindEvaluationResult
+} from "./VoiceBlindEvaluator";
 import {
   validateVisionImage,
   VisionProviderRouter
@@ -26,6 +41,7 @@ import { canAnalyzeImages } from "./ProviderProfiles";
 import type { ProviderProfile } from "./ProviderProfiles";
 import {
   askDeepSeek,
+  requestDeepSeek,
   classifyCandidateClaims,
   discussCandidateSelection,
   generateCandidateNote,
@@ -277,7 +293,7 @@ import { ChatSpace } from "./ChatSpace";
 import type { ChatSpaceSegment } from "./ChatSpace";
 import { MacroExecutor } from "./MacroExecutor";
 import { MacroMatcher, normalizeMacroText } from "./MacroMatcher";
-import { MacroRegistry } from "./MacroRegistry";
+import { DEFAULT_KA_MACRO, MacroRegistry } from "./MacroRegistry";
 import type { StoredMacroRegistry } from "./MacroRegistry";
 import {
   buildMacroDefinitionPreview,
@@ -288,8 +304,7 @@ import type {
   MacroDefinitionGenerator,
   MacroDefinitionPreview
 } from "./MacroDefinitionInterpreter";
-import type { MacroDefinition } from "./MacroTypes";
-import { analyzeVoiceSubmitTail } from "./VoiceSubmitTail";
+import type { MacroDefinition, MacroMatchResult } from "./MacroTypes";
 import { ChatSpaceSubmissionGate } from "./ChatSpaceSubmissionGate";
 
 export interface LainBrainImageAttachmentMetadata {
@@ -303,6 +318,7 @@ export interface LainBrainImageAttachmentMetadata {
 export interface LainBrainTranscriptMessage {
   role: "user" | "assistant";
   content: string;
+  operationId?: string;
   providerId?: string;
   providerDisplayName?: string;
   attachment?: LainBrainImageAttachmentMetadata;
@@ -529,6 +545,7 @@ export function normalizeAttachmentFiles(
 interface StoredMessage extends LainBrainTranscriptMessage {
   id: string;
   includeInHistory: boolean;
+  operationId?: string;
   /** Eligible for the bounded text-only semantic-delta analyzer. */
   semanticDeltaEligible?: boolean;
 }
@@ -721,6 +738,27 @@ export class LainBrainSession {
   private macroDefinitionPreviewPending = false;
   private macroDefinitionRequestId = 0;
   private voiceSubmitReview?: VoiceSubmitReviewState;
+  private pendingVoiceHold?: {
+    id: string;
+    raw: string;
+    cleaned: string;
+    candidates: readonly string[];
+    previousBody: string;
+    scores: VoiceIntentScores;
+    createdAt?: string;
+    turnId?: string;
+    deadline: number;
+    timer: ReturnType<typeof setTimeout>;
+    settled: boolean;
+  };
+  private resolveMacroIntent:
+    (raw: string, previousBody: string) => Promise<
+      | { kind: "command"; macroId: string; parameters: Record<string, string | number> }
+      | { kind: "text" }
+      | { kind: "uncertain" }
+    > = (raw, previousBody) =>
+      this.resolveMacroIntentByDescription(raw, previousBody);
+  private voiceHoldDeadlineMs = 1_800;
   private getVoiceJevKey: () => string = () => "";
   private voiceIntentServices: VoiceIntentServices = createVoiceIntentServices(
     () => this.getApiKey(), () => this.getVoiceJevKey()
@@ -728,9 +766,48 @@ export class LainBrainSession {
   private voiceIntent = this.makeVoiceIntentBuffer();
   private voiceIntentEpoch = 0;
   private lastVoiceIntentDurationMs?: number;
+  private lastVoiceVerification?: VoiceVerificationResult;
+  private lastVoiceResolution?: {
+    decision: "command" | "text" | "uncertain" | "timeout";
+    macroId?: string;
+    parameters?: Record<string, string | number>;
+    durationMs: number;
+    reason: string;
+  };
   private voiceIntentQueue: Promise<void> = Promise.resolve();
+  private readonly localVoiceVerifier = new LocalVoiceVerifier();
+  private readonly voiceBlindEvaluator = new VoiceBlindEvaluator(
+    this.localVoiceVerifier
+  );
+  private accurateVoiceMacroExecutions = 0;
+  private readonly speechReadAloud = new SpeechReadAloud();
+  private lastSubmissionWasVoice = false;
+  private submitRecoveryEpoch = 0;
+  private submitOperations: Array<{
+    id: string;
+    chatSpaceSegments: readonly ChatSpaceSegment[];
+    messagesLength: number;
+    messageIds: Set<string>;
+    userTurnSequence: number;
+    semanticPriorState: SemanticPriorState;
+  }> = [];
+  private recoveryOps: Array<
+    { readonly kind: "submit" } | { readonly kind: "edit" }
+  > = [];
+  private activeSubmitOperationId?: string;
+  private readonly abandonedSubmitOperationIds = new Set<string>();
+  private pendingVoiceCalibration?: {
+    macroId: string;
+    label: VoiceCalibrationLabel;
+  };
+  private pendingVoiceBlindCapture?: {
+    macroId: string;
+    label: "positive" | "negative";
+    category: "speed" | "volume" | "noise" | "language" | "ordinary";
+  };
   private deferredVoiceDecisions: Array<{
-    decision: VoiceDecision; raw: string; createdAt?: string; turnId?: string
+    decision: VoiceDecision; raw: string; createdAt?: string; turnId?: string;
+    audioSamples?: Float32Array | null
   }> = [];
   private voicePrewarmTimer: ReturnType<typeof setTimeout> | null = null;
   private macroRegistrySaveCallback?: (registry: StoredMacroRegistry) => void;
@@ -943,14 +1020,215 @@ export class LainBrainSession {
     this.getVoiceJevKey = provider;
   }
 
+  setVoiceAnswerReadAloudEnabled(enabled: boolean): void {
+    this.speechReadAloud.setEnabled(enabled);
+  }
+
+  getSpeechReadAloudStatus(): string {
+    return this.speechReadAloud.getLastStatus();
+  }
+
   setVoiceIntentServices(services: VoiceIntentServices): void {
     this.voiceIntentServices = services;
     this.voiceIntent.clear();
     this.voiceIntent = this.makeVoiceIntentBuffer();
   }
 
+  setVoiceMacroIntentResolver(
+    resolver: (raw: string, previousBody: string) => Promise<
+      | { kind: "command"; macroId: string; parameters: Record<string, string | number> }
+      | { kind: "text" }
+      | { kind: "uncertain" }
+    >
+  ): void {
+    this.resolveMacroIntent = resolver;
+  }
+
+  setVoiceHoldDeadlineMs(milliseconds: number): void {
+    this.voiceHoldDeadlineMs = Math.max(1, Math.floor(milliseconds));
+  }
+
   getLastVoiceIntentDurationMs(): number | undefined {
     return this.lastVoiceIntentDurationMs;
+  }
+
+  addVoiceCalibrationSample(
+    macroId: string,
+    label: VoiceCalibrationLabel,
+    samples: Float32Array,
+    sampleRate?: number
+  ): VoiceCalibrationStatus {
+    return this.localVoiceVerifier.addSample(
+      macroId,
+      label,
+      samples,
+      sampleRate
+    );
+  }
+
+  getVoiceCalibrationStatus(macroId: string): VoiceCalibrationStatus {
+    return this.localVoiceVerifier.status(macroId);
+  }
+
+  getVoiceAcceptanceCriteria(): Readonly<
+    typeof VOICE_ACCEPTANCE_CRITERIA
+  > {
+    return VOICE_ACCEPTANCE_CRITERIA;
+  }
+
+  recordBlindVoiceSample(sample: BlindVoiceSample): void {
+    this.voiceBlindEvaluator.addSample(sample);
+  }
+
+  evaluateVoiceBlind(macroId: string): VoiceBlindEvaluationResult {
+    return this.voiceBlindEvaluator.evaluate(macroId);
+  }
+
+  clearVoiceBlindSamples(): void {
+    this.voiceBlindEvaluator.clear();
+  }
+
+  getBlindVoiceSamples(macroId?: string): readonly BlindVoiceSample[] {
+    return this.voiceBlindEvaluator.listSamples(macroId);
+  }
+
+  getLastVoiceBlindResult(): VoiceBlindEvaluationResult | undefined {
+    return this.voiceBlindEvaluator.getLastResult();
+  }
+
+  clearVoiceCalibration(macroId?: string): void {
+    this.localVoiceVerifier.clear(macroId);
+  }
+
+  beginVoiceCalibration(
+    macroId: string,
+    label: VoiceCalibrationLabel
+  ): boolean {
+    this.pendingVoiceCalibration = { macroId, label };
+    this.voiceInput?.clearLocalAudio();
+    void this.getVoiceInput().start();
+    this.notify();
+    return true;
+  }
+
+  getPendingVoiceCalibration():
+    Readonly<{ macroId: string; label: VoiceCalibrationLabel }> | undefined {
+    return this.pendingVoiceCalibration;
+  }
+
+  cancelVoiceCalibration(): void {
+    this.pendingVoiceCalibration = undefined;
+    this.voiceInput?.clearLocalAudio();
+    void this.stopVoiceInput();
+    this.notify();
+  }
+
+  beginVoiceBlindCapture(
+    macroId: string,
+    label: "positive" | "negative",
+    category: "speed" | "volume" | "noise" | "language" | "ordinary"
+  ): boolean {
+    this.pendingVoiceBlindCapture = { macroId, label, category };
+    this.voiceInput?.clearLocalAudio();
+    void this.getVoiceInput().start();
+    this.notify();
+    return true;
+  }
+
+  getPendingVoiceBlindCapture():
+    Readonly<{
+      macroId: string;
+      label: "positive" | "negative";
+      category: "speed" | "volume" | "noise" | "language" | "ordinary";
+    }> | undefined {
+    return this.pendingVoiceBlindCapture;
+  }
+
+  cancelVoiceBlindCapture(): void {
+    this.pendingVoiceBlindCapture = undefined;
+    this.voiceInput?.clearLocalAudio();
+    void this.stopVoiceInput();
+    this.notify();
+  }
+
+  private async captureVoiceBlindSample(
+    pending: {
+      macroId: string;
+      label: "positive" | "negative";
+      category: "speed" | "volume" | "noise" | "language" | "ordinary";
+    },
+    transcript: string,
+    startMs?: number,
+    endMs?: number
+  ): Promise<void> {
+    const startedAt = Date.now();
+    const audio = this.voiceInput?.sliceLocalAudio(startMs, endMs) ?? null;
+    const decision = await this.voiceIntent.interpret(transcript)
+      .catch((): VoiceDecision => ({
+        kind: "text",
+        text: transcript,
+        scores: {
+          macroSimilarity: 0,
+          turnIndependence: 0,
+          contextSurprise: 0,
+          temporalContext: 0,
+          total: 0
+        }
+      }));
+    const latencyMs = Date.now() - startedAt;
+    if (audio !== null && audio.length > 0) {
+      this.voiceBlindEvaluator.addSample({
+        macroId: pending.macroId,
+        label: pending.label,
+        audio,
+        transcript,
+        latencyMs,
+        category: pending.category
+      });
+    }
+    this.voiceBlindEvaluator.evaluate(pending.macroId);
+    this.notify();
+    void this.stopVoiceInput();
+  }
+
+  getLastVoiceVerification(): VoiceVerificationResult | undefined {
+    return this.lastVoiceVerification;
+  }
+
+  getLastVoiceResolution():
+    Readonly<{
+      decision: "command" | "text" | "uncertain" | "timeout";
+      macroId?: string;
+      parameters?: Record<string, string | number>;
+      durationMs: number;
+      reason: string;
+    }> | undefined {
+    return this.lastVoiceResolution;
+  }
+
+  async testMacroRecognition(raw: string): Promise<{
+    decision: "command" | "text" | "uncertain";
+    macroId?: string;
+    parameters?: Record<string, string | number>;
+  }> {
+    const result = await this.resolveMacroIntent(raw, this.chatSpace.text());
+    return {
+      decision: result.kind,
+      macroId: result.kind === "command" ? result.macroId : undefined,
+      parameters: result.kind === "command" ? result.parameters : undefined
+    };
+  }
+
+  getAccurateVoiceMacroExecutionCount(): number {
+    return this.accurateVoiceMacroExecutions;
+  }
+
+  getAbandonedSubmitOperationIds(): readonly string[] {
+    return [...this.abandonedSubmitOperationIds];
+  }
+
+  isAbandonedSubmitOperation(operationId: string): boolean {
+    return this.abandonedSubmitOperationIds.has(operationId);
   }
 
   private makeVoiceIntentBuffer(): VoiceIntentBuffer {
@@ -960,12 +1238,198 @@ export class LainBrainSession {
       (raw, cleaned, suggested) => findVoiceMacroCandidate(
         raw, cleaned, this.macroRegistry.macros, suggested
       ),
-      () => voiceMacroHints(this.macroRegistry.macros)
+      () => voiceMacroHints(this.macroRegistry.macros),
+      () => ({
+        previousBody: this.chatSpace.text(),
+        macroHints: voiceMacroHints(this.macroRegistry.macros),
+        audioAvailable: false
+      }),
+      () => this.macroRegistry.macros.some(
+        (macro) => macro.enabled && macro.id !== DEFAULT_KA_MACRO.id
+      )
     );
+  }
+
+  private enabledSimpleVoiceMacros():
+    Array<{ macroId: string; commandText: string }> {
+    const result: Array<{ macroId: string; commandText: string }> = [];
+    for (const macro of this.macroRegistry.macros) {
+      if (!macro.enabled) {
+        continue;
+      }
+      for (const pattern of macro.patterns) {
+        if (pattern.kind !== "exact" && pattern.kind !== "trailing") {
+          continue;
+        }
+        const commandText = pattern.phrase.trim();
+        if (
+          commandText !== "" &&
+          !/\s/u.test(commandText) &&
+          commandText.length <= 12
+        ) {
+          result.push({ macroId: macro.id, commandText });
+          break;
+        }
+      }
+    }
+    return result;
+  }
+
+  private async resolveMacroIntentByDescription(
+    raw: string,
+    previousBody: string
+  ): Promise<
+    | { kind: "command"; macroId: string; parameters: Record<string, string | number> }
+    | { kind: "text" }
+    | { kind: "uncertain" }
+  > {
+    const apiKey = this.getApiKey().trim();
+    if (apiKey === "") {
+      return { kind: "uncertain" };
+    }
+    const macros = this.macroRegistry.macros
+      .filter((macro) => macro.enabled)
+      .map((macro) => ({
+        id: macro.id,
+        name: macro.name,
+        description: macro.description ?? "",
+        parameters: macro.parameters,
+        actions: macro.actions
+      }));
+    if (macros.length === 0) {
+      return { kind: "text" };
+    }
+    const answer = await requestDeepSeek(apiKey, [{
+      role: "system",
+      content:
+        "Return ONLY JSON: {\"decision\":\"command\"|\"text\"|\"uncertain\",\"macroId\":string,\"parameters\":object}. " +
+        "command means one enabled macro matches the raw turn and its parameters can be extracted. " +
+        "Convert Chinese numerals such as 一/二/三 to integers. " +
+        "Use only the supplied macro IDs and action specs. " +
+        "Do not invent macros or parameters."
+    }, {
+      role: "user",
+      content: JSON.stringify({ raw, previousBody, macros })
+    }]);
+    const parsed = JSON.parse(answer.trim()
+      .replace(/^```(?:json)?\s*/iu, "")
+      .replace(/\s*```$/u, "")) as {
+        decision?: unknown;
+        macroId?: unknown;
+        parameters?: unknown;
+      };
+    if (parsed.decision !== "command") {
+      return parsed.decision === "text" ? { kind: "text" } : { kind: "uncertain" };
+    }
+    const macro = this.macroRegistry.macros.find(
+      (item) => item.id === parsed.macroId && item.enabled
+    );
+    if (macro === undefined) {
+      return { kind: "uncertain" };
+    }
+    const parameters = typeof parsed.parameters === "object" &&
+      parsed.parameters !== null
+      ? parsed.parameters as Record<string, string | number>
+      : {};
+    const normalized: Record<string, string | number> = {};
+    for (const parameter of macro.parameters) {
+      const rawValue = parameters[parameter.name];
+      if (parameter.type === "integer") {
+        const number = this.parseIntegerParameter(rawValue);
+        if (!Number.isSafeInteger(number)) {
+          return { kind: "uncertain" };
+        }
+        if (
+          parameter.min !== undefined && number < parameter.min ||
+          parameter.max !== undefined && number > parameter.max
+        ) {
+          return { kind: "uncertain" };
+        }
+        normalized[parameter.name] = number;
+      } else {
+        if (typeof rawValue !== "string" || rawValue.trim() === "") {
+          return { kind: "uncertain" };
+        }
+        normalized[parameter.name] = rawValue.trim();
+      }
+    }
+    return { kind: "command", macroId: macro.id, parameters: normalized };
+  }
+
+  private parseIntegerParameter(value: unknown): number {
+    if (typeof value === "number" && Number.isSafeInteger(value)) {
+      return value;
+    }
+    if (typeof value !== "string") {
+      return Number.NaN;
+    }
+    const trimmed = value.trim();
+    const arabic = Number(trimmed);
+    if (Number.isSafeInteger(arabic)) {
+      return arabic;
+    }
+    const digits: Record<string, number> = {
+      "零": 0, "一": 1, "二": 2, "两": 2, "三": 3,
+      "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+      "十": 10
+    };
+    if (trimmed === "十") return 10;
+    if (trimmed.length === 1) return digits[trimmed] ?? Number.NaN;
+    if (trimmed.startsWith("十")) {
+      return 10 + (digits[trimmed[1] ?? ""] ?? 0);
+    }
+    if (trimmed.endsWith("十")) {
+      return (digits[trimmed[0] ?? ""] ?? 0) * 10;
+    }
+    if (trimmed.includes("十")) {
+      const [left, right] = trimmed.split("十");
+      return (digits[left ?? ""] ?? 0) * 10 + (digits[right ?? ""] ?? 0);
+    }
+    return Number.NaN;
+  }
+
+  private executeMacroById(
+    macroId: string,
+    parameters: Record<string, string | number>
+  ): boolean {
+    const macro = this.macroRegistry.macros.find(
+      (item) => item.id === macroId && item.enabled
+    );
+    if (macro === undefined) {
+      return false;
+    }
+    const match: MacroMatchResult = {
+      kind: "match",
+      macro,
+      parameters,
+      normalizedText: "",
+      consumedText: ""
+    };
+    const execution = this.macroExecutor.execute(match);
+    if (
+      execution.ok &&
+      execution.submittedText === undefined &&
+      macro.undoable
+    ) {
+      this.recoveryOps.push({ kind: "edit" });
+    }
+    if (execution.ok && execution.submittedText !== undefined) {
+      void this.submitChatSpace();
+    }
+    this.notify();
+    return execution.ok;
   }
 
   getAssemblyAIVoiceConfig(): AssemblyAIVoiceConfig {
     return this.getAssemblyAIVoice();
+  }
+
+  getVoiceKeyterms(): readonly string[] {
+    return this.macroRegistry.macros.some(
+      (macro) => macro.id === DEFAULT_KA_MACRO.id && macro.enabled
+    )
+      ? ["ka"]
+      : [];
   }
 
   getVoiceInputState(): AssemblyAIVoiceState {
@@ -1036,10 +1500,20 @@ export class LainBrainSession {
   }
 
   async stopVoiceInput(): Promise<void> {
+    this.settlePendingVoiceHold();
     await this.getVoiceInput().stop();
+    if (
+      this.voiceInputState === "stopping" ||
+      this.voiceInputState === "recording"
+    ) {
+      this.voiceInputState = "idle";
+      this.voiceInputDetail = undefined;
+      this.notify();
+    }
   }
 
   destroyVoiceInput(): void {
+    this.settlePendingVoiceHold();
     this.voiceIntentEpoch += 1;
     if (this.voicePrewarmTimer !== null) {
       clearTimeout(this.voicePrewarmTimer);
@@ -1067,8 +1541,6 @@ export class LainBrainSession {
           // appended as segments.
         },
         onPartialTranscript: (transcript) => {
-          this.chatSpace.setPartialVoiceText(transcript);
-          this.notify();
           if (this.voicePrewarmTimer !== null) clearTimeout(this.voicePrewarmTimer);
           const epoch = this.voiceIntentEpoch;
           this.voicePrewarmTimer = setTimeout(() => {
@@ -1083,26 +1555,92 @@ export class LainBrainSession {
             clearTimeout(this.voicePrewarmTimer);
             this.voicePrewarmTimer = null;
           }
-          // Keep the finalized words visible while the short intent check runs.
-          this.chatSpace.setPartialVoiceText(turn.transcript);
+          const readAloudPhrase = "我要说话";
+          const phraseIndex = turn.transcript.indexOf(readAloudPhrase);
+          if (phraseIndex === 0) {
+            this.speechReadAloud.stop();
+            const remainder = turn.transcript.slice(readAloudPhrase.length).trim();
+            if (remainder !== "") {
+              void this.ingestVoiceTurnWithIntent(
+                remainder,
+                new Date().toISOString(),
+                turn.turnId
+              );
+            }
+            return;
+          }
+          if (this.pendingVoiceCalibration !== undefined) {
+            const pending = this.pendingVoiceCalibration;
+            this.pendingVoiceCalibration = undefined;
+            const samples = this.voiceInput?.sliceLocalAudio(
+              turn.audioStartMs,
+              turn.audioEndMs
+            );
+            if (samples !== null && samples !== undefined) {
+              this.localVoiceVerifier.addSample(
+                pending.macroId,
+                pending.label,
+                samples
+              );
+            }
+            this.notify();
+            void this.stopVoiceInput();
+            return;
+          }
+          if (this.pendingVoiceBlindCapture !== undefined) {
+            const pending = this.pendingVoiceBlindCapture;
+            this.pendingVoiceBlindCapture = undefined;
+            void this.captureVoiceBlindSample(
+              pending,
+              turn.transcript,
+              turn.audioStartMs,
+              turn.audioEndMs
+            );
+            this.notify();
+            return;
+          }
+          if (this.pendingVoiceHold !== undefined) {
+            const pending = this.pendingVoiceHold;
+            this.clearPendingVoiceHold();
+            const combined = `${pending.raw} ${turn.transcript}`.trim();
+            this.setPendingVoiceHold(
+              combined,
+              {
+                macroSimilarity: 0,
+                turnIndependence: 1,
+                contextSurprise: 0,
+                temporalContext: 0,
+                total: 0
+              },
+              pending.createdAt,
+              turn.turnId
+            );
+            return;
+          }
           if (this.handleMacroDefinitionInput(
             turn.transcript,
             turn.turnId
           )) {
-            this.chatSpace.setPartialVoiceText("");
             this.notify();
           } else {
             this.notify();
             void this.ingestVoiceTurnWithIntent(
               turn.transcript,
               new Date().toISOString(),
-              turn.turnId
+              turn.turnId,
+              {
+                startMs: turn.audioStartMs,
+                endMs: turn.audioEndMs
+              }
             );
           }
         },
         onStateChange: (state, detail) => {
           this.voiceInputState = state;
           this.voiceInputDetail = detail;
+          if (state === "idle" || state === "error") {
+            this.settlePendingVoiceHold();
+          }
           this.notify();
         }
       }
@@ -2088,6 +2626,24 @@ export class LainBrainSession {
 
   getMacroRegistry(): StoredMacroRegistry { return this.macroRegistry.serialize(); }
 
+  disableMacro(id: string): boolean {
+    if (!this.macroRegistry.disable(id)) {
+      return false;
+    }
+    this.macroRegistrySaveCallback?.(this.macroRegistry.serialize());
+    this.notify();
+    return true;
+  }
+
+  setMacroEnabled(id: string, enabled: boolean): boolean {
+    if (!this.macroRegistry.setEnabled(id, enabled)) {
+      return false;
+    }
+    this.macroRegistrySaveCallback?.(this.macroRegistry.serialize());
+    this.notify();
+    return true;
+  }
+
   getMacroDefinitionPhrase(): string {
     return this.macroRegistry.definitionPhrase;
   }
@@ -2328,7 +2884,9 @@ export class LainBrainSession {
 
   /** Real microphone path: partials may prewarm, only final turns can act. */
   ingestVoiceTurnWithIntent(
-    text: string, createdAt?: string, turnId?: string
+    text: string, createdAt?: string, turnId?: string,
+    audio?: { startMs?: number; endMs?: number },
+    audioSamplesOverride?: Float32Array
   ): Promise<MacroExecutionOutcome> {
     if (turnId !== undefined) {
       if (this.processedFinalizedTurnIds.has(turnId)) {
@@ -2340,17 +2898,37 @@ export class LainBrainSession {
     const receivedAt = Date.now();
     // Start interpretation immediately; serialize only state mutations.
     const interpretation = this.voiceIntent.interpret(text)
-      .catch((): VoiceDecision => ({ kind: "text", text }));
+      .catch((): VoiceDecision => ({
+        kind: "text",
+        text,
+        scores: {
+          macroSimilarity: 0,
+          turnIndependence: 0,
+          contextSurprise: 0,
+          temporalContext: 0,
+          total: 0
+        }
+      }));
     const result = this.voiceIntentQueue.then(async () => {
       const decision = await interpretation;
       if (epoch !== this.voiceIntentEpoch) {
         return { kind: "ignored" } as MacroExecutionOutcome;
       }
       this.lastVoiceIntentDurationMs = Date.now() - receivedAt;
+      const audioSamples = audioSamplesOverride ??
+        (decision.kind === "command" || decision.kind === "voice_ambiguous"
+          ? this.voiceInput?.sliceLocalAudio(audio?.startMs, audio?.endMs) ?? null
+          : null);
       if (this.voiceSubmitReview !== undefined ||
           this.chatSpaceSubmissionGate.busy) {
         if (this.deferredVoiceDecisions.length < 20) {
-          this.deferredVoiceDecisions.push({ decision, raw: text, createdAt, turnId });
+          this.deferredVoiceDecisions.push({
+            decision,
+            raw: text,
+            createdAt,
+            turnId,
+            audioSamples
+          });
         } else {
           // A full intent queue may skip AI processing, never the user's words.
           if (this.chatSpace.partialText === text.trim()) {
@@ -2361,14 +2939,30 @@ export class LainBrainSession {
         }
         return { kind: "ignored" } as MacroExecutionOutcome;
       }
-      return this.applyVoiceIntent(decision, text, createdAt, turnId);
+      try {
+        return this.applyVoiceIntent(
+          decision,
+          text,
+          createdAt,
+          turnId,
+          audioSamples
+        );
+      } catch (error) {
+        const segment = this.chatSpace.addSegment(text, "voice", createdAt);
+        this.notify();
+        return {
+          kind: segment === null ? "ignored" as const : "appended" as const,
+          segment
+        };
+      }
     });
     this.voiceIntentQueue = result.then(() => {}, () => {});
     return result;
   }
 
   private applyVoiceIntent(
-    decision: VoiceDecision, raw: string, createdAt?: string, turnId?: string
+    decision: VoiceDecision, raw: string, createdAt?: string, turnId?: string,
+    audioSamples?: Float32Array | null
   ): MacroExecutionOutcome {
     // Do not erase a newer partial that arrived during the async check.
     if (this.chatSpace.partialText === raw.trim()) {
@@ -2379,18 +2973,25 @@ export class LainBrainSession {
       this.notify();
       return { kind: segment === null ? "ignored" : "appended", segment };
     }
+    if (decision.kind === "voice_ambiguous") {
+      this.setPendingVoiceHold(raw, decision.scores, createdAt, turnId);
+      return { kind: "ignored" };
+    }
     if (decision.kind === "command") {
+      if (decision.source === "exact") {
+        this.accurateVoiceMacroExecutions += 1;
+      }
       return this.ingestChatSpaceTurn(decision.text, "voice", createdAt, turnId);
     }
-    this.voiceSubmitReview = {
-      candidate: decision.candidate,
-      body: decision.body,
-      originalText: decision.raw,
-      commandText: decision.command
-    };
+    // Uncertain or failed classification must stay as ordinary text. This
+    // defensive branch should not normally run because VoiceIntentBuffer
+    // converts review outcomes to text before returning.
+    const fallbackText: string = "text" in decision
+      ? (decision as { text: string }).text
+      : (decision as { raw: string }).raw;
+    const segment = this.chatSpace.addSegment(fallbackText, "voice", createdAt);
     this.notify();
-    void this.stopVoiceInput();
-    return { kind: "review" };
+    return { kind: segment === null ? "ignored" : "appended", segment };
   }
 
   private drainDeferredVoiceDecisions(): void {
@@ -2398,10 +2999,173 @@ export class LainBrainSession {
         this.chatSpaceSubmissionGate.busy) return;
     while (this.deferredVoiceDecisions.length > 0) {
       const next = this.deferredVoiceDecisions.shift()!;
-      this.applyVoiceIntent(next.decision, next.raw, next.createdAt, next.turnId);
+      this.applyVoiceIntent(
+        next.decision,
+        next.raw,
+        next.createdAt,
+        next.turnId,
+        next.audioSamples
+      );
       if (this.voiceSubmitReview !== undefined ||
           this.chatSpaceSubmissionGate.busy) return;
     }
+  }
+
+  private setPendingVoiceHold(
+    raw: string,
+    scores: VoiceIntentScores,
+    createdAt?: string,
+    turnId?: string
+  ): void {
+    this.clearPendingVoiceHold();
+    const id = `hold-${this.createMessageId()}`;
+    const candidates = this.enabledSimpleVoiceMacros()
+      .map((macro) => macro.commandText)
+      .slice(0, 4);
+    const previousBody = this.chatSpace.text();
+    const deadline = Date.now() + this.voiceHoldDeadlineMs;
+    const timer = setTimeout(() => {
+      this.settlePendingVoiceHold();
+    }, this.voiceHoldDeadlineMs);
+    this.pendingVoiceHold = {
+      id,
+      raw,
+      cleaned: raw,
+      candidates,
+      previousBody,
+      scores,
+      createdAt,
+      turnId,
+      deadline,
+      timer,
+      settled: false
+    };
+    void this.runPendingVoiceHoldDecision(id);
+  }
+
+  private clearPendingVoiceHold(): void {
+    if (this.pendingVoiceHold !== undefined) {
+      clearTimeout(this.pendingVoiceHold.timer);
+      this.pendingVoiceHold = undefined;
+    }
+  }
+
+  private settlePendingVoiceHold(): void {
+    if (this.pendingVoiceHold === undefined) {
+      return;
+    }
+    const pending = this.pendingVoiceHold;
+    if (pending.settled) {
+      return;
+    }
+    pending.settled = true;
+    clearTimeout(pending.timer);
+    this.pendingVoiceHold = undefined;
+    const segment = this.chatSpace.addSegment(
+      pending.raw,
+      "voice",
+      pending.createdAt
+    );
+    this.notify();
+    void segment;
+  }
+
+  private async runPendingVoiceHoldDecision(id: string): Promise<void> {
+    const startedAt = Date.now();
+    const pending = this.pendingVoiceHold;
+    if (pending === undefined || pending.id !== id) {
+      return;
+    }
+
+    const resolved = await this.resolveMacroIntent(
+      pending.raw,
+      pending.previousBody
+    ).catch(() => ({ kind: "uncertain" as const }));
+    const durationMs = Date.now() - startedAt;
+    this.lastVoiceResolution = {
+      decision: resolved.kind,
+      macroId: resolved.kind === "command" ? resolved.macroId : undefined,
+      parameters: resolved.kind === "command" ? resolved.parameters : undefined,
+      durationMs,
+      reason: resolved.kind
+    };
+    console.log(JSON.stringify({
+      event: "voice-intent-resolution",
+      decision: resolved.kind,
+      macroId: resolved.kind === "command" ? resolved.macroId : undefined,
+      parameters: resolved.kind === "command" ? resolved.parameters : undefined,
+      durationMs
+    }));
+
+    if (this.pendingVoiceHold?.id !== id || pending.settled) {
+      return;
+    }
+    if (resolved.kind === "command") {
+      const executed = this.executeMacroById(
+        resolved.macroId,
+        resolved.parameters
+      );
+      if (executed) {
+        this.lastVoiceResolution = {
+          decision: "command",
+          macroId: resolved.macroId,
+          parameters: resolved.parameters,
+          durationMs,
+          reason: "executed"
+        };
+        pending.settled = true;
+        clearTimeout(pending.timer);
+        this.pendingVoiceHold = undefined;
+        this.notify();
+        return;
+      }
+      this.lastVoiceResolution = {
+        decision: "command",
+        macroId: resolved.macroId,
+        parameters: resolved.parameters,
+        durationMs,
+        reason: "execution_failed"
+      };
+    }
+    this.settlePendingVoiceHold();
+    console.log(JSON.stringify({
+      event: "voice-intent-settled",
+      reason: this.lastVoiceResolution?.reason
+    }));
+  }
+
+  private async resolvePendingVoiceHoldWithTurn(
+    pending: {
+      raw: string;
+      scores: VoiceIntentScores;
+      createdAt?: string;
+      turnId?: string;
+    },
+    turn: {
+      transcript: string;
+      turnId: string;
+      audioStartMs?: number;
+      audioEndMs?: number;
+    }
+  ): Promise<void> {
+    const combined = `${pending.raw} ${turn.transcript}`.trim();
+    const resolved = await this.resolveMacroIntentByDescription(
+      combined,
+      this.chatSpace.text()
+    ).catch(() => ({ kind: "uncertain" as const }));
+    if (resolved.kind === "command") {
+      const executed = this.executeMacroById(
+        resolved.macroId,
+        resolved.parameters
+      );
+      if (executed) {
+        this.notify();
+        return;
+      }
+    }
+    const segment = this.chatSpace.addSegment(combined, "voice", pending.createdAt);
+    this.notify();
+    void segment;
   }
 
   ingestKeyboardChatSpaceTurn(text: string, createdAt?: string): MacroExecutionOutcome {
@@ -2419,19 +3183,6 @@ export class LainBrainSession {
       return { kind: "ignored" };
     }
 
-    if (source === "voice") {
-      const tail = analyzeVoiceSubmitTail(text);
-      if (tail.kind === "uncertain") {
-        this.voiceSubmitReview = {
-          candidate: tail.candidate,
-          body: tail.body,
-          originalText: text
-        };
-        this.notify();
-        return { kind: "review" };
-      }
-    }
-
     const matcher = new MacroMatcher(this.macroRegistry.macros);
     const match = matcher.match(text);
     if (match.kind === "conflict") {
@@ -2439,6 +3190,14 @@ export class LainBrainSession {
       return { kind: "conflict" };
     }
     if (match.kind === "match") {
+      if (match.macro.actions.some(
+        (action) => action.kind === "restore_last_step"
+      )) {
+        if (this.recoverLastSubmit()) {
+          this.notify();
+          return { kind: "executed" };
+        }
+      }
       const isTrailing = match.macro.patterns.some((pattern) =>
         pattern.kind === "trailing" &&
         new RegExp(`(?:^|[\\s,])${pattern.phrase.normalize("NFKC").toLocaleLowerCase()}$`)
@@ -2450,9 +3209,16 @@ export class LainBrainSession {
         if (body !== "") this.chatSpace.appendKeyboardText(body, createdAt);
       }
       const execution = this.macroExecutor.execute(match);
+      const isEditOperation = execution.ok &&
+        execution.submittedText === undefined &&
+        match.macro.undoable;
+      if (isEditOperation) {
+        this.recoveryOps.push({ kind: "edit" });
+      }
       this.macroRegistrySaveCallback?.(this.macroRegistry.serialize());
       if (execution.ok && execution.submittedText !== undefined) {
         this.activeFinalizedSubmissionText = text;
+        this.lastSubmissionWasVoice = source === "voice";
         void this.submitChatSpace();
       }
       this.notify();
@@ -2476,6 +3242,14 @@ export class LainBrainSession {
     return pending;
   }
 
+  submitChatSpaceIfNotEmpty(): boolean {
+    if (this.chatSpace.getSegments().length === 0) {
+      return false;
+    }
+    void this.submitChatSpace();
+    return true;
+  }
+
   private async submitChatSpaceSnapshot(): Promise<LainBrainSendResult> {
     this.voiceIntent.clear();
     const snapshot = this.chatSpace.snapshot();
@@ -2484,28 +3258,110 @@ export class LainBrainSession {
       this.activeFinalizedSubmissionText = undefined;
       return "blocked";
     }
+    const operationId = `submit-${this.createMessageId()}`;
+    this.activeSubmitOperationId = operationId;
+    const submitOperation = {
+      id: operationId,
+      chatSpaceSegments: this.chatSpace.getSegments(),
+      messagesLength: this.messages.length,
+      messageIds: new Set<string>(),
+      userTurnSequence: this.userTurnSequence,
+      semanticPriorState: this.semanticPriorState
+    };
+    this.submitOperations.push(submitOperation);
+    this.recoveryOps.push({ kind: "submit" });
     const messageCountBefore = this.messages.length;
     try {
       this.generalDraft = text;
       const result = await this.send();
       if (result === "sent" && this.lastForegroundSendFailed) {
         this.messages.length = messageCountBefore;
+        this.submitOperations.pop();
+        this.recoveryOps.pop();
+        this.activeSubmitOperationId = undefined;
         return "failed";
       }
       if (result === "sent") {
         this.chatSpace.removeSubmittedSnapshot(snapshot);
+        if (this.lastSubmissionWasVoice) {
+          const assistant = this.messages
+            .filter((message) => message.role === "assistant")
+            .at(-1);
+          if (assistant !== undefined) {
+            this.speechReadAloud.speak(assistant.content);
+          }
+        }
+        this.lastSubmissionWasVoice = false;
+        for (
+          let index = messageCountBefore;
+          index < this.messages.length;
+          index += 1
+        ) {
+          const message = this.messages[index];
+          if (message !== undefined) {
+            submitOperation.messageIds.add(message.id);
+            message.operationId = operationId;
+          }
+        }
       }
       return result;
     } finally {
       this.activeFinalizedSubmissionText = undefined;
+      this.activeSubmitOperationId = undefined;
       this.voiceSubmitReview = undefined;
       this.notify();
     }
   }
 
   recoverChatSpace(): void {
-    this.macroExecutor.recover();
+    this.recoverMostRecentOperation();
+  }
+
+  private recoverMostRecentOperation(): boolean {
+    const operation = this.recoveryOps.pop();
+    if (operation === undefined) {
+      return false;
+    }
+    if (operation.kind === "edit") {
+      this.macroExecutor.recover();
+      this.notify();
+      return true;
+    }
+    return this.recoverLastSubmit();
+  }
+
+  recoverLastSubmit(): boolean {
+    const operation = this.submitOperations.pop();
+    if (operation === undefined) {
+      return false;
+    }
+    this.submitRecoveryEpoch += 1;
+    this.abandonedSubmitOperationIds.add(operation.id);
+
+    const currentSegments = this.chatSpace.getSegments();
+    const newSegments = currentSegments.filter((current) =>
+      !operation.chatSpaceSegments.some(
+        (before) => before.id === current.id
+      )
+    );
+    this.chatSpace.clear();
+    for (const segment of operation.chatSpaceSegments) {
+      this.chatSpace.addSegment(
+        segment.text,
+        segment.source,
+        segment.createdAt
+      );
+    }
+    for (const segment of newSegments) {
+      this.chatSpace.addSegment(
+        segment.text,
+        segment.source,
+        segment.createdAt
+      );
+    }
+    this.activeSubmitOperationId = undefined;
     this.notify();
+    return true;
   }
 
   getTranscriptMessages(): readonly LainBrainTranscriptMessage[] {
@@ -4913,7 +5769,13 @@ export class LainBrainSession {
   }
   getConversationHistory(): DeepSeekConversationMessage[] {
     return this.messages
-      .filter((message) => message.includeInHistory)
+      .filter((message) =>
+        message.includeInHistory &&
+        !(
+          message.operationId !== undefined &&
+          this.abandonedSubmitOperationIds.has(message.operationId)
+        )
+      )
       .map((message) => ({
         role: message.role,
         content: getMessageContentForModel(message)
@@ -6226,6 +7088,7 @@ export class LainBrainSession {
 
     // ── Text path (may include PDF-extracted content) ──────────────
     const apiKey = this.getApiKey().trim();
+    const sendRecoveryEpoch = this.submitRecoveryEpoch;
 
     if (apiKey === "") {
       this.addAssistantNotice(
@@ -6378,6 +7241,9 @@ export class LainBrainSession {
         apiKey,
         rawResponse
       );
+      if (sendRecoveryEpoch !== this.submitRecoveryEpoch) {
+        return "blocked";
+      }
       const assistantMessage: StoredMessage = {
         id: this.createMessageId(),
         role: "assistant",
@@ -6404,6 +7270,11 @@ export class LainBrainSession {
     } catch (error) {
       this.lastForegroundSendFailed = true;
       this.captureDeepSeekError(error, "foreground-chat");
+      if (sendRecoveryEpoch !== this.submitRecoveryEpoch) {
+        this.loadingMode = null;
+        this.notify();
+        return "blocked";
+      }
       this.messages.push({
         id: this.createMessageId(),
         role: "assistant",

@@ -8,10 +8,8 @@ const source = readFileSync(
 
 assert.match(
   source,
-  /this\.session\.setMacroEnabled\(macro\.id, target\)/
+  /this\.session\.setMacroEnabled\(macro\.id, !macro\.enabled\)/
 );
-assert.match(source, /setMacroEnabled: \$\{ok \? "ok" : "failed"\}/);
-assert.match(source, /after: \$\{after\?\.enabled \?\? "missing"\}/);
 assert.doesNotMatch(source, /disableMacro\(macro\.id\)/);
 
 console.log("define-macro-ui: ok");

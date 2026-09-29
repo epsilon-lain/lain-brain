@@ -64,5 +64,22 @@ export class MacroRegistry {
     this.state = { ...this.state, definitionPhrase: phrase.trim() };
     return true;
   }
+  remove(id: string): boolean {
+    if (id === DEFAULT_KA_MACRO.id) return false;
+    const macro = this.state.macros.find((item) => item.id === id);
+    if (macro === undefined) return false;
+    this.state = {
+      ...this.state,
+      macros: this.state.macros.filter((item) => item.id !== id)
+    };
+    return true;
+  }
+  removeAllCustom(): number {
+    const custom = this.state.macros.filter(
+      (item) => item.id !== DEFAULT_KA_MACRO.id
+    );
+    this.state = { ...this.state, macros: [DEFAULT_KA_MACRO] };
+    return custom.length;
+  }
   serialize(): StoredMacroRegistry { return { ...this.state, macros: [...this.state.macros] }; }
 }

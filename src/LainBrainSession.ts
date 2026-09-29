@@ -3084,6 +3084,24 @@ export class LainBrainSession {
     return true;
   }
 
+  deleteMacro(id: string): boolean {
+    if (!this.macroRegistry.remove(id)) {
+      return false;
+    }
+    this.macroRegistrySaveCallback?.(this.macroRegistry.serialize());
+    this.notify();
+    return true;
+  }
+
+  deleteAllCustomMacros(): number {
+    const removed = this.macroRegistry.removeAllCustom();
+    if (removed > 0) {
+      this.macroRegistrySaveCallback?.(this.macroRegistry.serialize());
+      this.notify();
+    }
+    return removed;
+  }
+
   getMacroDefinitionPhrase(): string {
     return this.macroRegistry.definitionPhrase;
   }

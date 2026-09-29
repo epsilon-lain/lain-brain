@@ -1249,7 +1249,6 @@ export class LainBrainChatPanel {
 
 class DefineMacroModal extends Modal {
   private unsubscribe?: () => void;
-  private diagnosticEl?: HTMLDivElement;
 
   constructor(
     app: App,
@@ -1282,16 +1281,32 @@ class DefineMacroModal extends Modal {
       void this.session.submitMacroDefinitionDescription(textarea.value);
     });
 
+    const deleteAllButton = actions.createEl("button", {
+      text: "Delete all custom macros"
+    });
+    deleteAllButton.style.color = "var(--text-error)";
+    deleteAllButton.addEventListener("click", () => {
+      const count = this.session.getMacroRegistry().macros.filter(
+        (macro) => macro.id !== "builtin-ka"
+      ).length;
+      if (count === 0) {
+        new Notice("There are no custom macros to delete.");
+        return;
+      }
+      new ConfirmMacroDeleteModal(
+        this.app,
+        this.session,
+        null,
+        count,
+        ""
+      ).open();
+    });
+
     const closeButton = actions.createEl("button", { text: "Close" });
     closeButton.addEventListener("click", () => this.close());
 
     const listEl = this.contentEl.createDiv();
     listEl.style.marginTop = "0.5rem";
-
-    this.diagnosticEl = this.contentEl.createDiv();
-    this.diagnosticEl.style.marginTop = "0.5rem";
-    this.diagnosticEl.style.color = "var(--text-muted)";
-    this.diagnosticEl.style.whiteSpace = "pre-wrap";
 
     const update = (): void => {
       listEl.empty();
@@ -1303,25 +1318,26 @@ class DefineMacroModal extends Modal {
         row.createEl("span", {
           text: `${macro.enabled ? "●" : "○"} ${macro.name}`
         });
-        const disable = row.createEl("button", {
+        const toggle = row.createEl("button", {
           text: macro.enabled ? "Disable" : "Enable"
         });
-        disable.disabled = macro.id === "builtin-ka";
-        disable.addEventListener("click", () => {
-          const target = !macro.enabled;
-          const ok = this.session.setMacroEnabled(macro.id, target);
-          const after = this.session.getMacroRegistry().macros
-            .find((item) => item.id === macro.id);
-          this.diagnosticEl?.setText(
-            `BUILD: define-macro-2026-09-26\n` +
-            `macroId: ${macro.id}\n` +
-            `before: ${macro.enabled}\n` +
-            `target: ${target}\n` +
-            `setMacroEnabled: ${ok ? "ok" : "failed"}\n` +
-            `after: ${after?.enabled ?? "missing"}\n` +
-            `saved: ${ok ? "requested" : "skipped"}`
-          );
+        toggle.disabled = macro.id === "builtin-ka";
+        toggle.addEventListener("click", () => {
+          this.session.setMacroEnabled(macro.id, !macro.enabled);
         });
+        if (macro.id !== "builtin-ka") {
+          const deleteButton = row.createEl("button", { text: "Delete" });
+          deleteButton.style.color = "var(--text-error)";
+          deleteButton.addEventListener("click", () => {
+            new ConfirmMacroDeleteModal(
+              this.app,
+              this.session,
+              macro.id,
+              0,
+              macro.name
+            ).open();
+          });
+        }
       }
     };
 
@@ -1333,6 +1349,50 @@ class DefineMacroModal extends Modal {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.contentEl.empty();
+  }
+}
+
+class ConfirmMacroDeleteModal extends Modal {
+  constructor(
+    app: App,
+    private session: LainBrainSession,
+    private macroId: string | null,
+    private count: number,
+    private macroName: string
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.titleEl.setText("Delete macro");
+    const isAll = this.macroId === null;
+    this.contentEl.createEl("p", {
+      text: isAll
+        ? `Delete ${this.count} custom macro${this.count === 1 ? "" : "s"}? Only the built-in "ka" will remain.`
+        : `Delete macro "${this.macroName}"?`
+    });
+
+    const actions = this.contentEl.createDiv();
+    actions.style.display = "flex";
+    actions.style.justifyContent = "flex-end";
+    actions.style.gap = "0.5rem";
+    actions.style.marginTop = "0.5rem";
+
+    const cancelButton = actions.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", () => this.close());
+
+    const confirmButton = actions.createEl("button", {
+      text: "Delete",
+      cls: "mod-warning"
+    });
+    confirmButton.addEventListener("click", () => {
+      if (isAll) {
+        this.session.deleteAllCustomMacros();
+      } else if (this.macroId !== null) {
+        this.session.deleteMacro(this.macroId);
+      }
+      this.close();
+    });
   }
 }
 

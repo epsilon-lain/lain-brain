@@ -45,6 +45,8 @@ export interface LainBrainSettings {
   assemblyAIVoiceEnabled: boolean;
   assemblyAIApiKey: string;
   assemblyAISpeechModel: string;
+  assemblyAIKeytermsPromptEnabled: boolean;
+  voiceAnswerReadAloudEnabled: boolean;
   jevApiKey: string;
   imageProviderProfiles: ProviderProfile[];
   activeImageProviderId: string | null;
@@ -75,6 +77,8 @@ export const DEFAULT_SETTINGS: LainBrainSettings = {
   assemblyAIVoiceEnabled: true,
   assemblyAIApiKey: "",
   assemblyAISpeechModel: "universal-3-5-pro",
+  assemblyAIKeytermsPromptEnabled: true,
+  voiceAnswerReadAloudEnabled: false,
   jevApiKey: "",
   imageProviderProfiles: createDefaultProviderProfiles(),
   activeImageProviderId: null,
@@ -89,7 +93,7 @@ export const DEFAULT_SETTINGS: LainBrainSettings = {
   leanTimeoutSeconds: 30,
   wslExecutable: "wsl.exe",
   wslDistribution: "",
-  wslProjectRoot: "/mnt/c/Users/elonl/Desktop/lain_lean",
+  wslProjectRoot: "",
   macroRegistry: migrateMacroRegistry(undefined),
   hasCompletedMacroOnboarding: false
 };
@@ -192,6 +196,10 @@ export function migrateLainBrainSettings(
       value.assemblyAISpeechModel.trim() !== ""
         ? value.assemblyAISpeechModel.trim()
         : "universal-3-5-pro",
+    assemblyAIKeytermsPromptEnabled:
+      value.assemblyAIKeytermsPromptEnabled !== false,
+    voiceAnswerReadAloudEnabled:
+      value.voiceAnswerReadAloudEnabled === true,
     jevApiKey: typeof value.jevApiKey === "string"
       ? value.jevApiKey : "",
     imageProviderProfiles: normalized.profiles,
@@ -236,7 +244,7 @@ export function migrateLainBrainSettings(
     wslProjectRoot: typeof value.wslProjectRoot === "string" &&
       value.wslProjectRoot.trim() !== ""
       ? value.wslProjectRoot.trim()
-      : "/mnt/c/Users/elonl/Desktop/lain_lean",
+      : "",
     macroRegistry: migrateMacroRegistry(value.macroRegistry),
     hasCompletedMacroOnboarding: value.hasCompletedMacroOnboarding === true
   };

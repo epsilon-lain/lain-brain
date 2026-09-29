@@ -103,7 +103,7 @@ export const DEFAULT_LEAN_RUNNER_CONFIG: LeanRunnerConfig = {
   timeoutSeconds: 30,
   wslExecutable: "wsl.exe",
   wslDistribution: "",
-  wslProjectRoot: "/mnt/c/Users/elonl/Desktop/lain_lean"
+  wslProjectRoot: ""
 };
 
 // ── Injectables ────────────────────────────────────────────────────────

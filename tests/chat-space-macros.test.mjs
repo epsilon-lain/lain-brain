@@ -102,6 +102,54 @@ await first;
 // the pure gate above verifies the corresponding single-send behavior.
 assert.equal(typeof ChatSpaceSubmissionGate, "function");
 
+const rangeMacro = {
+  id: "delete-range",
+  name: "Delete range",
+  patterns: [{ kind: "parameterized", template: "delete line {a} to {b}",
+    parameters: [
+      { name: "a", type: "integer", min: 1 },
+      { name: "b", type: "integer", min: 1 }
+    ] }],
+  parameters: [
+    { name: "a", type: "integer", min: 1 },
+    { name: "b", type: "integer", min: 1 }
+  ],
+  actions: [{
+    kind: "delete_segment_range",
+    startLine: { parameter: "a" },
+    endLine: { parameter: "b" }
+  }],
+  writesToChat: false,
+  undoable: true,
+  confirmation: { kind: "never" },
+  enabled: true,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  schemaVersion: 1
+};
+const rangeSpace = new ChatSpace();
+for (let index = 1; index <= 5; index += 1) {
+  rangeSpace.appendKeyboardText(`line ${index}`);
+}
+const rangeExecutor = new MacroExecutor(rangeSpace);
+const rangeMatch = new MacroMatcher([rangeMacro]).match("delete line 2 to 4");
+assert.equal(rangeMatch.kind, "match");
+assert.equal(rangeExecutor.execute(rangeMatch).ok, true);
+assert.deepEqual(
+  [...rangeSpace.getSegments().map((segment) => segment.text)],
+  ["line 1", "line 5"]
+);
+rangeExecutor.recover();
+assert.equal(rangeSpace.getSegments().length, 5);
+assert.equal(
+  new MacroMatcher([rangeMacro]).match("delete line 5 to 2").kind,
+  "match"
+);
+assert.equal(
+  rangeExecutor.execute(new MacroMatcher([rangeMacro]).match("delete line 5 to 2")).ok,
+  false
+);
+
 const conflict = new MacroMatcher([
   { ...DEFAULT_KA_MACRO, id: "ka-a" },
   { ...DEFAULT_KA_MACRO, id: "ka-b" }

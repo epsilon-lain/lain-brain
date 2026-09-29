@@ -1,4 +1,5 @@
 import { requestUrl } from "obsidian";
+import { VoiceAudioRingBuffer } from "./VoiceAudioRingBuffer";
 
 export const ASSEMBLYAI_STREAMING_SAMPLE_RATE = 16_000;
 export const DEFAULT_ASSEMBLYAI_SPEECH_MODEL = "universal-3-5-pro";
@@ -7,6 +8,7 @@ export interface AssemblyAIVoiceConfig {
   enabled: boolean;
   apiKey: string;
   speechModel: string;
+  keytermsPrompt?: readonly string[];
 }
 
 export type AssemblyAIVoiceState =
@@ -24,6 +26,8 @@ export interface AssemblyAIVoiceCallbacks {
     turnOrder: number;
     turnId: string;
     transcript: string;
+    audioStartMs?: number;
+    audioEndMs?: number;
   }) => void;
   onStateChange: (
     state: AssemblyAIVoiceState,
@@ -38,12 +42,15 @@ interface AssemblyAIMessage {
   end_of_turn?: unknown;
   error?: unknown;
   message?: unknown;
+  audio_start?: unknown;
+  audio_end?: unknown;
 }
 
 export function buildAssemblyAIStreamingUrl(
   token: string,
   speechModel: string = DEFAULT_ASSEMBLYAI_SPEECH_MODEL,
-  sampleRate: number = ASSEMBLYAI_STREAMING_SAMPLE_RATE
+  sampleRate: number = ASSEMBLYAI_STREAMING_SAMPLE_RATE,
+  keytermsPrompt: readonly string[] = []
 ): string {
   const params = new URLSearchParams({
     token,
@@ -52,6 +59,9 @@ export function buildAssemblyAIStreamingUrl(
     sample_rate: String(sampleRate),
     format_turns: "true"
   });
+  if (keytermsPrompt.length > 0) {
+    params.set("keyterms_prompt", JSON.stringify(keytermsPrompt));
+  }
 
   return "wss://streaming.assemblyai.com/v3/ws?" +
     params.toString();
@@ -98,6 +108,35 @@ export function downsampleToPcm16(
   return output.buffer;
 }
 
+function downsampleToFloat32(
+  input: Float32Array,
+  sourceSampleRate: number,
+  targetSampleRate: number = ASSEMBLYAI_STREAMING_SAMPLE_RATE
+): Float32Array {
+  if (sourceSampleRate < targetSampleRate || targetSampleRate <= 0) {
+    return new Float32Array(0);
+  }
+  const ratio = sourceSampleRate / targetSampleRate;
+  const outputLength = Math.max(1, Math.floor(input.length / ratio));
+  const output = new Float32Array(outputLength);
+  for (let outputIndex = 0; outputIndex < outputLength; outputIndex += 1) {
+    const start = Math.floor(outputIndex * ratio);
+    const end = Math.min(
+      input.length,
+      Math.max(start + 1, Math.floor((outputIndex + 1) * ratio))
+    );
+    let sum = 0;
+    for (let inputIndex = start; inputIndex < end; inputIndex += 1) {
+      sum += input[inputIndex] ?? 0;
+    }
+    output[outputIndex] = Math.max(
+      -1,
+      Math.min(1, sum / (end - start))
+    );
+  }
+  return output;
+}
+
 async function createTemporaryToken(apiKey: string): Promise<string> {
   const params = new URLSearchParams({
     expires_in_seconds: "60",
@@ -138,6 +177,7 @@ export class AssemblyAIVoiceInput {
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private processorNode: ScriptProcessorNode | null = null;
   private muteNode: GainNode | null = null;
+  private readonly localAudio = new VoiceAudioRingBuffer();
   private readonly finalTurns = new Map<number, string>();
   private partialTurn = "";
   private sessionId = "";
@@ -150,6 +190,17 @@ export class AssemblyAIVoiceInput {
 
   get currentState(): AssemblyAIVoiceState {
     return this.state;
+  }
+
+  sliceLocalAudio(
+    startMs?: number,
+    endMs?: number
+  ): Float32Array | null {
+    return this.localAudio.slice(startMs, endMs);
+  }
+
+  clearLocalAudio(): void {
+    this.localAudio.clear();
   }
 
   async start(): Promise<void> {
@@ -197,7 +248,12 @@ export class AssemblyAIVoiceInput {
 
       this.stream = stream;
       const socket = new WebSocket(
-        buildAssemblyAIStreamingUrl(token, config.speechModel)
+        buildAssemblyAIStreamingUrl(
+          token,
+          config.speechModel,
+          ASSEMBLYAI_STREAMING_SAMPLE_RATE,
+          config.keytermsPrompt ?? []
+        )
       );
       socket.binaryType = "arraybuffer";
       this.socket = socket;
@@ -290,6 +346,10 @@ export class AssemblyAIVoiceInput {
       }
 
       const samples = event.inputBuffer.getChannelData(0);
+      this.localAudio.append(downsampleToFloat32(
+        samples,
+        audioContext.sampleRate
+      ));
       const pcm = downsampleToPcm16(
         samples,
         audioContext.sampleRate
@@ -332,11 +392,21 @@ export class AssemblyAIVoiceInput {
       if (message.end_of_turn === true) {
         if (transcript !== "") {
           this.finalTurns.set(order, transcript);
+          const audioStartMs =
+            typeof message.audio_start === "number"
+              ? message.audio_start
+              : undefined;
+          const audioEndMs =
+            typeof message.audio_end === "number"
+              ? message.audio_end
+              : undefined;
           this.callbacks.onFinalizedTurn?.({
             sessionId: this.sessionId,
             turnOrder: order,
             turnId: `${this.sessionId}:${order}`,
-            transcript
+            transcript,
+            audioStartMs,
+            audioEndMs
           });
         }
         this.partialTurn = "";
@@ -386,6 +456,7 @@ export class AssemblyAIVoiceInput {
     this.finalTurns.clear();
     this.partialTurn = "";
     this.sessionId = this.createSessionId();
+    this.localAudio.clear();
   }
 
   private createSessionId(): string {
@@ -415,6 +486,7 @@ export class AssemblyAIVoiceInput {
     this.muteNode = null;
     this.audioContext = null;
     this.stream = null;
+    this.localAudio.clear();
   }
 
   private fail(error: unknown): void {

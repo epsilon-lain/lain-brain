@@ -40,7 +40,10 @@ const result = await services.clean("删除第 2 行", ["remove line {n}"]);
 assert.equal(result.cleanedText, "删除第二行。");
 assert.equal(result.candidateText, "remove line 2");
 assert.equal(calls[0].body.messages[1].content.includes("remove line {n}"), true);
-assert.equal(await services.classify("Cut.", "Cut.", "ka"), "command");
+assert.equal(await services.classify(
+  "Cut.", "Cut.", "ka",
+  { previousBody: "", macroHints: ["ka"], audioAvailable: false }
+), "command");
 assert.equal(calls[1].body.questions.intent.type, "choice");
 assert.equal(calls[1].body.model, "jev-latest");
 console.log("Voice intent services tests passed.");

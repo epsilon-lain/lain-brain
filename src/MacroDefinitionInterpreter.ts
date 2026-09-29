@@ -1,14 +1,17 @@
 import { requestDeepSeek } from "./DeepSeekClient";
 import {
   MACRO_SCHEMA_VERSION,
-  validateMacroDefinition
+  validateMacroDefinition,
+  deriveMacroTriggerLanguages,
+  summarizeMacroIntent
 } from "./MacroTypes";
 import type {
   MacroAction,
   MacroConfirmationPolicy,
   MacroDefinition,
   MacroParameter,
-  MacroPattern
+  MacroPattern,
+  MacroTriggerLanguage
 } from "./MacroTypes";
 import { normalizeMacroText } from "./MacroMatcher";
 
@@ -20,6 +23,8 @@ export interface MacroDefinitionInterpreter {
 
 export interface MacroDefinitionPreview {
   readonly triggerPhrases: readonly string[];
+  readonly triggerLanguages: readonly MacroTriggerLanguage[];
+  readonly triggerIntent: string;
   readonly parameters: readonly string[];
   readonly actions: readonly string[];
   readonly writesToChat: boolean;
@@ -29,7 +34,17 @@ export interface MacroDefinitionPreview {
 
 export type MacroDefinitionCandidateResult =
   | { readonly ok: true; readonly macro: MacroDefinition }
-  | { readonly ok: false; readonly error: string };
+  | {
+      readonly ok: false;
+      readonly error: string;
+      readonly diagnostics?: readonly MacroDiagnostic[];
+    };
+
+export interface MacroDiagnostic {
+  readonly path: string;
+  readonly expected: string;
+  readonly actual: string;
+}
 
 export type MacroDefinitionGenerator = (
   apiKey: string,
@@ -37,7 +52,7 @@ export type MacroDefinitionGenerator = (
   existingMacros: readonly MacroDefinition[]
 ) => Promise<MacroDefinitionCandidateResult>;
 
-const MACRO_DEFINITION_SYSTEM_PROMPT = [
+export const MACRO_DEFINITION_SYSTEM_PROMPT = [
   "You translate a user's natural-language macro description into a strict JSON MacroDefinition.",
   "",
   "Allowed patterns are:",
@@ -45,11 +60,17 @@ const MACRO_DEFINITION_SYSTEM_PROMPT = [
   "- {\"kind\":\"trailing\",\"phrase\":\"text\"}",
   "- {\"kind\":\"parameterized\",\"template\":\"remove line {n}\",\"parameters\":[{\"name\":\"n\",\"type\":\"integer\",\"min\":1}]}",
   "",
-  "Allowed actions are ONLY: submit_to_brain, delete_segment, replace_segment,",
+  "Allowed actions are ONLY: submit_to_brain, delete_segment, delete_segment_range, replace_segment,",
   "truncate_from_segment, mark_candidate_note, unmark_candidate_note,",
   "restore_last_step, insert_text. Never invent another action.",
   "",
   "A line-number delete must use delete_segment with \"line\":{\"parameter\":\"n\"}.",
+  "A range delete must use delete_segment_range with startLine and endLine parameters.",
+  "Use the user's own trigger wording and language for the parameterized pattern.",
+  "If the user explicitly authorizes trigger wording in more than one language,",
+  "emit one parameterized pattern per authorized language (for example a Chinese",
+  "template and an English template). Never add a language the user did not authorize.",
+  "For example, a Chinese range delete could use template \"删除第 {start} 行到第 {end} 行\".",
   "A recover/undo macro must use restore_last_step and set undoable to true.",
   "submit_to_brain submits the current Chat Space text.",
   "",
@@ -221,6 +242,34 @@ function validateAction(
       }
       return "delete_segment line must reference a declared parameter.";
     }
+    case "delete_segment_range": {
+      const startLine = input.startLine;
+      const endLine = input.endLine;
+      if (startLine === undefined || endLine === undefined) {
+        return "delete_segment_range requires startLine and endLine.";
+      }
+      const resolveLine = (line: unknown): number | { parameter: string } | null => {
+        if (typeof line === "number" && Number.isSafeInteger(line)) {
+          return line;
+        }
+        if (typeof line === "object" && line !== null) {
+          const parameter = (line as Record<string, unknown>).parameter;
+          if (
+            typeof parameter === "string" &&
+            parameterNames.has(parameter)
+          ) {
+            return { parameter };
+          }
+        }
+        return null;
+      };
+      const start = resolveLine(startLine);
+      const end = resolveLine(endLine);
+      if (start === null || end === null) {
+        return "delete_segment_range lines must be numbers or declared parameters.";
+      }
+      return { kind: "delete_segment_range", startLine: start, endLine: end };
+    }
     case "replace_segment": {
       const segmentId = input.segmentId;
       const text = input.text;
@@ -318,17 +367,34 @@ export function validateMacroDefinitionCandidate(
 ): MacroDefinitionCandidateResult {
   const base = validateMacroDefinition(value);
   if (base === null) {
-    return { ok: false, error: "Macro definition failed schema validation." };
+    return {
+      ok: false,
+      error: "Macro definition failed schema validation.",
+      diagnostics: diagnoseMacroSchema(value)
+    };
   }
   if (base.schemaVersion !== MACRO_SCHEMA_VERSION) {
     return { ok: false, error: "Macro definition schema version is unsupported." };
   }
 
   const raw = value as Record<string, unknown>;
+  const actions = Array.isArray(raw.actions)
+    ? raw.actions.map((action) => {
+        if (
+          typeof action === "object" &&
+          action !== null &&
+          !("kind" in action) &&
+          "type" in action
+        ) {
+          return { ...action, kind: (action as { type: unknown }).type };
+        }
+        return action;
+      })
+    : raw.actions;
   if (!Array.isArray(raw.patterns) || raw.patterns.length === 0) {
     return { ok: false, error: "Macro definition must contain at least one pattern." };
   }
-  if (!Array.isArray(raw.actions) || raw.actions.length === 0) {
+  if (!Array.isArray(actions) || actions.length === 0) {
     return { ok: false, error: "Macro definition must contain at least one action." };
   }
 
@@ -350,13 +416,13 @@ export function validateMacroDefinitionCandidate(
     patterns.push(validated);
   }
 
-  const actions: MacroAction[] = [];
-  for (const action of raw.actions) {
+  const validatedActions: MacroAction[] = [];
+  for (const action of actions) {
     const validated = validateAction(action, parameters);
     if (typeof validated === "string") {
       return { ok: false, error: validated };
     }
-    actions.push(validated);
+    validatedActions.push(validated);
   }
 
   const confirmation = validateConfirmation(raw.confirmation);
@@ -380,9 +446,15 @@ export function validateMacroDefinitionCandidate(
   const candidate: MacroDefinition = Object.freeze({
     id,
     name,
+    description: typeof base.description === "string" ? base.description : undefined,
+    triggerLanguages: deriveMacroTriggerLanguages(
+      patterns,
+      typeof base.description === "string" ? base.description : undefined
+    ),
+    triggerIntent: summarizeMacroIntent(validatedActions),
     patterns: Object.freeze(patterns),
     parameters: Object.freeze(parameters),
-    actions: Object.freeze(actions),
+    actions: Object.freeze(validatedActions),
     writesToChat: base.writesToChat,
     undoable: base.undoable,
     confirmation,
@@ -396,6 +468,56 @@ export function validateMacroDefinitionCandidate(
   return conflict === null
     ? { ok: true, macro: candidate }
     : { ok: false, error: conflict };
+}
+
+function diagnoseMacroSchema(value: unknown): MacroDiagnostic[] {
+  if (typeof value !== "object" || value === null) {
+    return [{ path: "$", expected: "object", actual: typeof value }];
+  }
+  const raw = value as Record<string, unknown>;
+  const diagnostics: MacroDiagnostic[] = [];
+  const checks: Array<[string, string, (v: unknown) => boolean]> = [
+    ["$.id", "non-empty string", (v) => typeof v === "string" && v.trim() !== ""],
+    ["$.name", "non-empty string", (v) => typeof v === "string" && v.trim() !== ""],
+    ["$.patterns", "non-empty array", (v) => Array.isArray(v) && v.length > 0],
+    ["$.parameters", "array", (v) => Array.isArray(v)],
+    ["$.actions", "non-empty array", (v) => Array.isArray(v) && v.length > 0],
+    ["$.createdAt", "string", (v) => typeof v === "string"],
+    ["$.updatedAt", "string", (v) => typeof v === "string"],
+    ["$.enabled", "boolean", (v) => typeof v === "boolean"]
+  ];
+  for (const [path, expected, check] of checks) {
+    const actual = raw[path.slice(2)];
+    if (!check(actual)) {
+      diagnostics.push({
+        path,
+        expected,
+        actual: actual === null ? "null" : Array.isArray(actual) ? "array" : typeof actual
+      });
+    }
+  }
+  if (Array.isArray(raw.actions)) {
+    raw.actions.forEach((action, index) => {
+      if (typeof action !== "object" || action === null) {
+        diagnostics.push({
+          path: `$.actions[${index}]`,
+          expected: "object with kind",
+          actual: typeof action
+        });
+        return;
+      }
+      const kind = "kind" in action ? (action as { kind: unknown }).kind :
+        "type" in action ? (action as { type: unknown }).type : undefined;
+      if (typeof kind !== "string") {
+        diagnostics.push({
+          path: `$.actions[${index}].kind`,
+          expected: "supported action kind",
+          actual: typeof kind
+        });
+      }
+    });
+  }
+  return diagnostics;
 }
 
 export function parseMacroDefinitionCandidateJson(
@@ -460,7 +582,44 @@ export async function generateMacroDefinitionCandidate(
     }
   ]);
 
-  return parseMacroDefinitionCandidateJson(response, existingMacros);
+  const first = parseMacroDefinitionCandidateJson(response, existingMacros);
+  if (first.ok) {
+    return {
+      ok: true,
+      macro: {
+        ...first.macro,
+        description
+      }
+    };
+  }
+
+  const retryResponse = await requestDeepSeek(apiKey, [
+    {
+      role: "system",
+      content: MACRO_DEFINITION_SYSTEM_PROMPT
+    },
+    {
+      role: "user",
+      content: [
+        "Existing macros:",
+        existingSummary === "" ? "(none)" : existingSummary,
+        "",
+        "Macro description:",
+        description
+      ].join("\n")
+    },
+    {
+      role: "user",
+      content:
+        `The previous response failed schema validation: ${first.error}. ` +
+        "Return strict JSON only with the corrected MacroDefinition shape."
+    }
+  ]);
+
+  const retry = parseMacroDefinitionCandidateJson(retryResponse, existingMacros);
+  return retry.ok
+    ? { ok: true, macro: { ...retry.macro, description } }
+    : retry;
 }
 
 export function buildMacroDefinitionPreview(
@@ -472,6 +631,13 @@ export function buildMacroDefinitionPreview(
         ? pattern.phrase
         : pattern.template
     ),
+    triggerLanguages: macro.triggerLanguages ??
+      deriveMacroTriggerLanguages(
+        macro.patterns,
+        macro.description
+      ),
+    triggerIntent: macro.triggerIntent ??
+      summarizeMacroIntent(macro.actions),
     parameters: macro.parameters.map((parameter) => {
       const bounds =
         parameter.type === "integer"
@@ -491,6 +657,8 @@ export function buildMacroDefinitionPreview(
               ? `Delete line ${action.line}`
               : `Delete line {${action.line.parameter}}`
             : `Delete segment ${action.segmentId ?? ""}`;
+        case "delete_segment_range":
+          return `Delete lines ${formatLine(action.startLine)} through ${formatLine(action.endLine)}`;
         case "replace_segment":
           return `Replace segment ${action.segmentId} with "${action.text}"`;
         case "truncate_from_segment":
@@ -514,4 +682,11 @@ export function buildMacroDefinitionPreview(
           : "Confirm destructive actions",
     undoable: macro.undoable
   };
+}
+
+function formatLine(
+  line: number | { readonly parameter: string } | undefined
+): string {
+  if (line === undefined) return "?";
+  return typeof line === "number" ? String(line) : `{${line.parameter}}`;
 }

@@ -85,6 +85,14 @@ assert.equal(url.searchParams.get("speech_model"), "universal-3-5-pro");
 assert.equal(url.searchParams.get("sample_rate"), "16000");
 assert.equal(url.searchParams.get("format_turns"), "true");
 
+const keytermsUrl = new URL(buildAssemblyAIStreamingUrl(
+  "temporary secret",
+  "universal-3-5-pro",
+  16_000,
+  ["ka"]
+));
+assert.equal(keytermsUrl.searchParams.get("keyterms_prompt"), '["ka"]');
+
 const input = new Float32Array(480);
 input.fill(0.5);
 const buffer = downsampleToPcm16(input, 48_000, 16_000);

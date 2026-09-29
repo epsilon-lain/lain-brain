@@ -217,6 +217,35 @@ export class LainBrainSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("Enable voice keyterms prompt")
+      .setDesc(
+        "Boosts recognition of enabled short voice macros without hardcoding aliases. Disable if false triggers appear."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.assemblyAIKeytermsPromptEnabled)
+          .onChange(async (value) => {
+            this.plugin.settings.assemblyAIKeytermsPromptEnabled = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Read Brain answers aloud")
+      .setDesc(
+        "Uses device text-to-speech. Keep headphones on to avoid the microphone picking up the playback."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.voiceAnswerReadAloudEnabled)
+          .onChange(async (value) => {
+            this.plugin.settings.voiceAnswerReadAloudEnabled = value;
+            this.plugin.session.setVoiceAnswerReadAloudEnabled(value);
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
       .setName("AssemblyAI API key")
       .setDesc(
         "Stored in the local Obsidian plugin data. The microphone WebSocket " +

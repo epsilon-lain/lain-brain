@@ -1,6 +1,50 @@
 import { requestUrl } from "obsidian";
 import { requestDeepSeek } from "./DeepSeekClient";
 import type { VoiceAnalysis, VoiceIntentServices } from "./VoiceIntentBuffer";
+import type { VoiceIntentContext } from "./VoiceIntentBuffer";
+
+async function classifyWithDeepSeek(
+  raw: string,
+  cleaned: string,
+  command: string,
+  context: VoiceIntentContext,
+  deepSeekKey: string
+): Promise<"command" | "text" | "uncertain"> {
+  if (!deepSeekKey) {
+    return "uncertain";
+  }
+  try {
+    const answer = await requestDeepSeek(deepSeekKey, [{
+      role: "system",
+      content:
+        "Return ONLY JSON with {\"intent\":\"command|text|uncertain\"}. " +
+        "Judge whether the complete standalone voice turn is a request to " +
+        "execute the candidate macro. Audio is NOT provided; this is text " +
+        "inference only. Treat quoting, discussion and ordinary words as " +
+        "text. Return uncertain when audio cannot be inferred."
+    }, {
+      role: "user",
+      content: JSON.stringify({
+        raw,
+        cleaned,
+        candidate: command,
+        previousBody: context.previousBody,
+        macroHints: context.macroHints.slice(0, 32),
+        audioAvailable: context.audioAvailable
+      })
+    }]);
+    const parsed = JSON.parse(answer.trim()
+      .replace(/^```(?:json)?\s*/iu, "")
+      .replace(/\s*```$/u, "")) as { intent?: unknown };
+    return parsed.intent === "command" ||
+      parsed.intent === "text" ||
+      parsed.intent === "uncertain"
+      ? parsed.intent
+      : "uncertain";
+  } catch {
+    return "uncertain";
+  }
+}
 
 export function createVoiceIntentServices(
   getDeepSeekKey: () => string,
@@ -49,9 +93,17 @@ export function createVoiceIntentServices(
         return { cleanedText: raw, possibleMacro: false };
       }
     },
-    async classify(raw, cleaned, command) {
+    async classify(raw, cleaned, command, context: VoiceIntentContext) {
       const key = getJevKey().trim();
-      if (!key) return "uncertain";
+      if (!key) {
+        return classifyWithDeepSeek(
+          raw,
+          cleaned,
+          command,
+          context,
+          getDeepSeekKey().trim()
+        );
+      }
       try {
         const response = await requestUrl({
           url: "https://api.typesafe.ai/v1/systemone",
@@ -62,7 +114,14 @@ export function createVoiceIntentServices(
           },
           body: JSON.stringify({
             model: "jev-latest",
-            state: { raw, cleaned, candidate: command },
+            state: {
+              raw,
+              cleaned,
+              candidate: command,
+              previousBody: context.previousBody,
+              macroHints: context.macroHints.slice(0, 32),
+              audioAvailable: context.audioAvailable
+            },
             questions: {
               intent: {
                 type: "choice",

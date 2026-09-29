@@ -48,6 +48,31 @@ export class MacroExecutor {
           ? action.segmentId !== undefined && this.space.deleteSegment(action.segmentId)
           : typeof line === "number" && this.space.deleteLine(line), message: "Unable to delete that segment." };
       }
+      case "delete_segment_range": {
+        const startLine = typeof action.startLine === "object"
+          ? parameters[action.startLine.parameter]
+          : action.startLine;
+        const endLine = typeof action.endLine === "object"
+          ? parameters[action.endLine.parameter]
+          : action.endLine;
+        if (
+          typeof startLine !== "number" ||
+          typeof endLine !== "number" ||
+          !Number.isSafeInteger(startLine) ||
+          !Number.isSafeInteger(endLine) ||
+          startLine < 1 ||
+          endLine < startLine
+        ) {
+          return { ok: false, message: "Invalid line range." };
+        }
+        const before = this.space.getSegments().length;
+        for (let line = endLine; line >= startLine; line -= 1) {
+          this.space.deleteLine(line);
+        }
+        return before === this.space.getSegments().length
+          ? { ok: false, message: "No lines matched that range." }
+          : { ok: true, message: "Range deleted." };
+      }
       case "replace_segment": return { ok: action.segmentId !== undefined && this.space.replaceSegment(action.segmentId, action.text), message: "Unable to replace that segment." };
       case "truncate_from_segment": return { ok: action.segmentId !== undefined && this.space.truncateFromSegment(action.segmentId), message: "Unable to truncate Chat Space." };
       case "mark_candidate_note": return { ok: action.segmentId !== undefined && this.space.markCandidateNote(action.segmentId), message: "Unable to mark that segment." };

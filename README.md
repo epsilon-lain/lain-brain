@@ -10,6 +10,8 @@ The long-term idea is simple:
 
 Lain Brain is currently a public alpha and an active research prototype.
 
+For the voice-agent prototype, see the [three-minute demo walkthrough](VOICE_DEMO.md).
+
 ---
 
 ## Why Lain Brain?
@@ -574,6 +576,10 @@ Pre-existing user notes are not deleted as rollback.
 * Obsidian 1.0.0 or later
 * Node.js 18 or later and npm when building from source
 * A DeepSeek API key for text chat and optional Chat Semantic Delta analysis
+* An AssemblyAI API key for live voice input and for transcribing imported
+  audio/video recordings; DeepSeek is also used to interpret user-defined
+  voice macros
+* Headphones are recommended when device text-to-speech is enabled
 * An API key for an optional configured image provider only when image analysis is used
 
 ---

@@ -12,6 +12,7 @@ import {
 } from "./ProviderProfiles";
 import type { ProviderProfile } from "./ProviderProfiles";
 import { removeCustomProviderProfile } from "./settings";
+import { NEBIUS_NEMOTRON_MODEL } from "./TextModelConfig";
 import type { LeanExecutionMode } from "./settings";
 import { validateDisplayName } from "./PersonalNaming";
 import { SpawnLeanRunner, runWslCommandLadder } from "./LeanRunner";
@@ -168,16 +169,75 @@ export class LainBrainSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName("DeepSeek API key")
-      .addText((text) => {
-        text.inputEl.type = "password";
-        text
-          .setValue(this.plugin.settings.deepSeekApiKey)
+      .setName("Text AI")
+      .setHeading();
+
+    new Setting(containerEl)
+      .setName("Text provider")
+      .setDesc(
+        "Used for chat, semantic proposals, note drafting and macro interpretation. " +
+        "Requests send text to the selected provider. Personal definitions still require your review."
+      )
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("deepseek", "DeepSeek")
+          .addOption("nebius", "Nebius Token Factory · NVIDIA Nemotron")
+          .setValue(this.plugin.settings.textModelProvider)
           .onChange(async (value) => {
-            this.plugin.settings.deepSeekApiKey = value;
+            this.plugin.settings.textModelProvider = value === "nebius"
+              ? "nebius" : "deepseek";
             await this.plugin.saveSettings();
+            this.display();
           });
       });
+
+    if (this.plugin.settings.textModelProvider === "nebius") {
+      new Setting(containerEl)
+        .setName("Nebius Token Factory API key")
+        .setDesc("Saved in this plugin's local settings. Keep it out of shared Vaults and source control.")
+        .addText((text) => {
+          text.inputEl.type = "password";
+          text.setValue(this.plugin.settings.nebiusApiKey)
+            .onChange(async (value) => {
+              this.plugin.settings.nebiusApiKey = value;
+              await this.plugin.saveSettings();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("NVIDIA model ID")
+        .setDesc("Nemotron 3 Super is the default. Use an available NVIDIA model ID beginning with nvidia/.")
+        .addText((text) => {
+          text.setPlaceholder(NEBIUS_NEMOTRON_MODEL)
+            .setValue(this.plugin.settings.nebiusModel)
+            .onChange(async (value) => {
+              this.plugin.settings.nebiusModel = value.trim();
+              await this.plugin.saveSettings();
+            });
+        });
+    } else {
+      new Setting(containerEl)
+        .setName("DeepSeek API key")
+        .addText((text) => {
+          text.inputEl.type = "password";
+          text
+            .setValue(this.plugin.settings.deepSeekApiKey)
+            .onChange(async (value) => {
+              this.plugin.settings.deepSeekApiKey = value;
+              await this.plugin.saveSettings();
+            });
+        });
+    }
+
+    const receipt = this.plugin.session.getLastTextModelReceipt();
+    new Setting(containerEl)
+      .setName("Last successful text request")
+      .setDesc(receipt === null
+        ? "No successful text request in this session yet. Send a chat message to verify your provider."
+        : `${receipt.provider} · ${receipt.requestedModel} · ${receipt.completedAt}` +
+          (receipt.requestId ? ` · request ${receipt.requestId}` : "") +
+          (receipt.inputTokens !== undefined ? ` · input ${receipt.inputTokens} tokens` : "") +
+          (receipt.outputTokens !== undefined ? ` · output ${receipt.outputTokens} tokens` : ""));
 
     new Setting(containerEl)
       .setName("Macro Definition")
@@ -296,7 +356,7 @@ export class LainBrainSettingTab extends PluginSettingTab {
       .setName("Detect semantic changes in chat")
       .setDesc(
         "After a successful normal text reply, send at most three recent " +
-        "text-only turns to the configured DeepSeek provider to look for " +
+        "text-only turns to the selected text provider to look for " +
         "one possible semantic change. Analysis is non-authoritative, " +
         "never includes attachments or Vault contents, and can be disabled."
       )

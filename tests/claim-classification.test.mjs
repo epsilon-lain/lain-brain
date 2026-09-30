@@ -529,7 +529,7 @@ const invalidReview = await invalidSession.generateClaimReview(
 assert.equal(invalidReview.ok, false);
 assert.equal(
   invalidReview.error,
-  "Unable to review claims. DeepSeek returned invalid claim suggestions."
+  "Unable to review claims. The text model returned invalid claim suggestions."
 );
 assert.equal(invalidCandidate.markdown, invalidBefore);
 assert.equal(invalidCandidate.claims.length, 0);

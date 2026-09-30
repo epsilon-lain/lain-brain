@@ -1,3 +1,4 @@
+import type { TextModelCredentials } from "./TextModelConfig";
 // ── Brain-Aware Formalization Analyzer ─────────────────────────────────
 // Live DeepSeek request for the "Formalize using Brain concepts" workflow.
 //
@@ -373,7 +374,7 @@ export function buildBrainFormalizationAnalysisMessages(
 }
 
 export async function analyzePersonalSemanticIR(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   input: BrainFormalizationAnalysisInput
 ): Promise<BrainFormalizationAnalysis | { error: string }> {
   const response = await requestDeepSeek(

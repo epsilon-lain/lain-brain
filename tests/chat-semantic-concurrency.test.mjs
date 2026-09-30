@@ -298,7 +298,7 @@ function makeUserMessage(id, content) {
   // Verify user sees friendly message, not raw diagnostic
   const lastAssistant = session.messages[session.messages.length - 1];
   assert.equal(lastAssistant.content,
-    "Unable to get an answer from DeepSeek. Please try again.");
+    "Unable to get an answer from the selected text provider. Please try again.");
   assert.equal(lastAssistant.includeInHistory, false);
 
   // Attempt 2 — 503
@@ -383,7 +383,7 @@ function makeUserMessage(id, content) {
   const lastAssistant = session.messages[session.messages.length - 1];
   assert.equal(
     lastAssistant.content,
-    "Unable to get an answer from DeepSeek. Please try again."
+    "Unable to get an answer from the selected text provider. Please try again."
   );
   assert.equal(lastAssistant.includeInHistory, false);
 

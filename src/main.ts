@@ -19,6 +19,7 @@ import type {
 import { LainBrainSettingTab } from "./LainBrainSettingTab";
 import {
   LainBrainSettings,
+  getTextModelConfig,
   migrateLainBrainSettings
 } from "./settings";
 import { getActiveImageProvider } from "./ProviderProfiles";
@@ -51,7 +52,10 @@ export default class LainBrainPlugin extends Plugin {
 
     this.session = new LainBrainSession(
       this.app,
-      () => this.settings.deepSeekApiKey,
+      () => ({
+        ...getTextModelConfig(this.settings),
+        onReceipt: (receipt) => this.session.recordTextModelReceipt(receipt)
+      }),
       () => getActiveImageProvider(
         this.settings.imageProviderProfiles,
         this.settings.activeImageProviderId

@@ -1,4 +1,5 @@
-import { requestUrl } from "obsidian";
+import { requestTextModel } from "./TextModelClient";
+import type { TextModelCredentials } from "./TextModelConfig";
 import {
   normalizeCandidatePrimaryConcept,
   normalizeCandidateTitle
@@ -18,19 +19,6 @@ import type {
   FormalizationAssumption,
   SemanticChange
 } from "./FormalizationProtocol";
-
-interface DeepSeekResponse {
-  choices?: Array<{
-    message?: {
-      content?: string;
-    };
-  }>;
-}
-
-interface DeepSeekRequestMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
 
 interface PrimaryConceptResponse {
   primaryConcept?: unknown;
@@ -126,32 +114,8 @@ export interface ClaimClassificationRequest {
   sourceMessages: CandidateSourceMessage[];
 }
 
-export async function requestDeepSeek(
-  apiKey: string,
-  messages: DeepSeekRequestMessage[]
-): Promise<string> {
-  const response = await requestUrl({
-    url: "https://api.deepseek.com/chat/completions",
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: "deepseek-v4-flash",
-      messages
-    })
-  });
-
-  const data = response.json as DeepSeekResponse;
-  const answer = data.choices?.[0]?.message?.content;
-
-  if (answer === undefined) {
-    throw new Error("DeepSeek returned no answer.");
-  }
-
-  return answer;
-}
+// Compatibility name; all text paths use the selected runtime provider.
+export const requestDeepSeek = requestTextModel;
 
 function createContextMessage(
   noteContext?: DeepSeekNoteContext
@@ -560,7 +524,7 @@ export function createNormalChatSystemPrompt(
 }
 
 export async function askDeepSeek(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   conversationHistory: DeepSeekConversationMessage[],
   noteContext?: DeepSeekNoteContext,
   semanticPriorContext?: string,
@@ -584,7 +548,7 @@ export async function askDeepSeek(
 }
 
 export async function classifyCandidateClaims(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   request: ClaimClassificationRequest
 ): Promise<ClaimSuggestion[]> {
   const allowedIds = new Set(
@@ -680,7 +644,7 @@ export interface MathSpeechClassifyResult {
 }
 
 export async function classifyMathSpeechAct(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   request: MathSpeechClassifyRequest
 ): Promise<MathSpeechClassifyResult | { error: string }> {
   const contextTranscript = request.contextMessages
@@ -810,7 +774,7 @@ function parseJsonResponse(response: string, context: string): unknown {
 }
 
 export async function identifyCandidateTopics(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   messages: CandidateSourceMessage[],
   noteContext?: DeepSeekNoteContext
 ): Promise<CandidateTopicSelection[]> {
@@ -874,7 +838,7 @@ export async function identifyCandidateTopics(
 }
 
 export async function identifyPrimaryConcept(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   conversationHistory: DeepSeekConversationMessage[],
   noteContext?: DeepSeekNoteContext,
   previousCandidate?: string
@@ -936,7 +900,7 @@ export async function identifyPrimaryConcept(
 }
 
 export async function generateCandidateNote(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   conversationHistory: DeepSeekConversationMessage[],
   primaryConcept: CandidateTopicContext,
   noteContext?: DeepSeekNoteContext,
@@ -1024,7 +988,7 @@ export async function generateCandidateNote(
 }
 
 export async function discussCandidateSelection(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   context: SelectionEditRequestContext,
   discussionMessages: DeepSeekConversationMessage[]
 ): Promise<string> {
@@ -1052,7 +1016,7 @@ export async function discussCandidateSelection(
 }
 
 export async function generateSelectionReplacement(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   context: SelectionEditRequestContext,
   discussionMessages: DeepSeekConversationMessage[]
 ): Promise<string> {
@@ -1091,7 +1055,7 @@ export async function generateSelectionReplacement(
 }
 
 export async function repairLatexFormatting(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   markdown: string,
   issueMessages: readonly string[]
 ): Promise<string> {
@@ -1274,7 +1238,7 @@ export interface LeanGenerationResult {
 }
 
 export async function generateLeanStatement(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   request: LeanGenerationRequest
 ): Promise<LeanGenerationResult | { error: string }> {
   const objectDescriptions = request.objects

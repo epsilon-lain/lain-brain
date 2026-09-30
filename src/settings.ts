@@ -1,3 +1,5 @@
+import { NEBIUS_NEMOTRON_MODEL } from "./TextModelConfig";
+import type { TextModelConfig, TextModelProvider } from "./TextModelConfig";
 import {
   createDefaultProviderProfiles,
   normalizeProviderProfiles
@@ -42,6 +44,9 @@ export type LeanExecutionMode = "native" | "wsl";
 
 export interface LainBrainSettings {
   deepSeekApiKey: string;
+  textModelProvider: TextModelProvider;
+  nebiusApiKey: string;
+  nebiusModel: string;
   assemblyAIVoiceEnabled: boolean;
   assemblyAIApiKey: string;
   assemblyAISpeechModel: string;
@@ -74,6 +79,9 @@ export interface LainBrainSettings {
 
 export const DEFAULT_SETTINGS: LainBrainSettings = {
   deepSeekApiKey: "",
+  textModelProvider: "deepseek",
+  nebiusApiKey: "",
+  nebiusModel: NEBIUS_NEMOTRON_MODEL,
   assemblyAIVoiceEnabled: true,
   assemblyAIApiKey: "",
   assemblyAISpeechModel: "universal-3-5-pro",
@@ -183,6 +191,10 @@ export function migrateLainBrainSettings(
     : ["env", "lean"];
 
   return {
+    textModelProvider: value.textModelProvider === "nebius" ? "nebius" : "deepseek",
+    nebiusApiKey: typeof value.nebiusApiKey === "string" ? value.nebiusApiKey : "",
+    nebiusModel: typeof value.nebiusModel === "string" && value.nebiusModel.trim() !== ""
+      ? value.nebiusModel.trim() : NEBIUS_NEMOTRON_MODEL,
     deepSeekApiKey: typeof value.deepSeekApiKey === "string"
       ? value.deepSeekApiKey
       : "",
@@ -248,4 +260,20 @@ export function migrateLainBrainSettings(
     macroRegistry: migrateMacroRegistry(value.macroRegistry),
     hasCompletedMacroOnboarding: value.hasCompletedMacroOnboarding === true
   };
+}
+
+export function getTextModelConfig(
+  settings: LainBrainSettings
+): Readonly<TextModelConfig> {
+  return Object.freeze(settings.textModelProvider === "nebius"
+    ? {
+        provider: "nebius",
+        apiKey: settings.nebiusApiKey.trim(),
+        model: settings.nebiusModel.trim()
+      }
+    : {
+        provider: "deepseek",
+        apiKey: settings.deepSeekApiKey.trim(),
+        model: "deepseek-v4-flash"
+      });
 }

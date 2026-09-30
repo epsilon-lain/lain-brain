@@ -1,3 +1,4 @@
+import type { TextModelCredentials } from "./TextModelConfig";
 import { requestDeepSeek } from "./DeepSeekClient";
 import {
   MACRO_SCHEMA_VERSION,
@@ -47,7 +48,7 @@ export interface MacroDiagnostic {
 }
 
 export type MacroDefinitionGenerator = (
-  apiKey: string,
+  apiKey: TextModelCredentials,
   description: string,
   existingMacros: readonly MacroDefinition[]
 ) => Promise<MacroDefinitionCandidateResult>;
@@ -551,7 +552,7 @@ export function validateInterpretedMacro(
 }
 
 export async function generateMacroDefinitionCandidate(
-  apiKey: string,
+  apiKey: TextModelCredentials,
   description: string,
   existingMacros: readonly MacroDefinition[]
 ): Promise<MacroDefinitionCandidateResult> {

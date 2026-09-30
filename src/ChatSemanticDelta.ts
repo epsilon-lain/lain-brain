@@ -1,3 +1,4 @@
+import type { TextModelCredentials } from "./TextModelConfig";
 import type { ConceptIndex } from "./BrainGrowthIndex";
 import { lookupConcept } from "./BrainGrowthIndex";
 import type { UserTextProvenance } from "./KnowledgeProtocol";
@@ -72,7 +73,7 @@ export type ChatSemanticDeltaAnalysis =
     });
 
 export type ChatSemanticDeltaAnalyzer = (
-  apiKey: string,
+  apiKey: TextModelCredentials,
   request: Readonly<ChatSemanticDeltaAnalysisRequest>
 ) => Promise<ChatSemanticDeltaAnalysis>;
 

@@ -1,3 +1,5 @@
+import { textModelApiKey, textModelIdentity } from "./TextModelConfig";
+import type { TextModelCredentials, TextModelReceipt } from "./TextModelConfig";
 import type { App, TFile } from "obsidian";
 import {
   AssemblyAIVoiceInput
@@ -1014,7 +1016,7 @@ export class LainBrainSession {
 
   constructor(
     private app: App,
-    private getApiKey: () => string,
+    private getApiKey: () => TextModelCredentials,
     private getActiveImageProvider:
       () => ProviderProfile | null = () => null,
     private visionClient: VisionProviderClient =
@@ -1027,6 +1029,16 @@ export class LainBrainSession {
     private interpretMacroDefinition: MacroDefinitionGenerator =
       generateMacroDefinitionCandidate
   ) {}
+
+  private lastTextModelReceipt: Readonly<TextModelReceipt> | null = null;
+
+  recordTextModelReceipt(receipt: Readonly<TextModelReceipt>): void {
+    this.lastTextModelReceipt = Object.freeze({ ...receipt });
+  }
+
+  getLastTextModelReceipt(): Readonly<TextModelReceipt> | null {
+    return this.lastTextModelReceipt;
+  }
 
   get loading(): boolean {
     return this.loadingMode !== null ||
@@ -1108,8 +1120,7 @@ export class LainBrainSession {
   }
 
   setMacroIntentRequest(
-    request: (apiKey: string, messages: Array<{ role: string; content: string }>) =>
-      Promise<string>
+    request: typeof requestDeepSeek
   ): void {
     this.macroIntentRequest = request;
   }
@@ -1420,7 +1431,7 @@ export class LainBrainSession {
         ? "The Brain request failed. Try again from Chat Space."
         : result === "needs-vision-confirmation"
           ? "A vision provider confirmation is required."
-          : "The Brain request was blocked. Check the DeepSeek API key or a pending operation.";
+          : "The Brain request was blocked. Check the selected text provider API key or a pending operation.";
     this.notify();
     return { ok: false, reason };
   }
@@ -1428,8 +1439,8 @@ export class LainBrainSession {
   private async generateRecordingSummaryWithDeepSeek(
     transcript: string
   ): Promise<string | null> {
-    const apiKey = this.getApiKey().trim();
-    if (apiKey === "") {
+    const apiKey = this.getApiKey();
+    if (textModelApiKey(apiKey) === "") {
       return null;
     }
     const answer = await requestDeepSeek(apiKey, [{
@@ -1688,8 +1699,8 @@ export class LainBrainSession {
     | { kind: "text" }
     | { kind: "uncertain" }
   > {
-    const apiKey = this.getApiKey().trim();
-    if (apiKey === "") {
+    const apiKey = this.getApiKey();
+    if (textModelApiKey(apiKey) === "") {
       return { kind: "uncertain" };
     }
     const macros = this.macroRegistry.macros
@@ -2432,7 +2443,7 @@ export class LainBrainSession {
    * Redact secrets from an error message before storage or logging.
    *
    * Removes: Bearer tokens, sk-... API keys, Authorization headers,
-   * and the currently configured DeepSeek API key when it is non-empty.
+   * and the currently configured text provider API key when it is non-empty.
    */
   private sanitizeErrorMessage(raw: string): string {
     let sanitized = raw;
@@ -2452,7 +2463,7 @@ export class LainBrainSession {
       "[redacted-auth-header]"
     );
     // The configured key itself (exact match, case-sensitive)
-    const configuredKey = this.getApiKey().trim();
+    const configuredKey = textModelApiKey(this.getApiKey());
     if (configuredKey.length > 0) {
       // Split+join avoids regex-escaping edge cases
       sanitized = sanitized.split(configuredKey).join(
@@ -2502,7 +2513,7 @@ export class LainBrainSession {
 
     // Diagnostic log — secrets are redacted before logging
     console.log(JSON.stringify({
-      event: "deepseek-error",
+      event: "text-model-error",
       context,
       code,
       status: status ?? null,
@@ -3202,15 +3213,15 @@ export class LainBrainSession {
     }
 
     const requestId = ++this.macroDefinitionRequestId;
-    const apiKey = this.getApiKey().trim();
+    const apiKey = this.getApiKey();
     this.macroDefinitionState = { kind: "generating", description: value };
     this.notify();
 
-    if (apiKey === "") {
+    if (textModelApiKey(apiKey) === "") {
       this.macroDefinitionState = {
         kind: "error",
         description: value,
-        message: "Add a DeepSeek API key before defining a macro."
+        message: "Add your selected text provider API key before defining a macro."
       };
       this.notify();
       return;
@@ -3906,13 +3917,13 @@ export class LainBrainSession {
       };
     }
 
-    const apiKey = this.getApiKey().trim();
+    const apiKey = this.getApiKey();
 
-    if (apiKey === "") {
+    if (textModelApiKey(apiKey) === "") {
       return {
         ok: false,
         error:
-          "Please add your DeepSeek API key in Lain Brain settings."
+          "Please add your selected text provider API key in Lain Brain settings."
       };
     }
 
@@ -3964,7 +3975,7 @@ export class LainBrainSession {
       return { ok: true, items };
     } catch {
       const error =
-        "Unable to review claims. DeepSeek returned invalid claim suggestions.";
+        "Unable to review claims. The text model returned invalid claim suggestions.";
       this.claimReviewError = error;
       return { ok: false, error };
     } finally {
@@ -4026,7 +4037,7 @@ export class LainBrainSession {
       };
     }
 
-    const apiKey = this.getApiKey().trim();
+    const apiKey = this.getApiKey();
 
     if (
       selectedItems.some((item) =>
@@ -4446,12 +4457,12 @@ export class LainBrainSession {
       };
     }
 
-    const apiKey = this.getApiKey().trim();
+    const apiKey = this.getApiKey();
 
-    if (apiKey === "") {
+    if (textModelApiKey(apiKey) === "") {
       return {
         ok: false,
-        error: "Please add your DeepSeek API key in Lain Brain settings."
+        error: "Please add your selected text provider API key in Lain Brain settings."
       };
     }
 
@@ -4574,12 +4585,12 @@ export class LainBrainSession {
     | { ok: true; record: Readonly<FormalizationRecord> }
     | { ok: false; error: string }
   > {
-    const apiKey = this.getApiKey().trim();
+    const apiKey = this.getApiKey();
 
-    if (apiKey === "") {
+    if (textModelApiKey(apiKey) === "") {
       return {
         ok: false,
-        error: "Please add your DeepSeek API key in Lain Brain settings."
+        error: "Please add your selected text provider API key in Lain Brain settings."
       };
     }
 
@@ -5039,13 +5050,13 @@ export class LainBrainSession {
       };
     }
 
-    const apiKey = this.getApiKey().trim();
+    const apiKey = this.getApiKey();
 
-    if (apiKey === "") {
+    if (textModelApiKey(apiKey) === "") {
       return {
         ok: false,
         error:
-          "Please add your DeepSeek API key in Lain Brain settings."
+          "Please add your selected text provider API key in Lain Brain settings."
       };
     }
 
@@ -5100,7 +5111,7 @@ export class LainBrainSession {
           return {
             ok: false,
             error:
-              "DeepSeek returned a malformed canonical proposition: " +
+              "The text model returned a malformed canonical proposition: " +
               propositionIssues.join(" ")
           };
         }
@@ -6285,7 +6296,7 @@ export class LainBrainSession {
   }
 
   hasApiKey(): boolean {
-    return this.getApiKey().trim() !== "";
+    return textModelApiKey(this.getApiKey()) !== "";
   }
 
   /**
@@ -6316,10 +6327,10 @@ export class LainBrainSession {
     if ("error" in source) {
       return source;
     }
-    const apiKey = this.getApiKey().trim();
-    if (apiKey === "") {
+    const apiKey = this.getApiKey();
+    if (textModelApiKey(apiKey) === "") {
       return {
-        error: "Please add your DeepSeek API key in Lain Brain settings."
+        error: "Please add your selected text provider API key in Lain Brain settings."
       };
     }
 
@@ -7159,11 +7170,11 @@ export class LainBrainSession {
       return false;
     }
 
-    const apiKey = this.getApiKey().trim();
+    const apiKey = this.getApiKey();
 
-    if (apiKey === "") {
+    if (textModelApiKey(apiKey) === "") {
       context.replacementError =
-        "Please add your DeepSeek API key in Lain Brain settings.";
+        "Please add your selected text provider API key in Lain Brain settings.";
       this.notify();
       return false;
     }
@@ -7603,8 +7614,8 @@ export class LainBrainSession {
           includeInHistory: false
         });
       } finally {
-        const deepSeekApiKey = this.getApiKey().trim();
-        if (deepSeekApiKey !== "") {
+        const deepSeekApiKey = this.getApiKey();
+        if (textModelApiKey(deepSeekApiKey) !== "") {
           this.enqueueChatSemanticAnalysis(
             deepSeekApiKey,
             userMessage,
@@ -7619,12 +7630,12 @@ export class LainBrainSession {
     }
 
     // ── Text path (may include PDF-extracted content) ──────────────
-    const apiKey = this.getApiKey().trim();
+    const apiKey = this.getApiKey();
     const sendRecoveryEpoch = this.submitRecoveryEpoch;
 
-    if (apiKey === "") {
+    if (textModelApiKey(apiKey) === "") {
       this.addAssistantNotice(
-        "Please add your DeepSeek API key in Lain Brain settings."
+        "Please add your selected text provider API key in Lain Brain settings."
       );
       return "blocked";
     }
@@ -7637,8 +7648,7 @@ export class LainBrainSession {
             filename: a.filename,
             mimeType: a.mimeType,
             byteSize: a.byteSize,
-            providerId: "deepseek",
-            providerDisplayName: "DeepSeek"
+            ...textModelIdentity(apiKey)
           }))
         : undefined;
 
@@ -7646,8 +7656,7 @@ export class LainBrainSession {
       id: this.createMessageId(),
       role: "user",
       content: textContent,
-      providerId: "deepseek",
-      providerDisplayName: "DeepSeek",
+      ...textModelIdentity(apiKey),
       includeInHistory: true,
       semanticDeltaEligible: pdfAttachments.length === 0,
       ...(pdfMetadata !== undefined
@@ -7798,8 +7807,7 @@ export class LainBrainSession {
         id: this.createMessageId(),
         role: "assistant",
         content: response,
-        providerId: "deepseek",
-        providerDisplayName: "DeepSeek",
+        ...textModelIdentity(apiKey),
         includeInHistory: true,
         semanticDeltaEligible: pdfAttachments.length === 0
       };
@@ -7829,7 +7837,7 @@ export class LainBrainSession {
         id: this.createMessageId(),
         role: "assistant",
         content:
-          "Unable to get an answer from DeepSeek. Please try again.",
+          "Unable to get an answer from the selected text provider. Please try again.",
         includeInHistory: false
       });
     } finally {
@@ -7841,13 +7849,13 @@ export class LainBrainSession {
   }
 
   private enqueueChatSemanticDeltaAnalysis(
-    apiKey: string,
+    apiKey: TextModelCredentials,
     currentUserMessage: StoredMessage,
     latestAssistantMessage: StoredMessage
   ): void {
     if (
       !this.getChatSemanticDeltaAnalysisEnabled() ||
-      apiKey.trim() === "" ||
+      textModelApiKey(apiKey) === "" ||
       currentUserMessage.semanticDeltaEligible !== true ||
       latestAssistantMessage.semanticDeltaEligible !== true
     ) {
@@ -7942,7 +7950,7 @@ export class LainBrainSession {
   }
 
   private enqueueChatSemanticAnalysis(
-    apiKey: string,
+    apiKey: TextModelCredentials,
     userMessage: StoredMessage,
     latestAssistantResponse: string,
     senseContextAnnotation?: string
@@ -8189,11 +8197,11 @@ export class LainBrainSession {
       return;
     }
 
-    const apiKey = this.getApiKey().trim();
+    const apiKey = this.getApiKey();
 
-    if (apiKey === "") {
+    if (textModelApiKey(apiKey) === "") {
       context.replacementError =
-        "Please add your DeepSeek API key in Lain Brain settings.";
+        "Please add your selected text provider API key in Lain Brain settings.";
       this.notify();
       return;
     }
@@ -8258,11 +8266,11 @@ export class LainBrainSession {
       return "failed";
     }
 
-    const apiKey = this.getApiKey().trim();
+    const apiKey = this.getApiKey();
 
-    if (apiKey === "") {
+    if (textModelApiKey(apiKey) === "") {
       this.candidateError =
-        "Please add your DeepSeek API key in Lain Brain settings.";
+        "Please add your selected text provider API key in Lain Brain settings.";
       this.notify();
       return "failed";
     }
@@ -8574,7 +8582,7 @@ export class LainBrainSession {
   }
 
   private async reviewSelectionReplacementLatex(
-    apiKey: string,
+    apiKey: TextModelCredentials,
     markdown: string
   ): Promise<string> {
     const issues = reviewLatexFormatting(markdown);
@@ -8604,7 +8612,7 @@ export class LainBrainSession {
   }
 
   private async reviewAndRepairLatex(
-    apiKey: string,
+    apiKey: TextModelCredentials,
     markdown: string
   ): Promise<string> {
     const issues = reviewLatexFormatting(markdown);
@@ -8723,7 +8731,7 @@ export class LainBrainSession {
   }
 
   private async discoverCandidateTopics(
-    apiKey: string,
+    apiKey: TextModelCredentials,
     messages: CandidateSourceMessage[]
   ): Promise<CandidateTopicSelection[]> {
     const extracted: CandidateTopicSelection[] = [];
@@ -8782,7 +8790,7 @@ export class LainBrainSession {
    * Does NOT create topics from greetings, chitchat, or empty content.
    */
   private async tryAtomicClaimFallback(
-    apiKey: string,
+    apiKey: TextModelCredentials,
     messages: CandidateSourceMessage[]
   ): Promise<CandidateTopicSelection[]> {
     const userMessages = messages.filter((m) => m.role === "user");
@@ -9474,7 +9482,7 @@ function evidenceRefKey(ref: UserTextProvenance): string {
 
 function containsSensitiveClaimData(
   suggestion: ClaimSuggestion,
-  apiKey: string
+  apiKey: TextModelCredentials
 ): boolean {
   const values = [
     suggestion.text,
@@ -9484,7 +9492,7 @@ function containsSensitiveClaimData(
   const combined = values.join("\n");
 
   return (
-    (apiKey !== "" && combined.includes(apiKey)) ||
+    (textModelApiKey(apiKey) !== "" && combined.includes(textModelApiKey(apiKey))) ||
     /data:image\/[a-z0-9.+-]+;base64,/i.test(combined)
   );
 }

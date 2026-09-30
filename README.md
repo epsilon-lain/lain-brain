@@ -12,6 +12,8 @@ Lain Brain is currently a public alpha and an active research prototype.
 
 For the voice-agent prototype, see the [three-minute demo walkthrough](VOICE_DEMO.md).
 
+For the Nebius × NVIDIA Personal AI integration, setup and verification status, see [the Nebius milestone guide](NEBIUS_PERSONAL_AI.md).
+
 ---
 
 ## Why Lain Brain?
@@ -102,7 +104,7 @@ translation is solved.
 
 The Chat toolbar also provides **“Formalize using Brain concepts”**, a
 review-first workflow for a selected mathematical message: Lain Brain resolves
-relevant concepts, DeepSeek proposes a semantic interpretation, the user
+relevant concepts, the selected text model proposes a semantic interpretation, the user
 reviews meaning (Accept / Edit / Reject), and only an accepted interpretation
 is projected into the existing FormalizationProtocol and Lean backend. The
 workflow reads the Brain but never mutates it.
@@ -128,7 +130,7 @@ read-only, the proof body is editable, and drafts plus verification artifacts
 are persisted locally as durable evidence.
 
 New formalizations now receive a structured canonical Lean proposition from
-DeepSeek and construct `#check`/proof sources locally; `#check` parsing is
+the selected text provider and construct `#check`/proof sources locally; `#check` parsing is
 legacy compatibility only.
 
 Research note: a deterministic local evaluation harness now exists for
@@ -457,7 +459,7 @@ Uncertainty is represented instead of hidden.
 
 Lain Brain also retains its earlier reviewed knowledge-work features:
 
-* contextual multi-turn DeepSeek chat;
+* contextual multi-turn chat with DeepSeek or NVIDIA Nemotron on Nebius Token Factory;
 * CandidateNote generation and review;
 * grouped parent/child candidate notes;
 * Markdown and LaTeX rendering;
@@ -479,13 +481,13 @@ Lain Brain is designed around explicit semantic authority and bounded external r
 
 ### Normal text chat
 
-Text chat is sent to the configured **DeepSeek** provider.
+Text chat is sent to the selected **DeepSeek** or **Nebius Token Factory** provider. Nebius defaults to NVIDIA Nemotron 3 Super. Select the provider and enter its API key in **Settings → Lain Brain → Text AI**. Existing installations retain DeepSeek until changed; Nebius does not silently fall back to another provider.
 
 Active-note content may be included when the user intentionally uses it as conversational context.
 
 ### Chat Semantic Delta detection
 
-When **Detect semantic changes in chat** is enabled, Lain Brain may send one additional supplemental DeepSeek request after an eligible successful text reply.
+When **Detect semantic changes in chat** is enabled, Lain Brain may send one additional supplemental request to the selected text provider after an eligible successful text reply.
 
 This request contains at most **three recent eligible text-only turns** required to detect a possible principal semantic change.
 
@@ -517,7 +519,7 @@ Concept nodes, revisions, relationships, propagation state, and structural diagn
 
 Lain Brain does not introduce a separate cloud Brain service in the current version.
 
-Review the privacy policies of DeepSeek and any optional provider you configure. Provider requests leave your device and are governed by that provider's policies.
+Review the privacy policies of Nebius, DeepSeek and any optional provider you configure. API keys are saved in local plugin settings without encryption; keep those settings out of shared Vaults and repositories. Provider requests leave your device and are governed by that provider's policies.
 
 ---
 
@@ -575,9 +577,9 @@ Pre-existing user notes are not deleted as rollback.
 
 * Obsidian 1.0.0 or later
 * Node.js 18 or later and npm when building from source
-* A DeepSeek API key for text chat and optional Chat Semantic Delta analysis
+* A Nebius Token Factory or DeepSeek API key for text chat and optional Chat Semantic Delta analysis
 * An AssemblyAI API key for live voice input and for transcribing imported
-  audio/video recordings; DeepSeek is also used to interpret user-defined
+  audio/video recordings; the selected text model is also used to interpret user-defined
   voice macros
 * Headphones are recommended when device text-to-speech is enabled
 * An API key for an optional configured image provider only when image analysis is used
@@ -628,7 +630,7 @@ Lain Brain is an experimental alpha.
 Current limitations include:
 
 * it does not train or fine-tune model weights from the user's Brain;
-* semantic change detection currently uses a bounded DeepSeek request rather than a local model;
+* semantic change detection currently uses a bounded request to the selected text provider rather than a local model;
 * Chat Semantic Delta supports a deliberately narrow set of explicitly reviewable change types;
 * semantic propagation follows explicit structure rather than fuzzy semantic similarity;
 * embeddings and vector search are not part of the current semantic propagation architecture;

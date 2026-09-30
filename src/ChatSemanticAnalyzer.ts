@@ -1,3 +1,4 @@
+import type { TextModelCredentials } from "./TextModelConfig";
 import { requestDeepSeek } from "./DeepSeekClient";
 import type { DeepSeekConversationMessage } from "./DeepSeekClient";
 import type { ChatSemanticSession } from "./ChatSemanticSession";
@@ -40,7 +41,7 @@ export interface ChatSemanticAnalysisRequest {
 }
 
 export type ChatSemanticAnalyzer = (
-  apiKey: string,
+  apiKey: TextModelCredentials,
   request: Readonly<ChatSemanticAnalysisRequest>
 ) => Promise<SemanticSpec>;
 

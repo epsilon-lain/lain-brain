@@ -1,3 +1,5 @@
+import { textModelApiKey } from "./TextModelConfig";
+import type { TextModelCredentials } from "./TextModelConfig";
 import { requestUrl } from "obsidian";
 import { requestDeepSeek } from "./DeepSeekClient";
 import type { VoiceAnalysis, VoiceIntentServices } from "./VoiceIntentBuffer";
@@ -8,9 +10,9 @@ async function classifyWithDeepSeek(
   cleaned: string,
   command: string,
   context: VoiceIntentContext,
-  deepSeekKey: string
+  deepSeekKey: TextModelCredentials
 ): Promise<"command" | "text" | "uncertain"> {
-  if (!deepSeekKey) {
+  if (!textModelApiKey(deepSeekKey)) {
     return "uncertain";
   }
   try {
@@ -47,13 +49,13 @@ async function classifyWithDeepSeek(
 }
 
 export function createVoiceIntentServices(
-  getDeepSeekKey: () => string,
+  getDeepSeekKey: () => TextModelCredentials,
   getJevKey: () => string
 ): VoiceIntentServices {
   return {
     async clean(raw, macroHints): Promise<VoiceAnalysis> {
-      const key = getDeepSeekKey().trim();
-      if (!key) return { cleanedText: raw, possibleMacro: false };
+      const key = getDeepSeekKey();
+      if (!textModelApiKey(key)) return { cleanedText: raw, possibleMacro: false };
       try {
         const answer = await requestDeepSeek(key, [{
           role: "system",
@@ -101,7 +103,7 @@ export function createVoiceIntentServices(
           cleaned,
           command,
           context,
-          getDeepSeekKey().trim()
+          getDeepSeekKey()
         );
       }
       try {

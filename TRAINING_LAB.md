@@ -56,7 +56,7 @@ fields are:
 | `student` | Model name, parameter count (1–100 million), checkpoint SHA256 |
 | `dataset` | Distinct training/evaluation snapshot SHA256 digests |
 | `config` | `mode`, device description and nonnegative integer seed |
-| `measurements` | Cumulative `steps`, `trainLoss`, this-round `trainSeconds`; optional `peakVramMb`, `evalAccuracy` |
+| `measurements` | Cumulative `steps`; reported `trainLoss`, `trainSeconds` (the supplied runners use cumulative update time); optional `peakVramMb`, `evalAccuracy` |
 | `predictions` | Up to 32 input/target/prediction examples, each marked `train` or `eval`; empty predictions are preserved |
 | `candidates` | Up to 16 proposed objects with ID, label, definition and a training reference; optional teacher report |
 
@@ -146,7 +146,14 @@ and exports baseline records accepted by this plugin. See
 measurement definitions and the CPU integration test. This language-model
 baseline does not yet generate affine objects or consume the object library.
 
-The subsequent object-training experiment still needs a trainer that:
+The [first definition-prediction runner](./OBJECT_TRAINING.md) now trains a
+separate small GPT to predict bounded affine coefficients from example pairs.
+It exports actual model proposals with training-only references for this
+checker's `teacher_free` gate, including wrong predictions. It does not consume
+the resulting library or implement a live teacher. Its held-out input-combination
+evaluation is not a comparison with the FineWeb language-model baseline.
+
+The subsequent composition/feedback experiment still needs a trainer that:
 
 1. Generates and freezes a synthetic affine-task dataset, with composition
    templates held out from training and independently recorded hashes.

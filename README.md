@@ -159,11 +159,13 @@ expressions, with composition of objects from earlier rounds. Local verification
 checks equivalence to the supplied training reference; teacher agreement is a
 separate reported fact. Experimental objects never become personal ConceptNodes.
 
-This is the Brain side of the training interchange, not a PyTorch trainer. It
-does not launch GPU jobs or call paid providers. The bundled examples are marked
+The plugin does not launch GPU jobs or call paid providers. A separate
+[laptop GPT runner](./LAPTOP_TRAINING.md) performs short next-token baseline runs
+and exports compatible records. It does not yet generate or train with objects.
+The bundled examples are marked
 `instrument` and do not represent trained models or measured model improvements.
 See [TRAINING_LAB.md](./TRAINING_LAB.md) for the format, validation boundaries,
-example walkthrough and next implementation step.
+example walkthrough and object-training roadmap.
 
 ### Personal ConceptNodes
 

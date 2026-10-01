@@ -1,7 +1,8 @@
 # Laptop Training Lab v0
 
 This adds the **Brain-side exchange and object library** for the laptop-training
-experiment. A Python trainer is the next component; there is no weight training
+experiment. The separate [laptop GPT runner](./LAPTOP_TRAINING.md) now exports
+ordinary next-token baseline records; there is no weight training
 inside this plugin yet, no live teacher integration, and no measured claim of
 speedup, lower VRAM, higher accuracy or autonomous improvement.
 
@@ -136,9 +137,16 @@ measurements, duplicated IDs and changing run configuration reject an import.
 Valid proposals which differ mathematically or use unavailable objects are
 preserved in history as rejected candidates. They are excluded from exports.
 
-## Next: connect actual laptop training
+## Baseline runner and next experiment
 
-The next component is an external Python/PyTorch trainer that:
+`tools/laptop_train.py` reuses the user's reviewed Parameter Golf model and local
+data, performs short single-device optimizer updates, saves new checkpoints,
+and exports baseline records accepted by this plugin. See
+[LAPTOP_TRAINING.md](./LAPTOP_TRAINING.md) for inspection, execution, assumptions,
+measurement definitions and the CPU integration test. This language-model
+baseline does not yet generate affine objects or consume the object library.
+
+The subsequent object-training experiment still needs a trainer that:
 
 1. Generates and freezes a synthetic affine-task dataset, with composition
    templates held out from training and independently recorded hashes.
@@ -151,8 +159,9 @@ The next component is an external Python/PyTorch trainer that:
 6. Compares baseline, Brain with teacher and teacher-free conditions under equal
    budgets, accounting for library lookup, verification and teacher costs.
 
-No automatic background training, paid API call, GPU job, desktop installation,
-general semantic proof or personal-note mutation is part of this change.
+The plugin does not start background training or call paid providers. The
+external runner starts GPU work only when explicitly invoked without `--inspect`.
+General semantic proof and personal-note mutation remain outside this experiment.
 
 ## Checks
 

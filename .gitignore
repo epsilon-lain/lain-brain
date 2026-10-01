@@ -59,6 +59,9 @@ temp/
 
 # Test and tooling output
 coverage/
+__pycache__/
+*.pyc
+laptop_runs/
 *.log
 *.map
 

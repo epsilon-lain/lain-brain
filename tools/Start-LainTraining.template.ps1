@@ -2,7 +2,8 @@ param(
     [string]$ProjectPath = '',
     [string]$VaultPath = '',
     [ValidateRange(1,8)][int]$Rounds = 2,
-    [ValidateSet('cuda','cpu')][string]$Device = 'cuda'
+    [ValidateSet('cuda','cpu')][string]$Device = 'cuda',
+    [switch]$Compare
 )
 $ErrorActionPreference = 'Stop'
 $desktopPath = [Environment]::GetFolderPath('Desktop')
@@ -54,7 +55,7 @@ try {
     }
     New-Item -ItemType Directory -Path $toolPath -Force | Out-Null
     New-Item -ItemType Directory -Path $pluginPath -Force | Out-Null
-    foreach ($fileName in @('auto_train.py','object_train.py','laptop_train.py','model-source.sha256','README.md','LICENSE')) {
+    foreach ($fileName in @('auto_train.py','compare_train.py','object_train.py','laptop_train.py','model-source.sha256','README.md','LICENSE')) {
         $null = Copy-VerifiedFile (Join-Path $unpackedPath ('tools\' + $fileName)) (Join-Path $toolPath $fileName) ('tools-' + $fileName)
     }
     foreach ($fileName in @('main.js','manifest.json')) {
@@ -76,8 +77,14 @@ if ($pluginChanged) {
 } else {
     Write-Host '安装文件已就绪。请保持 Obsidian 的测试仓库打开。' -ForegroundColor Cyan
 }
-Write-Host "自动训练 $Rounds 轮：小模型审阅、Brain 验证、保存与下一轮训练。Ctrl+C 可以停止。"
-$runnerWslPath = Convert-ToWslPath (Join-Path $toolPath 'auto_train.py')
+if ($Compare) {
+    Write-Host '对照实验：三个种子，每个种子两组；同一冻结权重，每组 600 步（默认）。保持测试仓库打开。Ctrl+C 可以停止。'
+    $runnerFileName = 'compare_train.py'
+} else {
+    Write-Host "自动训练 $Rounds 轮：小模型审阅、Brain 验证、保存与下一轮训练。Ctrl+C 可以停止。"
+    $runnerFileName = 'auto_train.py'
+}
+$runnerWslPath = Convert-ToWslPath (Join-Path $toolPath $runnerFileName)
 $projectWslPath = Convert-ToWslPath $ProjectPath
 $vaultWslPath = Convert-ToWslPath $VaultPath
 Get-Command wsl -ErrorAction Stop | Out-Null

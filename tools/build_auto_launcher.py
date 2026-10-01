@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def build(target):
     sources = {"plugin/main.js": "main.js", "plugin/manifest.json": "manifest.json",
-               "tools/auto_train.py": "tools/auto_train.py", "tools/object_train.py": "tools/object_train.py",
+               "tools/auto_train.py": "tools/auto_train.py", "tools/compare_train.py": "tools/compare_train.py",
+               "tools/object_train.py": "tools/object_train.py",
                "tools/laptop_train.py": "tools/laptop_train.py", "tools/model-source.sha256": "tools/model-source.sha256",
                "tools/README.md": "AUTO_TRAINING.md", "tools/LICENSE": "LICENSE"}
     manifest = {"schemaVersion": 1, "files": []}

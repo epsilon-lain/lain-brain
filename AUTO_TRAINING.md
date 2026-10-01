@@ -70,6 +70,56 @@ multiple seeds are needed to measure any benefit of the feedback policy.
 
 ## Exchange and persistence
 
+### Paired comparison
+
+The updated offline launcher also accepts `-Compare`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$([Environment]::GetFolderPath('Desktop'))\Start-LainTraining.ps1" -Compare
+```
+
+No extra extraction or manual import is needed. The installed plugin bundle is
+unchanged. `compare_train.py` freezes the newest **original** `object-laptop-*`
+checkpoint once (excluding `auto-object-*`), then trains a uniform baseline and
+the complete Brain feedback policy for two rounds of 300 updates, batch size 64,
+at learning rate 0.001, with paired seeds 1337, 2027 and 4099. Each arm starts a
+fresh AdamW optimizer; runs are sequential, with alternating arm order. The
+baseline archives its results in Brain but consumes no review or Brain feedback
+in its optimizer batches, and does not load a reviewer. The reviewer is frozen
+and shared across feedback arms. Replay has a separate random stream.
+
+Both arms must have exactly identical initial tensor values and first-round
+tensor values, dataset hashes, baseline accuracy and update counts. A time cap,
+incomplete run or pairing failure stops the comparison without a matched-budget
+claim. Deterministic math attention and disabled TF32 make this audit possible;
+these settings differ from earlier automatic runs. The project lock covers the
+whole comparison. `--student-checkpoint` can pin another compatible starting
+point; `--seeds` accepts 1..5 distinct preselected seeds. `--inspect` is read-only.
+
+Outputs go to `laptop_runs/comparison-<id>`: frozen initial checkpoint, plan,
+arm links, per-function held-out accuracy, paired results (`comparison.json`)
+and a Chinese report (`comparison.md`). Each arm also has its own normal run
+directory and Brain history. Update seconds, full arm wall time and reviewer
+preparation time are recorded separately, including fresh reviewer training if
+needed. Cached reviewer's historical training cost is not in the current timer.
+
+This is exploratory: three continuation seeds share a single pretrained start;
+the held-out split was already inspected earlier. It tests the full priority +
+rehearsal policy, not symbolic representations in isolation. On this fixed family,
+object-generated examples duplicate corresponding original training examples.
+The 990 evaluation contexts contain correlated permutations, so no significance
+claim based on 990 independent observations is made. Positive, zero and negative
+seed results are all reported. Equal updates do not mean equal total compute.
+
+```sh
+python tests/compare-train.test.py --source /reviewed/train_gpt.py --initial /affine/checkpoint.pt
+```
+
+The test uses real optimizer updates and the real TypeScript Brain service,
+audits identical first-round weights and zero feedback in the control, and
+rejects deliberately mismatched budgets, datasets and starting states. Increase
+`--steps-per-round` to 300 for a full CPU experiment; use `--out` to preserve it.
+
 `tools/auto_train.py` writes atomic, data-only requests under the fixed vault
 folder `Lain Brain Training Queue`. The plugin checks for pending requests every
 1.5 seconds, processes at most four per tick, and replies with a boundary-specific

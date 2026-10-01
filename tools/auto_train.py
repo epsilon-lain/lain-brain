@@ -252,22 +252,31 @@ def _run(args):
     # Handshake before training the reviewer or updating student weights.
     exchange(args.vault, run_id + "-probe", args.brain_timeout)
     print("Brain connected. Automatic import and feedback are ready.", flush=True)
-    checkpoint = reviewer_checkpoint(args, source_sha, dataset)
-    reviewer_sha = file_digest(checkpoint)
+    setup_started = time.perf_counter()
+    checkpoint = reviewer_checkpoint(args, source_sha, dataset) if args.policy == "brain_objects" else None
+    reviewer_sha = file_digest(checkpoint) if checkpoint else None
     device = torch.device(args.device)
-    reviewer = restore(GPT, checkpoint, config).to(device).eval()
-    reviewer.requires_grad_(False)
+    reviewer = restore(GPT, checkpoint, config).to(device).eval() if checkpoint else None
+    if reviewer is not None:
+        reviewer.requires_grad_(False)
+    reviewer_setup_seconds = time.perf_counter() - setup_started
     model.to(device)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats()
     train_x, train_y = task.tensors(data["train"], device)
     eval_x, eval_y = task.tensors(data["eval"], device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    # Reviewer construction must not change the student's random stream. Keep
+    # replay draws separate so uniform baseline batches remain paired by seed.
+    torch.manual_seed(args.seed)
     generator = torch.Generator().manual_seed(args.seed + 1)
+    replay_generator = torch.Generator().manual_seed(args.seed + 2)
     manifest = {"runId": run_id, "modelConfig": config, "modelSourceSha256": source_sha,
                 "runnerSha256": file_digest(Path(__file__)), "helperSha256": file_digest(Path(task.__file__)),
                 "dataset": dataset, "reviewerCheckpointSha256": reviewer_sha,
-                "reviewerCheckpoint": str(checkpoint), "initialCheckpoint": str(initial) if initial else None,
+                "reviewerCheckpoint": str(checkpoint) if checkpoint else None,
+                "reviewerSetupSeconds": reviewer_setup_seconds,
+                "initialCheckpoint": str(initial) if initial else None,
                 "initialCheckpointSha256": file_digest(initial) if initial else None,
                 "torchVersion": str(torch.__version__), "optimizer": "fresh AdamW; weights-only resume",
                 "settings": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
@@ -296,7 +305,7 @@ def _run(args):
             x, y = train_x[indices].clone(), train_y[indices].clone()
             if derived_x is not None and len(derived_x):
                 count = max(1, args.batch_size // 4)
-                chosen = torch.randint(len(derived_x), (count,), generator=generator).to(device)
+                chosen = torch.randint(len(derived_x), (count,), generator=replay_generator).to(device)
                 x[:count], y[:count] = derived_x[chosen], derived_y[chosen]
                 replay_used += count
             optimizer.zero_grad(set_to_none=True)
@@ -319,8 +328,9 @@ def _run(args):
         evaluation, eval_predictions = task.evaluate(model, eval_x, eval_y)
         training, train_predictions = task.evaluate(model, train_x, train_y)
         candidates = task.propose(data["train"], train_predictions, n)
-        reviewer_predictions = review(candidates, data["train"], reviewer, device, reviewer_sha)
+        reviewer_predictions = review(candidates, data["train"], reviewer, device, reviewer_sha) if reviewer is not None else None
         json_write(out / f"evaluation-{n:03}.json", {"eval": evaluation, "train": training,
+                  "heldOutPredictions": eval_predictions,
                   "reviewerPredictionsOnFixedTrainingContexts": reviewer_predictions,
                   "objectReplayExamplesUsedThisRound": replay_used - start_replay})
         measurements = {"steps": finished, "trainLoss": total_loss / finished, "trainSeconds": seconds,
@@ -336,24 +346,32 @@ def _run(args):
                   "recordedAt": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
                   "student": {"model": "parameter-golf-affine-auto-v1", "parameterCount": sum(p.numel() for p in model.parameters()),
                               "checkpointSha256": file_digest(student_checkpoint)},
-                  "dataset": dataset, "config": {"mode": "brain_objects", "device": str(device), "seed": args.seed},
+                  "dataset": dataset, "config": {"mode": args.policy, "device": str(device), "seed": args.seed},
                   "measurements": measurements, "predictions": probes, "candidates": candidates}
         json_write(out / f"round-{n:03}.json", record)
         response = exchange(args.vault, run_id + f"-r{n:03}", args.brain_timeout, record)
         json_write(out / f"brain-feedback-{n:03}.json", response)
-        priority, derived, stats = feedback(response, record, data["train"])
+        if args.policy == "brain_objects":
+            priority, derived, stats = feedback(response, record, data["train"])
+        else:
+            # Brain only archives/inspects the control. Its verdicts cannot
+            # influence any subsequent batch or target in this arm.
+            priority = {r["taskId"]: 1 for r in data["train"]}
+            derived = []
+            stats = {"acceptedThisRound": 0, "libraryObjects": 0, "uniqueFunctions": 0,
+                     "objectExecutions": 0, "derivedTrainingContexts": 0}
         json_write(out / f"replay-{n:03}.tasks.json", derived)
         json_write(out / f"feedback-summary-{n:03}.json", {**stats, "trainingTaskPriority": priority,
                   "objectReplayExamplesUsedThisRound": replay_used - start_replay,
-                  "libraryBoundaryUsedForThisRound": n - 1 if n > 1 else None})
+                  "libraryBoundaryUsedForThisRound": n - 1 if n > 1 and args.policy == "brain_objects" else None})
         weights = torch.tensor([priority[r["taskId"]] for r in data["train"]], dtype=torch.float32)
         if derived:
             derived_x, derived_y = task.tensors(derived, device)
         completed = n
-        print(f"Round {n}/{args.rounds}: Brain accepted {stats['acceptedThisRound']}/15; "
+        print(f"Round {n}/{args.rounds} ({args.policy}): Brain accepted {stats['acceptedThisRound']}/15; "
               f"held-out accuracy={evaluation['exactDefinitionAccuracy']:.4f}; "
               f"object-derived examples used={replay_used - start_replay}. Feedback saved automatically.", flush=True)
-    if file_digest(checkpoint) != reviewer_sha:
+    if checkpoint and file_digest(checkpoint) != reviewer_sha:
         raise ValueError("Frozen reviewer checkpoint changed during the run")
     json_write(out / "done.json", {"completedRounds": completed, "studentUpdates": finished,
                "objectReplayExamplesUsed": replay_used, "status": "bounded_run_finished"})
@@ -388,6 +406,7 @@ def parser():
     p.add_argument("--vault", type=Path, required=True)
     p.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     p.add_argument("--student-checkpoint", type=Path)
+    p.add_argument("--policy", choices=["baseline", "brain_objects"], default="brain_objects")
     p.add_argument("--random", action="store_true")
     p.add_argument("--inspect", action="store_true")
     p.add_argument("--rounds", type=int, default=2)

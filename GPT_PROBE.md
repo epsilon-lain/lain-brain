@@ -6,6 +6,11 @@ These must be checked before training the student. Future experiments reward
 verified modeling progress and cross-zip use, not just terminal answers. This
 diagnostic does not implement the teacher or zip architecture.
 
+Actual laptop outputs showed repetitive words/punctuation on both selected 17M
+checkpoints, including ordinary continuations; both four-choice diagnostics were
+1/4. This does not identify the exact cause or evaluate the zip hypothesis. The
+next student check is documented in [STUDENT_PROBE.md](./STUDENT_PROBE.md).
+
 Build the standalone PowerShell file:
 
 ```sh

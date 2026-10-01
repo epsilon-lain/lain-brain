@@ -145,6 +145,24 @@ made provider requests.
 
 ## Core features
 
+### Training Lab (v0)
+
+The command **Lain Brain: Open Training Lab** opens a separate experimental
+workspace for the laptop-training project. Import a local training-round JSON,
+inspect predictions, candidate definitions and reported teacher reviews, then
+export accepted callable objects for a subsequent external training round.
+
+The initial object language is deliberately small: exact rational affine
+expressions, with composition of objects from earlier rounds. Local verification
+checks equivalence to the supplied training reference; teacher agreement is a
+separate reported fact. Experimental objects never become personal ConceptNodes.
+
+This is the Brain side of the training interchange, not a PyTorch trainer. It
+does not launch GPU jobs or call paid providers. The bundled examples are marked
+`instrument` and do not represent trained models or measured model improvements.
+See [TRAINING_LAB.md](./TRAINING_LAB.md) for the format, validation boundaries,
+example walkthrough and next implementation step.
+
 ### Personal ConceptNodes
 
 Notes can become durable semantic concept nodes with:

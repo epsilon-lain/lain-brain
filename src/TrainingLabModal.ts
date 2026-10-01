@@ -25,31 +25,40 @@ export function trainingLabExample(): string {
 export class TrainingLabModal extends Modal {
   private state: TrainingLabState = emptyTrainingLab();
   private draft = "";
+  private draftFile = "";
   private runId = "";
   private status = "";
+  private failed = false;
   private busy = false;
   private loaded = false;
 
   constructor(app: App, private readonly repository: TrainingLabRepository) { super(app); }
-  onOpen(): void { this.render(); void this.perform(async () => this.reload()); }
+  onOpen(): void { this.render(); void this.perform(async () => this.reload(), "正在读取训练历史…"); }
   onClose(): void { this.contentEl.empty(); }
 
   private async reload(): Promise<void> {
     this.state = await this.repository.load();
     this.loaded = true;
     this.chooseRun();
+    this.status = "历史已载入。请选择 round-001.json 等完整轮次文件。";
   }
   private chooseRun(): void {
     if (!this.state.rounds.some((r) => r.runId === this.runId)) {
       this.runId = this.state.rounds[this.state.rounds.length - 1]?.runId ?? "";
     }
   }
-  private async perform(work: () => Promise<void>): Promise<void> {
+  private async perform(work: () => Promise<void>, pending = "正在处理…"): Promise<void> {
     if (this.busy) return;
     this.busy = true;
+    this.failed = false;
+    this.status = pending;
     this.render();
     try { await work(); }
-    catch (error) { this.status = error instanceof Error ? error.message : String(error); }
+    catch (error) {
+      this.failed = true;
+      this.status = `操作失败：${error instanceof Error ? error.message : String(error)}`;
+      new Notice(this.status, 10000);
+    }
     finally { this.busy = false; this.render(); }
   }
   private button(parent: HTMLElement, label: string, action: () => void, needsLoad = true): void {
@@ -79,17 +88,30 @@ export class TrainingLabModal extends Modal {
         void this.perform(async () => {
           if (file.size > TRAINING_ROUND_MAX_BYTES) throw new Error("每轮 JSON 不得超过 2 MiB。");
           this.draft = await file.text();
-          this.status = "文件已载入编辑区；点击导入后才会保存。";
-        });
+          this.draftFile = file.name;
+          this.status = `已载入 ${file.name}；请点击「导入并验证这一轮」保存。`;
+        }, "正在读取所选 JSON 文件…");
       });
       input.click();
     }, false);
     this.button(actions, "载入合成示例", () => {
       this.draft = trainingLabExample();
+      this.draftFile = "合成示例";
+      this.failed = false;
       this.status = "这是 instrument 合成示例，没有进行模型训练。";
       this.render();
     }, false);
     this.button(actions, "刷新历史", () => void this.perform(async () => this.reload()), false);
+
+    // Feedback precedes the large editor so failures stay visible on small screens.
+    const status = el.createEl("p", { text: this.status || "尚未导入训练轮次。" });
+    status.setAttribute("role", this.failed ? "alert" : "status");
+    status.setAttribute("aria-live", this.failed ? "assertive" : "polite");
+    status.style.padding = "0.75rem";
+    status.style.background = "var(--background-secondary)";
+    status.style.whiteSpace = "pre-wrap";
+    if (this.failed) status.style.color = "var(--text-error)";
+    if (this.draftFile) el.createEl("p", { text: `当前内容：${this.draftFile}` });
 
     const editor = el.createEl("textarea");
     editor.value = this.draft;
@@ -100,14 +122,23 @@ export class TrainingLabModal extends Modal {
     editor.style.marginTop = "0.75rem";
     editor.style.fontFamily = "var(--font-monospace)";
     editor.disabled = this.busy;
-    editor.addEventListener("input", () => { this.draft = editor.value; });
+    editor.addEventListener("input", () => { this.draft = editor.value; this.draftFile = "手动编辑的 JSON"; });
     this.button(el, "导入并验证这一轮", () => void this.perform(async () => {
+      if (!this.draft.trim()) throw new Error("请先选择 round-001.json，或粘贴完整轮次 JSON。");
+      let value: unknown;
+      try { value = JSON.parse(this.draft); }
+      catch { throw new Error("JSON 格式不完整或有语法错误，请重新选择训练器输出的 round-001.json。"); }
+      if (value !== null && typeof value === "object" && !Array.isArray(value) &&
+          !("schemaVersion" in value) && ("loss" in value || "nextTokenAccuracy" in value || "evaluatedTokens" in value)) {
+        throw new Error("选中的是评估摘要。请选择 round-001.json / round-002.json；before.json 和 evaluation-*.json 不能作为轮次导入。");
+      }
       this.state = await this.repository.importRound(this.draft);
       this.loaded = true;
-      this.runId = this.state.rounds[this.state.rounds.length - 1]!.runId;
-      this.status = "轮次已保存；候选状态由本地重新计算。";
-    }));
-    el.createEl("p", { text: this.status || "尚未导入训练轮次。" });
+      const saved = this.state.rounds[this.state.rounds.length - 1]!;
+      this.runId = saved.runId;
+      this.status = `导入成功：${saved.runId} · 第 ${saved.round} 轮已保存。候选状态由本地重新计算。`;
+      new Notice(this.status);
+    }, "正在验证并保存这一轮…"));
 
     const runIds = [...new Set(this.state.rounds.map((r) => r.runId))];
     if (!runIds.length) return;
@@ -136,7 +167,7 @@ export class TrainingLabModal extends Modal {
       card.createEl("h4", { text: `第 ${round.source.round} 轮 · ${round.source.kind === "instrument" ? "合成仪器测试" : "训练器报告"}` });
       const m = round.source.measurements;
       card.createEl("p", { text: `${round.source.config.mode} · ${round.source.student.model} · ${round.source.student.parameterCount} 参数` });
-      card.createEl("p", { text: `训练器报告：累计 ${m.steps} 步；loss ${m.trainLoss}；本轮 ${m.trainSeconds}s；峰值显存 ${m.peakVramMb ?? "未报告"} MiB；评测正确率 ${m.evalAccuracy ?? "未报告"}。Brain 开销尚未计入。` });
+      card.createEl("p", { text: `训练器报告：累计 ${m.steps} 步；loss ${m.trainLoss}；累计训练 ${m.trainSeconds}s；峰值显存 ${m.peakVramMb ?? "未报告"} MiB；评测正确率 ${m.evalAccuracy ?? "未报告"}。Brain 开销尚未计入。` });
       card.createEl("p", { text: `checkpoint SHA256: ${round.source.student.checkpointSha256}` });
       for (const result of round.verifications) {
         const details = card.createEl("details");

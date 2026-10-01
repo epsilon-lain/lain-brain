@@ -165,6 +165,13 @@ General semantic proof and personal-note mutation remain outside this experiment
 
 ## Checks
 
+The modal shows the selected filename and puts progress/success/error feedback
+above the JSON editor. Import success and operation failures also display an
+Obsidian notification. Selecting a file only fills the editor; click the import
+button to save. `before.json` and `evaluation-*.json` are score summaries; select
+the complete `round-001.json`, followed by `round-002.json`, instead. Duplicate
+or out-of-order imports are rejected while keeping the existing history.
+
 `npm run test:training-lab` exercises two-round import/composition/export/reload,
 an independent interpreter, exact rational arithmetic, teacher-approved wrong
 definitions, dependency gates, malformed input and resource limits, frozen run

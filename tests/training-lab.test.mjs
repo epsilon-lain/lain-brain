@@ -34,8 +34,14 @@ function makeElement(tag, options = {}) {
 }
 const module = { exports: {} };
 const notices = [];
+const pickedInputs = [];
 vm.runInNewContext(built.outputFiles[0].text, {
-  module, exports: module.exports, TextEncoder, console, makeElement, notices
+  module, exports: module.exports, TextEncoder, console, makeElement, notices,
+  document: { createElement(tag) {
+    const input = makeElement(tag);
+    input.click = () => pickedInputs.push(input);
+    return input;
+  } }
 });
 const api = module.exports;
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -223,6 +229,7 @@ assert.equal(uiPersisted, null); // Loading a sample doesn't mutate history.
 await click(modal, "导入并验证这一轮");
 assert.equal(JSON.parse(uiPersisted).rounds[0].kind, "instrument");
 assert.ok(flatten(modal.contentEl).some((e) => e.text.includes("合成仪器测试")));
+assert.ok(notices.at(-1).includes("导入成功：example-affine"));
 await click(modal, "导出对象库供下一轮训练");
 const objectExport = [...files.entries()].find(([path]) => path.includes("objects-example-affine"));
 assert.equal(JSON.parse(objectExport[1]).objects.length, 1);
@@ -236,9 +243,56 @@ await click(restarted, "载入合成示例");
 await click(restarted, "导入并验证这一轮");
 assert.equal(uiPersisted, writesBeforeDuplicate);
 assert.ok(flatten(restarted.contentEl).some((e) => e.text.includes("consecutively")));
+assert.ok(notices.at(-1).includes("操作失败"));
 assert.ok(notices.length >= 2);
 files.set("Lain Brain Training Exports", "pre-existing-user-file");
 await click(restarted, "导出对象库供下一轮训练");
 assert.equal(files.get("Lain Brain Training Exports"), "pre-existing-user-file");
 assert.ok(flatten(restarted.contentEl).some((e) => e.text.includes("同名文件")));
+
+// The user's evaluation-summary selection must produce actionable, visible
+// feedback and preserve existing history. Failed writes never announce success.
+const typeDraft = (modal, source) => {
+  const editor = flatten(modal.contentEl).find((e) => e.tag === "textarea");
+  editor.value = source; editor.events.input();
+};
+const beforeBadSelection = uiPersisted;
+const chooseFile = async (modal, name, source) => {
+  await click(modal, "选择本地 JSON");
+  const input = pickedInputs.at(-1);
+  input.files = [{ name, size: source.length, text: async () => source }];
+  input.events.change(); await flush();
+};
+await chooseFile(restarted, "evaluation-002.json", JSON.stringify({ loss: 7.9677, nextTokenAccuracy: 0.0078125, evaluatedTokens: 512 }));
+assert.ok(flatten(restarted.contentEl).some((e) => e.text === "当前内容：evaluation-002.json"));
+await click(restarted, "导入并验证这一轮");
+assert.equal(uiPersisted, beforeBadSelection);
+assert.ok(notices.at(-1).includes("选中的是评估摘要"));
+const summaryFeedback = restarted.contentEl.children.find((e) => e.attributes.role === "alert");
+assert.ok(summaryFeedback.text.includes("round-001.json"));
+assert.ok(restarted.contentEl.children.indexOf(summaryFeedback) < restarted.contentEl.children.findIndex((e) => e.tag === "textarea"));
+typeDraft(restarted, "");
+await click(restarted, "导入并验证这一轮");
+assert.ok(notices.at(-1).includes("请先选择"));
+typeDraft(restarted, "{broken");
+await click(restarted, "导入并验证这一轮");
+assert.ok(notices.at(-1).includes("JSON 格式"));
+await chooseFile(restarted, "round-001.json", JSON.stringify(round(1, [], { kind: "training", runId: "gpt-laptop-ui-test", config: { mode: "baseline", device: "cuda", seed: 1337 } })));
+await click(restarted, "导入并验证这一轮");
+assert.ok(notices.at(-1).includes("导入成功：gpt-laptop-ui-test"));
+assert.ok(flatten(restarted.contentEl).some((e) => e.text === "1 轮 · 0 个已接纳实验对象"));
+
+let storageFails = true;
+const failingModal = new api.TrainingLabModal(app, new api.TrainingLabRepository({
+  read: async () => null,
+  write: async () => { if (storageFails) throw new Error("disk full"); }
+}));
+failingModal.onOpen(); await flush();
+typeDraft(failingModal, JSON.stringify(round()));
+await click(failingModal, "导入并验证这一轮");
+assert.ok(notices.at(-1).includes("disk full"));
+assert.ok(!flatten(failingModal.contentEl).some((e) => e.tag === "h4"));
+storageFails = false;
+await click(failingModal, "导入并验证这一轮");
+assert.ok(notices.at(-1).includes("导入成功：test-run"));
 console.log("Training Lab: protocol, exact verification, round replay, storage and modal integration passed.");

@@ -72,7 +72,7 @@ export class TrainingLabModal extends Modal {
     el.style.maxHeight = "80vh";
     el.style.overflowY = "auto";
     this.setTitle("Training Lab · 训练实验区");
-    el.createEl("p", { text: "训练器每轮输出 JSON → Brain 保存预测和候选定义 → 本地验证 → 导出对象库供下一轮使用。" });
+    el.createEl("p", { text: "外部自动训练器可以同步轮次，并读取 Brain 验证后的对象和反馈继续训练。手动导入也仍然可用。" });
     el.createEl("p", { text: "当前支持有理数仿射表达式。训练在外部 Python 进程中运行；这里不会启动 GPU 或调用付费模型。实验对象独立保存。" });
     const actions = el.createDiv();
     actions.style.display = "flex";

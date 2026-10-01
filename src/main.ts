@@ -40,6 +40,7 @@ import {
 import { SemanticPropagationCoordinator } from "./SemanticPropagationCoordinator";
 import { TrainingLabRepository } from "./TrainingLab";
 import { TrainingLabModal } from "./TrainingLabModal";
+import { TrainingLabSync } from "./TrainingLabSync";
 
 export default class LainBrainPlugin extends Plugin {
   settings: LainBrainSettings = migrateLainBrainSettings(undefined);
@@ -58,6 +59,10 @@ export default class LainBrainPlugin extends Plugin {
         ? this.app.vault.adapter.read(trainingPath) : null,
       write: async (source) => { await this.app.vault.adapter.write(trainingPath, source); }
     });
+    const trainingSync = new TrainingLabSync(this.app.vault.adapter, this.trainingLab);
+    this.registerInterval(window.setInterval(() => {
+      void trainingSync.tick().catch((error) => console.error("Training Lab sync failed", error));
+    }, 1500));
 
     this.session = new LainBrainSession(
       this.app,

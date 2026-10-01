@@ -2,8 +2,9 @@
 
 This adds the **Brain-side exchange and object library** for the laptop-training
 experiment. The separate [laptop GPT runner](./LAPTOP_TRAINING.md) now exports
-ordinary next-token baseline records; there is no weight training
-inside this plugin yet, no live teacher integration, and no measured claim of
+ordinary next-token baseline records. A separate [automatic runner](./AUTO_TRAINING.md)
+now uses a trained small GPT reviewer and feeds Brain feedback into external
+training. There is no weight training inside this plugin or measured claim of
 speedup, lower VRAM, higher accuracy or autonomous improvement.
 
 ## Try the implemented loop
@@ -166,7 +167,9 @@ The subsequent composition/feedback experiment still needs a trainer that:
 6. Compares baseline, Brain with teacher and teacher-free conditions under equal
    budgets, accounting for library lookup, verification and teacher costs.
 
-The plugin does not start background training or call paid providers. The
+The plugin's [automatic data exchange](./AUTO_TRAINING.md) responds to external
+requests in the fixed test-vault queue, using the same history repository as
+manual imports. The plugin does not start background training or call paid providers. The
 external runner starts GPU work only when explicitly invoked without `--inspect`.
 General semantic proof and personal-note mutation remain outside this experiment.
 

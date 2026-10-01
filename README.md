@@ -164,8 +164,11 @@ The plugin does not launch GPU jobs or call paid providers. A separate
 and exports compatible records. It does not yet generate or train with objects.
 A separate [definition-prediction experiment](./OBJECT_TRAINING.md) trains a tiny
 GPT on example pairs and submits predicted affine definitions for exact checking.
-It uses a fixed expression language and does not yet learn composition or feed
-Brain's library back into training.
+It uses a fixed expression language and does not yet learn composition.
+The [automatic local loop](./AUTO_TRAINING.md) adds a separately trained small
+GPT reviewer, automatic Brain import/export, and training-only priority replay
+and object-derived rehearsal in the next round. A self-contained Windows
+launcher removes repeated extraction and manual round imports.
 The bundled examples are marked
 `instrument` and do not represent trained models or measured model improvements.
 See [TRAINING_LAB.md](./TRAINING_LAB.md) for the format, validation boundaries,

@@ -75,12 +75,15 @@ candidate reference. Candidate revisions receive new IDs; semantically identical
 objects from different rounds remain separate provenance records. Thus Brain's
 cumulative object count is not the number of unique discovered functions.
 
-The mode is `teacher_free`: exact equivalence is the acceptance gate. This name
+This standalone runner's mode is `teacher_free`: exact equivalence is the acceptance gate. This name
 is an existing protocol setting; the experiment starts with supervised labels
 and an external deterministic checker. It is **not** evidence of an AI that has
 progressed to independent self-training. Teacher integration, object-library
 consumption, composition/routing training and autonomous improvement remain
-future work. Exported objects are not yet consumed by this runner.
+future work for this standalone runner. The separate
+[automatic loop](./AUTO_TRAINING.md) now adds a trained reviewer and consumes
+Brain's accepted objects for training-only rehearsal and prioritizes rejected
+training tasks. It does not yet learn composition.
 
 Compute timing includes updates but excludes evaluation, checkpoint writes and
 startup; it is not total execution time. The cap can overrun by one update.

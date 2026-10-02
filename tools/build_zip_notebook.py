@@ -23,7 +23,7 @@ def build(out):
 
 先搭建，再开 GPU。这个 Notebook 内嵌校验过的脚本，不用解压或 clone。
 第 1–3 步不下载模型、不调用老师、不训练。收集和训练步骤默认关闭。
-已用随机微型 Qwen2 检查前向与真实梯度；真实模型/GPU 尚未运行。
+已用随机微型 Apertus 和 Qwen2 检查前向与真实梯度；真实模型/GPU 尚未运行。
 
 首轮：学生初稿 → Apertus 一个提示 → 学生修订 → 程序核验 → zip → 短训练。
 老师意见不是证明；自然语言解释尚无自动真值证书。
@@ -56,13 +56,18 @@ PLAN = WORK / ('plan-' + uuid.uuid4().hex[:8])
 run(['prepare', '--out', PLAN], timeout=30)
 """), cell("markdown", """## 2. 填好配置（先不要申请 GPU）
 
-`STUDENT_PATH` 是已经下载好的 Qwen2.5-0.5B-Instruct **完整快照目录**。
-版本沿用 7ae557604adf67be50417f59c2c2f167def9a775；原 17M GPT 不用于此实验。
+学生选用 `swiss-ai/Apertus-v1.1-0.5B-Instruct`。
+固定版本 `a140fd61fb57422c36a26301caea17edee799874`，使用完整 BF16 safetensors，
+不使用推理专用量化文件。原 17M GPT 不用于此实验。
+`STUDENT_PATH` 指向完整快照；已有文件可直接填写，或开启下面的独立下载步骤。
 老师用独立 Apertus 聊天服务，活动 CSCS 推理或另行部署均可。
 `TEACHER_BASE_URL` 是 /v1 这类 API 前缀；实际服务模型名按服务填写。
 老师部署身份先声明并保存，客户端不能独立验证权重版本。
 这些配置可以保存在 Notebook；密钥不要写进 Notebook。
-"""), cell("code", """STUDENT_PATH = Path('/path/to/Qwen2.5-0.5B-Instruct')
+"""), cell("code", """STUDENT_ID = 'swiss-ai/Apertus-v1.1-0.5B-Instruct'
+STUDENT_REVISION = 'a140fd61fb57422c36a26301caea17edee799874'
+STUDENT_PATH = WORK / 'models' / 'Apertus-v1.1-0.5B-Instruct'
+RUN_DOWNLOAD = False  # 只下载文件；不申请 GPU、不推理、不调用老师
 TEACHER_BASE_URL = ''
 TEACHER_MODEL = 'swiss-ai/Apertus-v1.5-8B'
 TEACHER_REVISION = ''  # 服务部署版本标签；不冒充自动核实
@@ -78,6 +83,37 @@ RUN_BASELINE = False  # 先做学生起点检查；没有老师调用
 BASELINE_RUN = WORK / ('baseline-' + uuid.uuid4().hex[:8])
 RUN_TRAIN = False
 RUN_FINAL = False     # 设置锁定前不要打开最终公开开发测试
+"""), cell("markdown", """## 2.5. 可选：下载固定版本的学生（CPU 环境即可）
+
+默认关闭。没有快照时，先安装下一节的依赖，再把 `RUN_DOWNLOAD` 改为 True，
+单独运行此格。它只请求官方模型文件，匿名下载，不调用推理或老师；需要网络和磁盘。
+不自动安装 PyTorch，不自动重试整个任务。中断后的缓存可用于下次手动重跑。
+"""), cell("code", """if RUN_DOWNLOAD:
+    import textwrap
+    download_code = textwrap.dedent(\"\"\"
+        import json, sys
+        from pathlib import Path
+        from huggingface_hub import snapshot_download
+        model_id, revision, output = sys.argv[1:]
+        destination = Path(output)
+        identity = dict(modelId=model_id, revision=revision)
+        marker = destination/'lain-snapshot.json'
+        if destination.exists() and any(destination.iterdir()):
+            if not marker.is_file() or json.loads(marker.read_text()) != identity:
+                raise ValueError('下载目标包含其它版本；请使用新的 STUDENT_PATH')
+        destination.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps(identity))
+        snapshot_download(repo_id=model_id, revision=revision, token=False, local_dir=destination,
+            allow_patterns=['config.json', 'generation_config.json', 'model.safetensors',
+                            'tokenizer.json', 'tokenizer_config.json', 'special_tokens_map.json',
+                            'chat_template.jinja'], max_workers=2)
+        print('Downloaded fixed revision', revision)
+    \"\"\")
+    subprocess.run([sys.executable, '-c', download_code, STUDENT_ID, STUDENT_REVISION, str(STUDENT_PATH)],
+                   check=True, timeout=900)
+    print('学生文件已下载：', STUDENT_PATH)
+else:
+    print('没有下载；可使用已有完整快照。')
 """), cell("markdown", """## 3. 检查环境（不加载权重）
 
 需要已有 PyTorch；学生使用 Transformers 4.57.6。缺依赖时先在独立环境
@@ -163,7 +199,7 @@ else:
 
 保留 `lain-zip-pilot` 目录中的 JSON、适配器 safetensors、archive 和老师缓存，
 并记录 GPU 型号、实际耗时、额度及网络错误。Notebook 不替你关闭云端实例，
-需要在魔搭控制台停止实例。原 Qwen 快照不被修改。
+需要在魔搭控制台停止实例。原学生快照不被修改。
 
 下一阶段：冻结材料并匹配总预算，多种子分别检验 SFT、进展奖励、文本/zip
 以及调度的贡献。当前没有 Apertus 真实调用或 GPU 成功记录，也没有自我升级结论。

@@ -4,8 +4,8 @@
 配套 `tools/research_reward_probe.py` 只核验手写候选的奖励规则与调度规则，
 不生成学生解释、不训练模型、不证明方法优于对照。
 
-新增 [Apertus zip 首轮入口](./ZIP_PILOT.md)：冻结 Qwen 的实际 zip 前向接口、
-监督热身和有限两步策略更新已用随机微型 Qwen2 检查。它尚未接入真实
+新增 [Apertus zip 首轮入口](./ZIP_PILOT.md)：冻结 Apertus/Qwen2 的实际 zip 前向接口、
+监督热身和有限两步策略更新已用随机微型 Apertus 和 Qwen2 检查。它尚未接入真实
 Apertus/预训练权重/GPU，尚无可训练研究控制器、critic 或完整 KL/预算对照。
 不要将这部分实现等同于下文完整研究方案已完成。
 
@@ -194,7 +194,7 @@ L_{actor}=-\sum_t\operatorname{stopgrad}(G_t-V_\nu(s_t))
 结果见 [RESEARCH_REWARD_PROBE_RESULT.json](./RESEARCH_REWARD_PROBE_RESULT.json)。
 
 局部实现：`zip_pilot.py` 已有真实表示读取和短策略梯度路径，用随机微型
-Qwen2 的真实采样/参数更新做 CPU 检查；完整材料收集测试用显式手写 fixture。
+Apertus/Qwen2 的真实采样/参数更新做 CPU 检查；完整材料收集测试用显式手写 fixture。
 未完成：真实预训练学生解释/zip 效果、真实 Apertus 接入、GPU/魔搭运行、
 研究控制器及任何效果/成本优势证明。手写干跑不得称为训练实验结果。
 旧 affine 负对照结果继续保留；它没有实现此方案。

@@ -1,4 +1,4 @@
-"""A frozen Qwen2 with a real, bounded zip read path and generation adapter.
+"""A frozen Apertus or Qwen2 with a bounded zip read path and adapter.
 
 The pilot attends to a small frozen text archive. It has no discrete calling
 controller or learned research scheduler. Only added modules are optimized.
@@ -17,15 +17,15 @@ def state_digest(module):
         value = value.detach().cpu().contiguous()
         digest.update(str(value.dtype).encode())
         digest.update(str(tuple(value.shape)).encode())
-        digest.update(value.view(torch.uint8).numpy().tobytes())
+        digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())
     return digest.hexdigest()
 
 
 class ZipPilot(nn.Module):
     def __init__(self, base, tokenizer, notes, *, rank=32, slots=2, mode="zip"):
         super().__init__()
-        if base.config.model_type != "qwen2" or not 1 <= len(notes) <= 12:
-            raise ValueError("Need a Qwen2 student and 1..12 certified training notes")
+        if base.config.model_type not in {"apertus", "qwen2"} or not 1 <= len(notes) <= 12:
+            raise ValueError("Need an Apertus/Qwen2 student and 1..12 certified training notes")
         if mode not in {"zip", "text", "none"}:
             raise ValueError("Unknown memory mode")
         self.base, self.tokenizer, self.notes, self.mode = base, tokenizer, list(notes), mode

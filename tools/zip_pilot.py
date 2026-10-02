@@ -47,7 +47,7 @@ def prepare(args):
         next="preflight -> student baseline -> collect only train -> inspect corpus -> train -> separate final evaluation",
         limits=dict(trainObjects=6, baselineStudentCalls=4, teacherCalls=6, studentCallsPerObject=2, teacherOutputTokens=256,
                     studentOutputTokens=128, warmupSteps=4, policyEpisodes=2, stepsPerEpisode=2),
-        requires=["usable pretrained Qwen2.5 student snapshot", "Apertus endpoint and declared deployment identity",
+        requires=["usable pretrained Apertus-v1.1-0.5B-Instruct student snapshot", "Apertus endpoint and declared deployment identity",
                   "GPU identity/VRAM inspection before selecting a cloud deployment"],
         noAutomationOf=["cloud allocation", "credential setup", "teacher model deployment", "model download"]))
     print(f"Prepared offline: {out / 'plan.json'}. GPU allocations=0, teacher calls=0, updates=0.")
@@ -70,9 +70,16 @@ def preflight(args):
 
 def load_student(path, device):
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
     if not path.is_dir():
         raise ValueError("Need an existing local student snapshot; this runner never downloads models")
+    config = AutoConfig.from_pretrained(path, local_files_only=True, trust_remote_code=False)
+    if config.model_type not in {"apertus", "qwen2"}:
+        raise ValueError("Pilot supports Apertus and Qwen2 only")
+    # Reject large family members before allocating weights on CPU or GPU.
+    if not (1 <= config.num_hidden_layers <= 32 and 1 <= config.hidden_size <= 1536
+            and 1 <= config.intermediate_size <= 8192 and 1 <= config.vocab_size <= 160000):
+        raise ValueError("Student configuration exceeds the small-model pilot bounds")
     if device == "cuda":
         if not torch.cuda.is_available():
             raise ValueError("CUDA unavailable")
@@ -90,8 +97,8 @@ def load_student(path, device):
     tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True, trust_remote_code=False)
     model = AutoModelForCausalLM.from_pretrained(path, local_files_only=True, trust_remote_code=False,
         use_safetensors=True, dtype=dtype, attn_implementation="sdpa").to(device).eval().requires_grad_(False)
-    if model.config.model_type != "qwen2" or sum(p.numel() for p in model.parameters()) > 600_000_000:
-        raise ValueError("First pilot supports Qwen2 up to 600M parameters only")
+    if sum(p.numel() for p in model.parameters()) > 600_000_000:
+        raise ValueError("Pilot supports students up to 600M unique parameters only")
     metadata = dict(studentPath=str(path), snapshotSha256=hashes, architecture=model.config.model_type,
                     studentParameters=sum(p.numel() for p in model.parameters()), dtype=str(dtype),
                     torch=str(torch.__version__), transformers=version("transformers"), device=device, attention="sdpa")

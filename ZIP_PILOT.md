@@ -1,7 +1,7 @@
 # Apertus 指导的首轮 zip 训练尝试
 
-2026-10-02。**短训练入口已实现并用随机微型 Qwen2 做 CPU 检查；真实
-Apertus、预训练 Qwen 和魔搭 GPU 尚未运行。没有效果或成本优势结论。**
+2026-10-02。**短训练入口已实现并用随机微型 Apertus 和 Qwen2 做 CPU 检查；真实
+预训练 Apertus、老师接口和魔搭 GPU 尚未运行。没有效果或成本优势结论。**
 
 我们先搭建，再使用算力。首轮问题是：学生提出局部或完整的数学模型，经
 程序核验和老师批评后形成可调用 zip；奖励能否更新新增参数？先确认语言
@@ -9,14 +9,14 @@ Apertus、预训练 Qwen 和魔搭 GPU 尚未运行。没有效果或成本优�
 
 直接打开 [Lain-Apertus-Pilot.ipynb](./notebooks/Lain-Apertus-Pilot.ipynb)。
 Notebook 内嵌四个校验过的 Python 文件，不需要 git clone 或解压安装。
-前几个单元格只准备目录、配置和检查环境，不下载模型或调用老师；起点推理、有成本
+默认单元格只准备目录、配置和检查环境，不下载模型或调用老师；独立下载、起点推理、有成本
 的收集与训练单元格默认不开启。在魔搭 CPU 环境准备这些内容即可。
 
 ## 算力怎样分工
 
 | 角色 | 当前选择 | 首轮职责 |
 | --- | --- | --- |
-| 学生 | 已检查可用的 Qwen2.5-0.5B-Instruct 本地快照 | 用自己的话写初稿、修订、读取 zip、学习 |
+| 学生 | Apertus-v1.1-0.5B-Instruct 完整本地快照，先检查起点 | 用自己的话写初稿、修订、读取 zip、学习 |
 | 老师 | 冻结 Apertus-v1.5-8B 的聊天推理接口 | 指出缺项、适用范围及一个反例/提示 |
 | 核验器 | 有界 AST + 精确有理多项式系数 | 确认公式、局部误差证书及有效覆盖 |
 | Brain | 首轮使用可审计 JSON 存储 | 留下学生原稿、修订、zip、证据与奖励 |
@@ -107,20 +107,29 @@ Apertus 最多审阅 6 次，每次最多输出 256 tokens；学生每次最多 
 
 Notebook 中设置本地学生快照路径、老师的 API 前缀、served model 和部署
 revision 标签。密钥通过环境变量 `LAIN_TEACHER_API_KEY` 输入，Notebook
-输出和文件不包含密钥。脚本不替你下载模型；已有 Qwen 快照可复用。
+输出和文件不包含密钥。训练脚本不下载模型；Notebook 提供默认关闭的固定版本下载格。已有完整快照可复用。
 若魔搭不能访问 Hugging Face，先在可访问的环境下载已固定版本的快照再
 上传，或核对镜像的完整文件和哈希；不自动将未知镜像当成同一个版本。
 
-学生版本沿用 `STUDENT_PROBE.md` 中固定的
-`Qwen/Qwen2.5-0.5B-Instruct`，revision
-`7ae557604adf67be50417f59c2c2f167def9a775`。它替换原来的 17M GPT 及 tokenizer，
-没有继承那份已出现重复输出的权重。其真实起点能力仍需先检查。
+学生选用 `swiss-ai/Apertus-v1.1-0.5B-Instruct`，固定 revision
+`a140fd61fb57422c36a26301caea17edee799874`（官方仓库当前提交，经公开 API 查询）。
+使用完整 BF16 safetensors，不使用 FP8/NVFP4 等推理量化文件。
+官方模型卡：https://huggingface.co/swiss-ai/Apertus-v1.1-0.5B-Instruct 。
+Mini v1.1 可用普通 Transformers 4.57.6；不要和需要专用分支的老师 v1.5 混淆。
+它替换旧 GPT 及 tokenizer，不继承旧权重；真实表达/建模能力仍需先检查。
+Notebook 的 `RUN_DOWNLOAD=False` 默认不联网；改为 True 才通过
+`huggingface_hub.snapshot_download` 匿名请求固定版本的允许文件。无需 GPU。
+已有快照可直接设置 `STUDENT_PATH`；中断下载可手动重跑，客户端复用缓存。
+下载记录是声明来源；训练仍记录实际文件 SHA256，不仅相信目录名称。
+
+Qwen2 适配与测试继续保留为候选对照。加载前拒绝不支持的架构及过大的配置，
+加载后核验唯一参数数不超过 600M；Apertus 8B 不会被误当成首轮小学生。
 
 手动 CLI 同样可用（从项目根目录运行）：
 
 ```bash
 python tools/zip_pilot.py prepare --out ./pilot-plan
-python tools/zip_pilot.py preflight --student-path /path/to/qwen-snapshot
+python tools/zip_pilot.py preflight --student-path /path/to/apertus-mini-snapshot
 ```
 
 `baseline` 需要 `--student-path` 与 `--out`，4 次短推理，没有老师及更新。
@@ -158,15 +167,20 @@ python tools/zip_pilot.py preflight --student-path /path/to/qwen-snapshot
 ## 当前检查证据
 
 `tests/zip-pilot.test.py` 在 CPU、PyTorch 2.10.0、Transformers 4.57.6 下通过。
-用随机 2 层、宽度 32 的真实 Qwen2（不是官方预训练权重），检查：
+用随机 2 层、宽度 32 的真实 Apertus（xIELU、绑定 embedding）和 Qwen2（不是官方预训练权重），检查：
 
 - 精确/局部证书、重复无收益、复制题目及危险语法拒绝。
 - 本地 HTTP 模拟老师的真实请求、缓存、预算、训练/评测隔离、密钥不入记录。
 - zip 关闭及 key/value 错配的前向变化，所有新增模块的梯度与参数变化。
 - 真实监督及两步策略梯度更新，基础权重与梯度保持冻结。
 - 只保存适配器、从文件重新加载、最终评测无老师和更新。
+- text/none 对照只训练生成适配器，zip 模块不被读取；过大的配置在加载权重前拒绝。
+
+`tests/zip-notebook.test.py` 执行默认全部代码格，确认只有离线准备与环境检查；
+核验内嵌文件哈希。固定版本下载/中断重跑/版本混用拒绝使用本地模拟下载器检查，
+没有下载真实权重。
 
 老师材料收集的完整传输测试使用显式手写 fixture，不把它当学生发现。
 微型随机模型的真实采样通常不产生有效数学定义，不能用其结果估计预训练
-学生能力。真实 Apertus 接口、官方 Qwen 权重、GPU 显存/速度、魔搭网络及
+学生能力。真实老师接口、官方学生权重、GPU 显存/速度、魔搭网络及
 Notebook 云端执行尚未核实。

@@ -68,6 +68,7 @@ run(['prepare', '--out', PLAN], timeout=30)
 STUDENT_REVISION = 'a140fd61fb57422c36a26301caea17edee799874'
 STUDENT_PATH = WORK / 'models' / 'Apertus-v1.1-0.5B-Instruct'
 RUN_DOWNLOAD = False  # 只下载文件；不申请 GPU、不推理、不调用老师
+DOWNLOAD_ENDPOINT = 'https://huggingface.co'  # 可手动选 https://hf-mirror.com；下载后仍验证官方哈希
 TEACHER_BASE_URL = ''
 TEACHER_MODEL = 'swiss-ai/Apertus-v1.5-8B'
 TEACHER_REVISION = ''  # 服务部署版本标签；不冒充自动核实
@@ -88,13 +89,54 @@ RUN_FINAL = False     # 设置锁定前不要打开最终公开开发测试
 默认关闭。没有快照时，先安装下一节的依赖，再把 `RUN_DOWNLOAD` 改为 True，
 单独运行此格。它只请求官方模型文件，匿名下载，不调用推理或老师；需要网络和磁盘。
 不自动安装 PyTorch，不自动重试整个任务。中断后的缓存可用于下次手动重跑。
+只有七个必需文件的大小和官方固定提交的内容哈希均通过，才显示完成。
+目录已存在或下载函数正常返回不代表快照完整；断网返回不完整缓存会报错。
+官方入口不可访问时可手动设置 `DOWNLOAD_ENDPOINT='https://hf-mirror.com'`。
+这是第三方文件镜像，不是官方服务；匿名请求，仍按官方提交的全部文件哈希核验。
 """), cell("code", """if RUN_DOWNLOAD:
     import textwrap
     download_code = textwrap.dedent(\"\"\"
-        import json, sys
+        import hashlib, json, sys
         from pathlib import Path
         from huggingface_hub import snapshot_download
-        model_id, revision, output = sys.argv[1:]
+        EXPECTED_FILES = {
+            'config.json': {'size': 853, 'gitSha1': 'fed97bcf53909198ea671fa6c39071d58150b9ae'},
+            'generation_config.json': {'size': 144, 'gitSha1': 'f042bd90602218eab507817019126824a5a0d211'},
+            'model.safetensors': {'size': 1145165288, 'sha256': 'b7fda2f3e6a47bc00de20f88f38ab52fb2d1df68bf9b4c0016a99dd4d2aa8b3d'},
+            'tokenizer.json': {'size': 17078368, 'sha256': 'be12f4375d655cc740864e3a9041bcddd8477942f209d9e7f27f6c8767162638'},
+            'tokenizer_config.json': {'size': 177274, 'gitSha1': 'b4c05699fb3617941f2c5a0030b8d6a2dfcf9424'},
+            'special_tokens_map.json': {'size': 560, 'gitSha1': 'aada9e1ceb41556521fda130b61871ad61e17015'},
+            'chat_template.jinja': {'size': 5250, 'gitSha1': 'a46508148deb7081bfcd25e89735a51226b2426b'},
+        }
+
+        def verify_files(directory, expected):
+            missing = [name for name in expected if not (directory/name).is_file()]
+            if missing:
+                raise ValueError('学生快照不完整；缺少文件：' + ', '.join(missing))
+            for name, record in expected.items():
+                file = directory/name
+                size = file.stat().st_size
+                if size != record['size']:
+                    raise ValueError('学生文件大小不匹配：' + name)
+                if 'sha256' in record:
+                    digest = hashlib.sha256()
+                    wanted = record['sha256']
+                else:
+                    digest = hashlib.sha1()
+                    digest.update(('blob ' + str(size)).encode() + bytes([0]))
+                    wanted = record['gitSha1']
+                with file.open('rb') as stream:
+                    for block in iter(lambda: stream.read(1024 * 1024), b''):
+                        digest.update(block)
+                if digest.hexdigest() != wanted:
+                    raise ValueError('学生文件内容哈希不匹配：' + name)
+
+        model_id, revision, output, endpoint = sys.argv[1:]
+        if endpoint not in {'https://huggingface.co', 'https://hf-mirror.com'}:
+            raise ValueError('下载入口只支持官方 Hub 或显式选择的文件镜像')
+        if (model_id, revision) != ('swiss-ai/Apertus-v1.1-0.5B-Instruct',
+                                   'a140fd61fb57422c36a26301caea17edee799874'):
+            raise ValueError('此下载格只验证固定版本的 Apertus Mini；请勿替换模型或版本')
         destination = Path(output)
         identity = dict(modelId=model_id, revision=revision)
         marker = destination/'lain-snapshot.json'
@@ -103,15 +145,20 @@ RUN_FINAL = False     # 设置锁定前不要打开最终公开开发测试
                 raise ValueError('下载目标包含其它版本；请使用新的 STUDENT_PATH')
         destination.mkdir(parents=True, exist_ok=True)
         marker.write_text(json.dumps(identity))
-        snapshot_download(repo_id=model_id, revision=revision, token=False, local_dir=destination,
-            allow_patterns=['config.json', 'generation_config.json', 'model.safetensors',
-                            'tokenizer.json', 'tokenizer_config.json', 'special_tokens_map.json',
-                            'chat_template.jinja'], max_workers=2)
-        print('Downloaded fixed revision', revision)
+        snapshot_download(repo_id=model_id, revision=revision, token=False, local_dir=destination, endpoint=endpoint,
+            allow_patterns=list(EXPECTED_FILES), max_workers=2)
+        verify_files(destination, EXPECTED_FILES)
+        print('Verified all 7 files for fixed revision', revision)
     \"\"\")
-    subprocess.run([sys.executable, '-c', download_code, STUDENT_ID, STUDENT_REVISION, str(STUDENT_PATH)],
-                   check=True, timeout=900)
-    print('学生文件已下载：', STUDENT_PATH)
+    endpoint = globals().get('DOWNLOAD_ENDPOINT', 'https://huggingface.co')
+    download_env = os.environ.copy()
+    download_env['HF_HUB_DISABLE_IMPLICIT_TOKEN'] = '1'
+    if endpoint == 'https://hf-mirror.com':
+        download_env['HF_HUB_DISABLE_XET'] = '1'
+    subprocess.run([globals().get('PY', sys.executable), '-u', '-c', download_code,
+                    STUDENT_ID, STUDENT_REVISION, str(STUDENT_PATH), endpoint],
+                   check=True, timeout=900, env=download_env)
+    print('学生快照完整且校验通过：', STUDENT_PATH)
 else:
     print('没有下载；可使用已有完整快照。')
 """), cell("markdown", """## 3. 检查环境（不加载权重）

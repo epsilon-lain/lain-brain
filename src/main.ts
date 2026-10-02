@@ -38,16 +38,31 @@ import {
   openConceptMaintenanceWorkspace
 } from "./BrainMaintenanceWorkspaceModal";
 import { SemanticPropagationCoordinator } from "./SemanticPropagationCoordinator";
+import { TrainingLabRepository } from "./TrainingLab";
+import { TrainingLabModal } from "./TrainingLabModal";
+import { TrainingLabSync } from "./TrainingLabSync";
 
 export default class LainBrainPlugin extends Plugin {
   settings: LainBrainSettings = migrateLainBrainSettings(undefined);
   session!: LainBrainSession;
   semanticPropagation!: SemanticPropagationCoordinator;
+  trainingLab!: TrainingLabRepository;
   private readonly namingOnboarding =
     new NamingOnboardingSession();
 
   async onload(): Promise<void> {
     await this.loadSettings();
+
+    const trainingPath = `${this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`}/training-lab.json`;
+    this.trainingLab = new TrainingLabRepository({
+      read: async () => await this.app.vault.adapter.exists(trainingPath)
+        ? this.app.vault.adapter.read(trainingPath) : null,
+      write: async (source) => { await this.app.vault.adapter.write(trainingPath, source); }
+    });
+    const trainingSync = new TrainingLabSync(this.app.vault.adapter, this.trainingLab);
+    this.registerInterval(window.setInterval(() => {
+      void trainingSync.tick().catch((error) => console.error("Training Lab sync failed", error));
+    }, 1500));
 
     this.session = new LainBrainSession(
       this.app,
@@ -202,6 +217,11 @@ export default class LainBrainPlugin extends Plugin {
           this.semanticPropagation
         );
       }
+    });
+    this.addCommand({
+      id: "open-training-lab",
+      name: "Open Training Lab",
+      callback: () => { new TrainingLabModal(this.app, this.trainingLab).open(); }
     });
     this.semanticPropagation.resumeIncompleteJobs();
   }

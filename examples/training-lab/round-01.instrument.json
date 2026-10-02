@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "kind": "instrument",
+  "runId": "example-affine",
+  "round": 1,
+  "recordedAt": "2026-10-01T00:00:00.000Z",
+  "student": {
+    "model": "synthetic-example-not-trained",
+    "parameterCount": 1,
+    "checkpointSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "dataset": {
+    "trainSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "evalSha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "config": {
+    "mode": "teacher_free",
+    "device": "synthetic-example",
+    "seed": 0
+  },
+  "measurements": {
+    "steps": 1,
+    "trainLoss": 0,
+    "trainSeconds": 0
+  },
+  "predictions": [],
+  "candidates": [
+    {
+      "id": "double-plus-one",
+      "label": "2x + 1",
+      "definition": {
+        "op": "add",
+        "left": {
+          "op": "scale",
+          "factor": "2",
+          "body": {
+            "op": "x"
+          }
+        },
+        "right": {
+          "op": "const",
+          "value": "1"
+        }
+      },
+      "reference": {
+        "taskId": "affine-001",
+        "split": "train",
+        "definition": {
+          "op": "add",
+          "left": {
+            "op": "scale",
+            "factor": "2",
+            "body": {
+              "op": "x"
+            }
+          },
+          "right": {
+            "op": "const",
+            "value": "1"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -91,17 +91,21 @@ def load_student(path, device):
     else:
         dtype = torch.float32
         torch.set_num_threads(2)
-    hashes = {p.name: file_digest(p) for p in path.iterdir() if p.is_file() and p.suffix in {".json", ".safetensors", ".txt"}}
+    hashes = {p.name: file_digest(p) for p in path.iterdir() if p.is_file() and p.suffix in {".json", ".safetensors", ".txt", ".jinja"}}
     if not any(name.endswith(".safetensors") for name in hashes):
         raise ValueError("Only local safetensors student checkpoints are supported")
-    tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True, trust_remote_code=False)
+    # 4.57.6 misdetects local non-Mistral configs saved by >4.57.2 as Mistral.
+    # Neither supported architecture is Mistral: preserve the snapshot's regex.
+    tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True, trust_remote_code=False,
+                                              fix_mistral_regex=False)
     model = AutoModelForCausalLM.from_pretrained(path, local_files_only=True, trust_remote_code=False,
         use_safetensors=True, dtype=dtype, attn_implementation="sdpa").to(device).eval().requires_grad_(False)
     if sum(p.numel() for p in model.parameters()) > 600_000_000:
         raise ValueError("Pilot supports students up to 600M unique parameters only")
     metadata = dict(studentPath=str(path), snapshotSha256=hashes, architecture=model.config.model_type,
                     studentParameters=sum(p.numel() for p in model.parameters()), dtype=str(dtype),
-                    torch=str(torch.__version__), transformers=version("transformers"), device=device, attention="sdpa")
+                    torch=str(torch.__version__), transformers=version("transformers"), device=device, attention="sdpa",
+                    tokenizerRegexPolicy="preserve-local-snapshot")
     return model, tokenizer, metadata
 
 

@@ -19,8 +19,8 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 from research_reward_probe import add, mul, poly
 
-PROTOCOL = "lain-zip-pilot-v1"
-SCHEMA = '{"definition":"your short explanation", "expression":"expanded polynomial", "scope":"exact or local", "radius":"0.1", "status":"asserted or conjecture"}'
+PROTOCOL = "lain-zip-pilot-v2"
+SCHEMA = '{"definition":"your short explanation", "expression":"expanded polynomial", "scope":"exact", "radius":"0.1", "status":"asserted"}'
 
 
 def canonical(data):
@@ -89,7 +89,7 @@ def tasks(split):
 
 
 def prompt(task, feedback=None, notes=None):
-    messages = [{"role": "system", "content": "Model a mathematical object in your own words. Output only a JSON object using this schema: " + SCHEMA + ". Variables are x,y,u,v. No function calls. Exact formulas must be expanded sums of monomials; restating the original difference is not a model. Mark unsupported guesses as conjecture. Natural-language explanations are reviewed separately."}]
+    messages = [{"role": "system", "content": "Model a mathematical object in your own words. Output only a JSON object using this schema: " + SCHEMA + ". Replace the definition and expression placeholders with your model. Choose one scope value: exact or local. Choose one status value: asserted or conjecture; never copy the combined alternatives. All five values are strings. Keep definition to one short sentence and close the JSON with }. Variables are x,y,u,v. Use ** for powers, never ^. No function calls. Exact formulas must be expanded sums of monomials; restating the original difference is not a model. Mark unsupported guesses as conjecture. Natural-language explanations are reviewed separately."}]
     body = task.public()["problem"]
     if notes:
         body += "\nTraining notes (their formulas have certificates; prose is not certified):\n" + "\n".join(notes)
@@ -134,6 +134,8 @@ def verify(task, raw):
             raise ValueError("Explanation length is invalid")
         if claim["status"] not in {"asserted", "conjecture"}:
             raise ValueError("Unsupported status")
+        if claim["scope"] not in {"exact", "local"}:
+            raise ValueError("Unsupported scope")
         result["asserted"] = claim["status"] == "asserted"
         result["claim"] = claim
         candidate = poly(claim["expression"])

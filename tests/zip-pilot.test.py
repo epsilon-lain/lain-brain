@@ -22,7 +22,7 @@ from transformers import PreTrainedTokenizerFast, Qwen2Config, Qwen2ForCausalLM,
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-from zip_pilot_protocol import Teacher, canonical, fingerprint, prompt, strict_json, tasks, transition, verify, write_json
+from zip_pilot_protocol import PROTOCOL, SCHEMA, Teacher, canonical, fingerprint, prompt, strict_json, tasks, transition, verify, write_json
 from zip_pilot_model import ZipPilot, encode_prompt, generate, state_digest, token_logps
 import zip_pilot as pilot
 
@@ -35,6 +35,12 @@ def claim(expression="2*x*u+u**2", scope="exact", radius="0.1", status="asserted
 
 
 square = tasks("train")[0]
+schema = strict_json(SCHEMA)
+assert schema["scope"] in {"exact", "local"} and schema["status"] in {"asserted", "conjecture"}
+assert "Use ** for powers, never ^" in prompt(square)[0]["content"]
+assert verify(square, claim(status="asserted or conjecture"))["reason"] == "Unsupported status"
+assert verify(square, claim(scope="exact or local"))["reason"] == "Unsupported scope"
+assert "claim" not in verify(square, claim(scope="exact or local"))
 assert verify(square, claim())["score"] == 1
 assert verify(square, claim("2*x*u", "local"))["score"] == 0.4
 assert verify(square, claim("2*x*u", "local", "0.2"))["score"] == 0.4
@@ -207,8 +213,10 @@ with tempfile.TemporaryDirectory(prefix="zip-pilot-test-") as temporary:
         snapshot = root / "student"
         base.save_pretrained(snapshot, safe_serialization=True)
         tokenizer.save_pretrained(snapshot)
+        template_file = snapshot / "chat_template.jinja"
+        template_file.write_text(tokenizer.chat_template)
         corpus_file = root / "corpus.json"
-        write_json(corpus_file, dict(protocol="lain-zip-pilot-v1", notes=[dict(task=asdict(square), raw=claim())]))
+        write_json(corpus_file, dict(protocol=PROTOCOL, notes=[dict(task=asdict(square), raw=claim())]))
         args = type("Args", (), dict(corpus=corpus_file, out=root/"run", seed=1337, student_path=snapshot,
             device="cpu", rank=8, mode="zip", warmup_steps=1, pg_episodes=1, max_new_tokens=3, lr=0.001, max_seconds=60))()
         pilot.train(args)
@@ -223,6 +231,8 @@ with tempfile.TemporaryDirectory(prefix="zip-pilot-test-") as temporary:
         baseline = json.loads((args.out/"baseline.json").read_text())
         assert baseline["teacherCalls"] == baseline["trainingUpdates"] == 0
         assert len(baseline["records"]) == 4 and not baseline["languageAbilityAutomaticallyCertified"]
+        assert baseline["metadata"]["snapshotSha256"]["chat_template.jinja"] == pilot.file_digest(template_file)
+        assert baseline["metadata"]["tokenizerRegexPolicy"] == "preserve-local-snapshot"
         # Teacher-free collection path uses an explicit test double, never disguises
         # hand fixtures as student-generated research results.
         collect_args = type("Args", (), dict(out=root/"collect", student_path=snapshot, device="cpu",
@@ -230,15 +240,39 @@ with tempfile.TemporaryDirectory(prefix="zip-pilot-test-") as temporary:
             teacher_cache=root/"teacher-cache", teacher_key_env="unused", max_teacher_calls=6,
             max_seconds=60, max_new_tokens=3))()
         collect_args.baseline = root/"fixture-baseline.json"
-        write_json(collect_args.baseline, dict(protocol="lain-zip-pilot-v1", formatReady=True,
+        write_json(collect_args.baseline, dict(protocol=PROTOCOL, formatReady=True,
                    metadata=baseline["metadata"]))
         blocked = root/"failed-baseline.json"
-        write_json(blocked, dict(protocol="lain-zip-pilot-v1", formatReady=False))
+        write_json(blocked, dict(protocol=PROTOCOL, formatReady=False))
         collect_args.baseline = blocked
         with patch.object(pilot, "Teacher") as forbidden:
             try:
                 pilot.collect(collect_args)
                 raise AssertionError("Failed baseline cannot spend teacher calls")
+            except ValueError:
+                pass
+            forbidden.assert_not_called()
+        collect_args.baseline = root/"fixture-baseline.json"
+        # A changed external chat template is a changed student interface;
+        # reject it before any teacher request, even when it renders identically.
+        original_template = template_file.read_text()
+        template_file.write_text(original_template + "{# audit mutation #}")
+        with patch.object(pilot, "Teacher") as forbidden:
+            try:
+                pilot.collect(collect_args)
+                raise AssertionError("Changed chat template must invalidate the baseline")
+            except ValueError as error:
+                assert "differs from" in str(error)
+            forbidden.assert_not_called()
+        template_file.write_text(original_template)
+        collect_args.out = root/"collect-valid"
+        legacy = root/"legacy-baseline.json"
+        write_json(legacy, dict(protocol="lain-zip-pilot-v1", formatReady=True))
+        collect_args.baseline = legacy
+        with patch.object(pilot, "Teacher") as forbidden:
+            try:
+                pilot.collect(collect_args)
+                raise AssertionError("Old prompt protocol cannot reuse a new baseline")
             except ValueError:
                 pass
             forbidden.assert_not_called()

@@ -140,6 +140,14 @@ python tools/zip_pilot.py preflight --student-path /path/to/apertus-mini-snapsho
 ```
 
 `baseline` 需要 `--student-path` 与 `--out`，4 次短推理，没有老师及更新。
+协议 v2 的 JSON 模板只放合法枚举值；`scope` 和 `status` 的可选值在文字指令中说明，
+要求模型二选一，不把 `asserted or conjecture` 当作一个状态。还明确要求 Python
+幂运算 `**` 和完整的 JSON 结束括号。验证器仍拒绝合并选项、错误公式及不成立的范围，
+没有补齐答案或用格式修正冒充能力提升。v1 起点结果保留，新结果使用新目录并重新检查。
+Transformers 4.57.6 会把部分本地非 Mistral 配置误判为 Mistral（上游问题
+https://github.com/huggingface/transformers/issues/42591 和 #44031）。已限定学生架构为
+Apertus/Qwen2，加载时显式 `fix_mistral_regex=False`，保留快照原有分词正则并记录该策略。
+实际快照哈希也包含外部 `chat_template.jinja`；模板变化会使已检查的起点失效。
 `collect` 需要 `--baseline`、`--teacher-base-url`、`--teacher-model`、`--teacher-revision`、
 `--teacher-cache`、`--student-path`、`--out`；`train` 需要 `--corpus`、
 `--student-path`、`--out`，可选 `--mode none|text|zip`。

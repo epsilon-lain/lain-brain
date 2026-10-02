@@ -7,7 +7,7 @@
 程序核验和老师批评后形成可调用 zip；奖励能否更新新增参数？先确认语言
 与格式、前向接口、梯度、证据和记录，再开展有预算匹配的效果实验。
 
-直接打开 [Lain-Apertus-Pilot.ipynb](./notebooks/Lain-Apertus-Pilot.ipynb)。
+直接打开 [Lain-Apertus-Mini-Pilot.ipynb](./notebooks/Lain-Apertus-Mini-Pilot.ipynb)。
 Notebook 内嵌四个校验过的 Python 文件，不需要 git clone 或解压安装。
 默认单元格只准备目录、配置和检查环境，不下载模型或调用老师；独立下载、起点推理、有成本
 的收集与训练单元格默认不开启。在魔搭 CPU 环境准备这些内容即可。

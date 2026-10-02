@@ -215,4 +215,4 @@ else:
 
 
 if __name__ == "__main__":
-    build(ROOT.parent / "notebooks/Lain-Apertus-Pilot.ipynb")
+    build(ROOT.parent / "notebooks/Lain-Apertus-Mini-Pilot.ipynb")

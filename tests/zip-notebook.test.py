@@ -10,7 +10,7 @@ import tempfile
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-notebook = json.loads((ROOT / "notebooks/Lain-Apertus-Pilot.ipynb").read_text())
+notebook = json.loads((ROOT / "notebooks/Lain-Apertus-Mini-Pilot.ipynb").read_text())
 codes = ["".join(c["source"]) for c in notebook["cells"] if c["cell_type"] == "code"]
 for source in codes:
     ast.parse(source)

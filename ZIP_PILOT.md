@@ -12,6 +12,14 @@
 程序核验和老师批评后形成可调用 zip；奖励能否更新新增参数？先确认语言
 与格式、前向接口、梯度、证据和记录，再开展有预算匹配的效果实验。
 
+用户随后明确当前阶段首先验证写笔记、发现联系、读取自己的 zip 与学习
+是否发生，**发现一条成立的新联系本身就奖励，不要求解决当前题目**。
+新入口是 [Lain-Discover-And-Learn.py](./notebooks/Lain-Discover-And-Learn.py)，
+一次复制到一个代码格运行；方案、界限和本地通路证据见
+[ZIP_DISCOVERY.md](./ZIP_DISCOVERY.md)。默认最多 32 轮联系奖励训练及
+32 轮同起点零奖励对照，基础权重冻结，新的老师请求和 SFT 更新为零。
+没有实际预训练学生效果结论；不再用“四道检查全对”阻止这个机制实验。
+
 直接打开 [Lain-Apertus-Mini-Pilot.ipynb](./notebooks/Lain-Apertus-Mini-Pilot.ipynb)。
 Notebook 内嵌四个校验过的 Python 文件，不需要 git clone 或解压安装。
 默认单元格只准备目录、配置和检查环境，不下载模型或调用老师；独立下载、起点推理、有成本

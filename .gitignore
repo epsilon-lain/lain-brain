@@ -62,6 +62,8 @@ coverage/
 __pycache__/
 *.pyc
 laptop_runs/
+lain-zip-pilot/
+zip_pilot_runs/
 *.log
 *.map
 

@@ -37,16 +37,26 @@ import {
   openConceptMaintenanceWorkspace
 } from "./BrainMaintenanceWorkspaceModal";
 import { SemanticPropagationCoordinator } from "./SemanticPropagationCoordinator";
+import { TrainingLabRepository } from "./TrainingLab";
+import { TrainingLabModal } from "./TrainingLabModal";
 
 export default class LainBrainPlugin extends Plugin {
   settings: LainBrainSettings = migrateLainBrainSettings(undefined);
   session!: LainBrainSession;
   semanticPropagation!: SemanticPropagationCoordinator;
+  trainingLab!: TrainingLabRepository;
   private readonly namingOnboarding =
     new NamingOnboardingSession();
 
   async onload(): Promise<void> {
     await this.loadSettings();
+
+    const trainingPath = `${this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`}/training-lab.json`;
+    this.trainingLab = new TrainingLabRepository({
+      read: async () => await this.app.vault.adapter.exists(trainingPath)
+        ? this.app.vault.adapter.read(trainingPath) : null,
+      write: async (source) => { await this.app.vault.adapter.write(trainingPath, source); }
+    });
 
     this.session = new LainBrainSession(
       this.app,
@@ -176,6 +186,11 @@ export default class LainBrainPlugin extends Plugin {
           this.semanticPropagation
         );
       }
+    });
+    this.addCommand({
+      id: "open-training-lab",
+      name: "Open Training Lab",
+      callback: () => { new TrainingLabModal(this.app, this.trainingLab).open(); }
     });
     this.semanticPropagation.resumeIncompleteJobs();
   }

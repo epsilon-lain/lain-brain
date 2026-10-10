@@ -1,4 +1,5 @@
 import type { App, TFile } from "obsidian";
+import type { AssemblyAIVoiceConfig } from "./AssemblyAIVoiceInput";
 import {
   validateVisionImage,
   VisionProviderRouter
@@ -665,6 +666,11 @@ export class LainBrainSession {
     brainDisplayName: DEFAULT_BRAIN_DISPLAY_NAME,
     hasCompletedNamingOnboarding: false
   });
+  private getAssemblyAIVoice: () => AssemblyAIVoiceConfig = () => ({
+    enabled: false,
+    apiKey: "",
+    speechModel: "universal-3-5-pro"
+  });
   private chatSemanticSession?: ChatSemanticSession;
   private chatSemanticAnalyzer: ChatSemanticAnalyzer = analyzeChatSemantics;
   private semanticPriorState: SemanticPriorState =
@@ -833,6 +839,17 @@ export class LainBrainSession {
   ): void {
     this.getPersonalNaming = provider;
     this.notify();
+  }
+
+  setAssemblyAIVoiceConfigProvider(
+    provider: () => AssemblyAIVoiceConfig
+  ): void {
+    this.getAssemblyAIVoice = provider;
+    this.notify();
+  }
+
+  getAssemblyAIVoiceConfig(): AssemblyAIVoiceConfig {
+    return this.getAssemblyAIVoice();
   }
 
   setChatSemanticAnalyzer(analyzer: ChatSemanticAnalyzer): void {

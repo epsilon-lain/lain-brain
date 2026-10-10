@@ -1,0 +1,45 @@
+name: AssemblyAI Voice CI
+
+on:
+  push:
+    branches:
+      - feat/assemblyai-voice-agent
+  pull_request:
+    paths:
+      - "src/AssemblyAIVoiceInput.ts"
+      - "src/LainBrainChatPanel.ts"
+      - "src/LainBrainSession.ts"
+      - "src/LainBrainSettingTab.ts"
+      - "src/main.ts"
+      - "src/settings.ts"
+      - "tests/assemblyai-voice-input.test.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - "esbuild.config.mjs"
+      - "tsconfig.json"
+      - ".github/workflows/assemblyai-voice-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run test:assemblyai-voice
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lain-brain-assemblyai-voice
+          path: |
+            main.js
+            manifest.json
+            README.md
+            ASSEMBLYAI_HACKATHON.md

@@ -57,6 +57,11 @@ export default class LainBrainPlugin extends Plugin {
       )
     );
     this.session.setPersonalNamingProvider(() => this.settings);
+    this.session.setAssemblyAIVoiceConfigProvider(() => ({
+      enabled: this.settings.assemblyAIVoiceEnabled,
+      apiKey: this.settings.assemblyAIApiKey,
+      speechModel: this.settings.assemblyAISpeechModel
+    }));
     this.session.setChatSemanticDeltaAnalysisEnabledProvider(
       () => this.settings.chatSemanticDeltaAnalysisEnabled
     );

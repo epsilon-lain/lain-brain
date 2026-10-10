@@ -730,3 +730,24 @@ Do not track:
 ## License
 
 Lain Brain is available under the [MIT License](LICENSE).
+
+
+## AssemblyAI Voice Input
+
+The hackathon voice path feeds live microphone transcription into the same
+Lain Brain draft and reasoning pipeline used by typed messages.
+
+1. Open **Settings → Lain Brain → AssemblyAI Voice Input**.
+2. Enable voice input and add an AssemblyAI API key.
+3. Open Lain Brain chat and press the microphone button.
+4. Speak in Mandarin, English, or switch between them.
+5. Press the square stop button, review the final transcript, and send it
+   through the normal Brain pipeline.
+
+The plugin exchanges the saved API key for a one-time streaming token before
+opening the microphone WebSocket. Audio is captured as mono PCM, resampled to
+16 kHz, streamed only while the microphone state says **Listening**, and the
+client sends AssemblyAI's `Terminate` message when stopped.
+
+See [ASSEMBLYAI_HACKATHON.md](ASSEMBLYAI_HACKATHON.md) for the demo path,
+architecture, privacy boundary, and submission checklist.

@@ -36,9 +36,9 @@ def config(ns):
             v=ns.get(n) or os.environ.get(n)
             if isinstance(v,str) and v.strip(): return v.strip()
         return None
-    key=cfg.get('api_key') or pick(('APERTUS_API_KEY','TEACHER_API_KEY','OPENAI_API_KEY','API_KEY','api_key'))
-    url=cfg.get('base_url') or pick(('APERTUS_BASE_URL','TEACHER_BASE_URL','OPENAI_BASE_URL','API_BASE_URL','BASE_URL','base_url'))
-    model=cfg.get('model') or pick(('APERTUS_API_MODEL','APERTUS_MODEL','TEACHER_MODEL','OPENAI_MODEL','API_MODEL'))
+    key=cfg.get('api_key') or pick(('APERTUS_API_KEY','TEACHER_API_KEY','OPENAI_API_KEY','API_KEY','APIKEY','api_key','apikey'))
+    url=cfg.get('base_url') or pick(('APERTUS_BASE_URL','APERTUS_API_BASE_URL','TEACHER_BASE_URL','TEACHER_API_BASE','OPENAI_BASE_URL','API_BASE_URL','API_BASE','BASE_URL','base_url','api_base'))
+    model=cfg.get('model') or pick(('APERTUS_API_MODEL','APERTUS_MODEL','APERTUS_MODEL_ID','TEACHER_MODEL','OPENAI_MODEL','API_MODEL'))
     for n in ('apertus_client','teacher_client','openai_client','client'):
         c=ns.get(n)
         if c is not None and hasattr(c,'base_url'):
@@ -60,7 +60,7 @@ def config(ns):
     if p.scheme=='http' and p.hostname not in ('localhost','127.0.0.1','::1'): raise RuntimeError('Remote API requires HTTPS')
     token_field=cfg.get('token_field','max_tokens')
     if token_field not in ('max_tokens','max_completion_tokens'): raise RuntimeError('Unsupported token_field')
-    budget=int(cfg.get('max_tokens',512))
+    budget=int(cfg.get('max_tokens',1024))
     if not 256<=budget<=2048: raise RuntimeError('max_tokens must be 256..2048')
     extra=cfg.get('extra_body',{})
     if not isinstance(extra,dict) or set(extra)-{'chat_template_kwargs','reasoning_effort','enable_thinking'}:
@@ -234,6 +234,9 @@ def run(namespace):
             'withdrawals':sum(r['afterAction']=='RETRACT' for r in decisive),'verifiedNewFormulas':sum(r['replacementAccepted'] for r in decisive),
             'candidateClosedLoops':sum(r['candidateClosedLoop'] for r in decisive),'oldWrongToNewCorrect':sum(r['oldWrongToNewCorrect'] for r in decisive),
             'correctEvidenceControls':sum(r['correctActionForEvidence'] for r in controls),'evidenceControls':len(controls),
+            'tokenCappedResponses':sum(h['read'](p)['studentOutput']['tokenCapReached'] for p in (out/'raw').glob('*.json')),
+            'emptyVisibleResponses':sum(not h['read'](p)['studentOutput']['raw'].strip() for p in (out/'raw').glob('*.json')),
+            'invalidCategoricalChoices':sum(sum(a=='INVALID' for a in r['properties'].values())+int(r['beforeAction'] is None)+int(r['afterAction'] is None) for r in rows),
             'rows':rows,'statisticalSignificanceClaimed':False,'generalRobustnessClaimed':False,
             'interpretation':'继承旧错笔记的修订测试；API自由文本接口与本地受约束打分不同。候选闭环须读反思原文，不能直接证明修复自己的未察觉错误。'})
         h['put_once'](out/'result.json',result)

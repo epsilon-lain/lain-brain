@@ -28,32 +28,74 @@ def setup(work):
     from rr_evaluate import math_audit
     return locals()
 
+class ConfigurationMissing(RuntimeError):pass
+
+def normalized(name):return re.sub('[^a-z0-9]','',str(name).lower())
+
+KEY_NAMES=('apertusapikey','apertuskey','apertustoken','swissaiapikey','swissapikey','teacherapikey','openaiapikey','llmapikey','apikey')
+URL_NAMES=('apertusbaseurl','apertusapibaseurl','apertusapiurl','teacherbaseurl','teacherapibase','openaibaseurl','llmbaseurl','apibaseurl','apibase','baseurl','apiurl','endpoint')
+MODEL_NAMES=('apertusapimodel','apertusmodel','apertusmodelid','teachermodel','openaimodel','apimodel','llmmodel','model','modelid','modelname')
+
+def secret_string(value):
+    if hasattr(value,'get_secret_value'):value=value.get_secret_value()
+    return value.strip() if isinstance(value,str) and value.strip() else None
+
+def field(mapping,names):
+    indexed={normalized(k):v for k,v in mapping.items() if isinstance(k,str)}
+    for name in names:
+        value=secret_string(indexed.get(name))
+        if value:return value
+    return None
+
+def configuration_inventory(ns):
+    # Names/types only. Never show values, reprs, key fragments or dict contents.
+    rows=[]
+    for name,value in list(ns.items()):
+        if name.startswith('_') or not re.search(r'api|apertus|teacher|client|config|setting|token|key|model|endpoint',name,re.I):continue
+        item={'name':name,'type':type(value).__name__}
+        if isinstance(value,dict):
+            item['relevantFields']=[k for k in value if isinstance(k,str) and normalized(k) in KEY_NAMES+URL_NAMES+MODEL_NAMES+('key','token','url')]
+        rows.append(item)
+    environment=[n for n in os.environ if normalized(n) in KEY_NAMES+URL_NAMES+MODEL_NAMES]
+    return {'notebookVariableNamesOnly':rows,'environmentVariableNamesOnly':environment}
+
 def config(ns):
     cfg=ns.get('ZIP_API_CONFIG',{})
-    if not isinstance(cfg,dict): raise RuntimeError('ZIP_API_CONFIG must be a dict')
-    def pick(names):
-        for n in names:
-            v=ns.get(n) or os.environ.get(n)
-            if isinstance(v,str) and v.strip(): return v.strip()
-        return None
-    key=cfg.get('api_key') or pick(('APERTUS_API_KEY','TEACHER_API_KEY','OPENAI_API_KEY','API_KEY','APIKEY','api_key','apikey'))
-    url=cfg.get('base_url') or pick(('APERTUS_BASE_URL','APERTUS_API_BASE_URL','TEACHER_BASE_URL','TEACHER_API_BASE','OPENAI_BASE_URL','API_BASE_URL','API_BASE','BASE_URL','base_url','api_base'))
-    model=cfg.get('model') or pick(('APERTUS_API_MODEL','APERTUS_MODEL','APERTUS_MODEL_ID','TEACHER_MODEL','OPENAI_MODEL','API_MODEL'))
-    for n in ('apertus_client','teacher_client','openai_client','client'):
-        c=ns.get(n)
-        if c is not None and hasattr(c,'base_url'):
-            url=url or str(c.base_url)
-            k=getattr(c,'api_key',None)
-            if hasattr(k,'get_secret_value'): k=k.get_secret_value()
-            if isinstance(k,str): key=key or k
-    if not model:
-        candidate=pick(('MODEL','MODEL_ID','model','model_id'))
-        if candidate and 'apertus' in candidate.lower() and '0.5' not in candidate: model=candidate
+    if not isinstance(cfg,dict):raise RuntimeError('ZIP_API_CONFIG must be a dict')
+    # Explicit ZIP configuration has priority. Complete pairs from a dictionary
+    # or client remain paired; a key from client A never goes to endpoint B.
+    key=field(cfg,KEY_NAMES+('key','token'))
+    url=field(cfg,URL_NAMES+('url',))
+    model=field(cfg,MODEL_NAMES)
+    pairs=[]
+    for name,value in list(ns.items()):
+        if name=='ZIP_API_CONFIG' or name.startswith('_'):continue
+        if isinstance(value,dict) and re.search(r'config|setting|api|apertus|teacher|llm',name,re.I):
+            containers=[(name,value)]+[(name+'.'+n,v) for n,v in value.items() if isinstance(n,str) and isinstance(v,dict) and re.search(r'api|apertus|teacher|llm|openai',n,re.I)]
+            for label,d in containers:
+                k=field(d,KEY_NAMES+('key','token'));u=field(d,URL_NAMES+('url',));md=field(d,MODEL_NAMES)
+                if k and u:pairs.append((label,k,u,md))
+        if 'client' in name.lower() and not isinstance(value,(dict,str,type)):
+            u=getattr(value,'base_url',None);k=secret_string(getattr(value,'api_key',None))
+            if u and k:pairs.append((name,k,str(u),None))
+    flatkey=field(ns,KEY_NAMES) or field(os.environ,KEY_NAMES)
+    flaturl=field(ns,URL_NAMES) or field(os.environ,URL_NAMES)
+    flatmodel=field(ns,MODEL_NAMES[:-3]) or field(os.environ,MODEL_NAMES[:-3])
+    if not flatmodel:
+        candidate=field(ns,MODEL_NAMES[-3:]) or field(os.environ,MODEL_NAMES[-3:])
+        if candidate and 'apertus' in candidate.lower() and '0.5' not in candidate:flatmodel=candidate
+    if flatkey and flaturl:pairs.append(('Notebook/environment variables',flatkey,flaturl,flatmodel))
+    if not (key and url):
+        compatible=[p for p in pairs if (not key or p[1]==key) and (not url or p[2].rstrip('/')==url.rstrip('/'))]
+        unique={(p[1],p[2].rstrip('/')) for p in compatible}
+        if len(unique)>1:raise ConfigurationMissing('发现多组 API 连接，不能混用 key 和地址。候选配置名：'+', '.join(p[0] for p in compatible)+'。请用 ZIP_API_CONFIG 明确引用其中一组。')
+        if compatible:
+            _,key,url,md=compatible[0];model=model or md
+        else:key=key or flatkey;url=url or flaturl
+    if not model and flatmodel and 'apertus' in flatmodel.lower() and '0.5' not in flatmodel:model=flatmodel
     if not key or not url:
-        missing=[]
-        if not key: missing.append('api_key（从你现有的 key 变量引用）')
-        if not url: missing.append('base_url（服务商的 API 地址）')
-        raise RuntimeError('未识别到 '+ '、'.join(missing)+'。在同一 Notebook 设置 ZIP_API_CONFIG={"api_key":已有key变量,"base_url":服务商地址,"model":模型名}；不要把 key 发给我。')
+        missing=('key ' if not key else '')+('base_url' if not url else '')
+        raise ConfigurationMissing('仍未发现 '+missing.strip()+'。下面只输出配置变量名称，不输出任何值；可能配置在另一单元尚未执行、函数局部或另一进程中。')
     p=urllib.parse.urlsplit(url)
     if p.scheme not in ('https','http') or not p.hostname or p.username or p.password or p.query or p.fragment:
         raise RuntimeError('base_url must be a plain API endpoint without credentials/query')

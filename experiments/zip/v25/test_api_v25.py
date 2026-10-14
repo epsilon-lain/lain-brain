@@ -45,6 +45,26 @@ class APIContractTests(unittest.TestCase):
         with patch.dict(m.os.environ,{},clear=True):
             cfg=m.config({'API_KEY':'x','BASE_URL':'https://example.invalid/v1','MODEL_ID':'swiss-ai/Apertus-v1.1-0.5B-Instruct'})
             self.assertIsNone(cfg['model'])
+    def test_configuration_dict_and_mixed_case_aliases(self):
+        with patch.dict(m.os.environ,{},clear=True):
+            cfg=m.config({'APERTUS_SETTINGS':{'apiKey':'private','baseURL':'https://example.invalid/v1','modelId':'Apertus-8B'}})
+            self.assertEqual(cfg['key'],'private');self.assertEqual(cfg['model'],'Apertus-8B')
+    def test_named_client_is_detected(self):
+        from types import SimpleNamespace
+        with patch.dict(m.os.environ,{},clear=True):
+            cfg=m.config({'swiss_client':SimpleNamespace(base_url='https://example.invalid/v1',api_key='private')})
+            self.assertEqual(cfg['key'],'private')
+    def test_nested_api_config_detected(self):
+        with patch.dict(m.os.environ,{},clear=True):
+            cfg=m.config({'settings':{'apertus':{'token':'private','endpoint':'https://example.invalid/v1','model':'Apertus-8B'}}})
+            self.assertEqual(cfg['key'],'private')
+    def test_multiple_provider_pairs_are_not_combined(self):
+        ns={'api_config_a':{'api_key':'A','base_url':'https://a.invalid/v1'},'api_config_b':{'api_key':'B','base_url':'https://b.invalid/v1'}}
+        with patch.dict(m.os.environ,{},clear=True),self.assertRaises(m.ConfigurationMissing) as e:m.config(ns)
+        self.assertNotIn('https://',str(e.exception))
+    def test_inventory_only_exposes_names_and_types(self):
+        text=json.dumps(m.configuration_inventory({'APERTUS_KEY':'never-print-secret','api_config':{'token':'never-print-secret','endpoint':'https://private.invalid'}}))
+        self.assertIn('APERTUS_KEY',text);self.assertNotIn('never-print-secret',text);self.assertNotIn('private.invalid',text)
     def test_model_discovery_selects_apertus_8b(self):
         cfg=dict(self.cfg,model=None)
         with patch.object(m,'request',return_value={'data':[{'id':'other-model'},{'id':'Apertus-v1.5-70B'},{'id':'Apertus-v1.5-8B'}]}):

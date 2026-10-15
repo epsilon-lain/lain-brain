@@ -6,9 +6,9 @@ Base snapshot: `swiss-ai/Apertus-v1.1-0.5B-Instruct`, architecture `apertus`, 43
 
 The original `MathWriterAdapter` freezes the base and adds independent rank-8, alpha-16 low-rank deltas to q/v projections in its final four attention layers. A projection output is augmented by `(alpha/rank) * B(A(x))`. Delta A is Kaiming-initialized and B starts at zero. The custom checkpoint contains only `ModuleDict` delta tensors, not a complete model and not a PEFT `adapter_config.json` package.
 
-The relevant archived files are approximately 427,440 bytes each. Their presence and actual file hashes in this public branch remain pending. The export script computes hashes from the original bytes. A tensor-state digest in an experiment summary is distinct from SHA256 of a safetensors file.
+Seven actual adapter files are published under `models/`, each exactly 427,440 bytes. All exported file hashes matched the received bundle. Their tensor layouts and finite values were independently checked without executing pickle files or loading the base model. The v15 writer tensor-state hash matches its original deployment record; the mathematical writer, repair and prior-reflection hashes match the v24 source binding. The v24 editor file equals the recorded initial editor bytes. A tensor-state digest is distinct from SHA256 of a safetensors file; both are recorded in `checkpoint-manifest.json`.
 
-## Components intended for release
+## Published components
 
 | Component | Checkpoint | Reported effective parameter-changing updates | Use |
 | --- | --- | ---: | --- |
@@ -17,7 +17,7 @@ The relevant archived files are approximately 427,440 bytes each. Their presence
 | v24 meta adapter | `zip-conditional-final-a1afc8a6/committed/step-0128/meta.safetensors` | 96 | Constrained property/memory decisions within the original stacked pipeline |
 | v24 editor adapter | `zip-conditional-final-a1afc8a6/committed/step-0128/editor.safetensors` | **0** | Unchanged initial editor; not evidence of learned repair |
 
-The v24 stack also uses frozen source mathematical, repair and prior-reflection adapters. Export binding metadata and the directly referenced dependencies before claiming that all components for historical inference are available. The single-adapter loader is insufficient for reproducing that stack.
+The `models/` directory additionally includes `repair-v19.safetensors`, `reflection-v23.safetensors` and `reflection-zero-reward-control-v23.safetensors`. Original binding metadata is preserved in `provenance/`. These adapter bytes alone do not include the complete historical ledgers and source-file chain required by the strict historical runner. The single-adapter loader is insufficient for reproducing that stack.
 
 ## Evaluation scope
 
@@ -29,4 +29,4 @@ Summary context helped some rounds and harmed others. Six successive v7 courses 
 
 Research and inspection of a small, bounded algebra-learning pipeline. Mathematical outputs require independent verification. The models can produce false equalities, incomplete formats, unjustified withdrawals and ineffective notes. Host-supplied candidate routes, structural guards and exact polynomial verification are part of the experimental setup and must not be attributed to autonomous student reasoning.
 
-Model availability: source and documentation published first; original checkpoint bytes pending transfer. Base weights and tokenizer are not redistributed. Follow the original model's license and attribution terms; no independent model-license grant is asserted here.
+Model availability: seven original adapter checkpoints, their source provenance, the v24 runner and 180 original v15 runtime modules are published. Real pretrained-base inference has not been repeated in this environment. Base weights and tokenizer are not redistributed. Follow the original model's license and attribution terms; no independent model-license grant is asserted here.

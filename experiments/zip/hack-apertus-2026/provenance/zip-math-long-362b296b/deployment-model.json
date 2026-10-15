@@ -1,0 +1,14 @@
+{
+  "protocol": "lain-zip-verified-math-writer-long-training-v15",
+  "writerFile": "/mnt/workspace/lain-zip-pilot/zip-math-long-362b296b/committed/step-0192/writer.safetensors",
+  "writerHash": "7b721cb122236e227ae9a17bd2324697daab9f88574e4b27ccf75c90954e06c7",
+  "baseModelFolder": "/mnt/workspace/lain-zip-pilot/models/Apertus-v1.1-0.5B-Instruct",
+  "baseHash": "1a1a64ce523417c6fe3d89e46cfdec0ad5a844f318be1140fd69f5e853ce9ae8",
+  "rank": 8,
+  "lastLayers": 4,
+  "alpha": 16,
+  "frozenPoliciesSource": "/mnt/workspace/lain-zip-pilot/zip-management-geometry-b65172c0c7bf",
+  "frozenPoliciesHash": "c25ff63bb3edca111694fff2325a91a6017cdb2e1454031d2262716df456714f",
+  "baseModelRetrained": false,
+  "mathematicalLoRATrained": true
+}

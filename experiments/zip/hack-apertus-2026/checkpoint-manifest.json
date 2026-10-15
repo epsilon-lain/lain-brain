@@ -1,5 +1,5 @@
 {
-  "status": "awaiting actual checkpoint bytes from original Notebook",
+  "status": "actual adapter bytes published; base weights and full training state not included",
   "baseModel": "swiss-ai/Apertus-v1.1-0.5B-Instruct",
   "baseModelParameters": 438349352,
   "adapterImplementation": "training/math_writer_adapter.py",
@@ -35,5 +35,72 @@
       "reportedChangingUpdates": 0,
       "note": "Unchanged initial editor: zero eligible editor training episodes; not a trained repair model."
     }
-  ]
+  ],
+  "files": [
+    {
+      "path": "zip-conditional-final-a1afc8a6/committed/step-0128/editor.safetensors",
+      "bytes": 427440,
+      "sha256": "6e558949d867f254e997caf8f84ab5b5bc811e21a2cc854fd8c301f6692f1554",
+      "publishedPath": "models/conditional-editor-initial-v24.safetensors",
+      "tensorStateSha256": "475dd6283eb625e2bb6415ab919aca3b6661ca0ee7e9499ee7002e5f5160ba3b",
+      "tensorCount": 16
+    },
+    {
+      "path": "zip-conditional-final-a1afc8a6/committed/step-0128/meta.safetensors",
+      "bytes": 427440,
+      "sha256": "7f27c15358d860af43698ffb4247622df64dd7e5d309db3238c1495522647aa6",
+      "publishedPath": "models/conditional-meta-v24.safetensors",
+      "tensorStateSha256": "e89e9fd7b999502de45484041862211adbb47549d3fac1c7b3fad7a26ca9dce1",
+      "tensorCount": 16
+    },
+    {
+      "path": "zip-contradiction-626f2c24/committed/step-0032/repair.safetensors",
+      "bytes": 427440,
+      "sha256": "67015df1c9e7e565d96eb05ae3d0f114349b9cb3f6384c8150a2d35e6827651e",
+      "publishedPath": "models/repair-v19.safetensors",
+      "tensorStateSha256": "0396b05a5db8d94c02d0fcc81e842e75ac636344dcc2284995679889d4dee940",
+      "tensorCount": 16
+    },
+    {
+      "path": "zip-math-long-362b296b/committed/step-0192/writer.safetensors",
+      "bytes": 427440,
+      "sha256": "c2927c7fce18ec6762693e32fbc4fdeb544a6462daff9ff732524bb5b62cf4d7",
+      "publishedPath": "models/math-writer-v15.safetensors",
+      "tensorStateSha256": "7b721cb122236e227ae9a17bd2324697daab9f88574e4b27ccf75c90954e06c7",
+      "tensorCount": 16
+    },
+    {
+      "path": "zip-reflection-reward-e1828281/committed/step-0064/control.safetensors",
+      "bytes": 427440,
+      "sha256": "ec20c74b2e1d990787ed6ea7947239d253b6216d0caaf5794a3957ce5d4552f7",
+      "publishedPath": "models/reflection-zero-reward-control-v23.safetensors",
+      "tensorStateSha256": "4f43905819e0db148cdec8a5c3f45efe8bdd45342caa56e10ee6389db1a0df13",
+      "tensorCount": 16
+    },
+    {
+      "path": "zip-reflection-reward-e1828281/committed/step-0064/reflection.safetensors",
+      "bytes": 427440,
+      "sha256": "702e9e3e7c187bef2125d9653fa9d25aaf6e3d85fc34e3b5dbba6b6e4682e0b0",
+      "publishedPath": "models/reflection-v23.safetensors",
+      "tensorStateSha256": "5dea279016c9e11efaf95529e15362edefc9325355677840d863b7683ccfd8e8",
+      "tensorCount": 16
+    },
+    {
+      "path": "zip-scale-curve-309e8004/reward-on-scale-writer-final.safetensors",
+      "bytes": 427440,
+      "sha256": "008b3ecafa8a6924819c179c10dc2cda108789f74ae855a7a7506381fa5845c7",
+      "publishedPath": "models/scale-writer.safetensors",
+      "tensorStateSha256": "9fa3818e4e494712fc66041200a77847c977ce0311f1c83d8016bbae9f0d53f9",
+      "tensorCount": 16
+    }
+  ],
+  "receivedBundleSha256": "aefb6e3d47cce940938f72b44caec91f42c8ccca29d75536003325b8c961505e",
+  "validation": {
+    "allExportedFileHashesMatched": true,
+    "allSevenAdaptersHave16FiniteFloat32Tensors": true,
+    "v15DeploymentTensorHashMatched": true,
+    "v24MathRepairPriorBindingsMatched": true,
+    "v24EditorEqualsInitialFileBytes": true,
+    "realBaseInferenceRunHere": false
+  }
 }

@@ -1,0 +1,11 @@
+{
+  "protocol": "lain-zip-reflection-reward-final-v23",
+  "reflectionHash": "5dea279016c9e11efaf95529e15362edefc9325355677840d863b7683ccfd8e8",
+  "reflectionFile": "/mnt/workspace/lain-zip-pilot/zip-reflection-reward-e1828281/committed/step-0064/reflection.safetensors",
+  "zeroRewardFile": "/mnt/workspace/lain-zip-pilot/zip-reflection-reward-e1828281/committed/step-0064/control.safetensors",
+  "oldRepairHash": "0396b05a5db8d94c02d0fcc81e842e75ac636344dcc2284995679889d4dee940",
+  "oldRepairFile": "/mnt/workspace/lain-zip-pilot/zip-contradiction-626f2c24/committed/step-0032/repair.safetensors",
+  "oldRepairMustBeEnabled": true,
+  "mathWriterDisabledForReflection": true,
+  "sourceBindingHash": "c571ebbb3e252757473d4d6ac1d4ad55073f12fad07518254a71d36141ab3921"
+}

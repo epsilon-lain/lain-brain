@@ -1,0 +1,8 @@
+{
+  "protocol": "lain-zip-contradiction-repair-v19",
+  "repairHash": "0396b05a5db8d94c02d0fcc81e842e75ac636344dcc2284995679889d4dee940",
+  "writerHash": "7b721cb122236e227ae9a17bd2324697daab9f88574e4b27ccf75c90954e06c7",
+  "verifierHash": "5e2f1ae563b7f9c728306cb4813e652d599d344904a968394ec5b3f2331bde0a",
+  "sourceBindingHash": "fa10979604b926af5afc355729ec30f6d7f3ab40ca42bd648cb4cc0b62639dea",
+  "repairFile": "/mnt/workspace/lain-zip-pilot/zip-contradiction-626f2c24/committed/step-0032/repair.safetensors"
+}

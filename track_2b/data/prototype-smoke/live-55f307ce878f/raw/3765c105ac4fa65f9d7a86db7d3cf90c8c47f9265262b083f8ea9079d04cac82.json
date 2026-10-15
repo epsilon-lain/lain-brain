@@ -1,0 +1,39 @@
+{
+  "recordId": "api-3765c105ac4fa65f9d7a86db7d3cf90c8c47f9265262b083f8ea9079d04cac82",
+  "phase": "independent_editor",
+  "caseCardId": "source-rule-c9504c2bd4a1d05f",
+  "request": {
+    "model": "swiss-ai/Apertus-v1.5-70B",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Simplify the original expression, combining coefficients and representing repeated identical factors as powers. Preserve its value for every real input. Return ONE expression using * and **, without prose or an equality chain; if unsure write SKIP."
+      },
+      {
+        "role": "user",
+        "content": "Write your own replacement from the ORIGINAL expression: 435 * v * v. No replacement formula is supplied."
+      }
+    ],
+    "max_tokens": 1024,
+    "temperature": 0
+  },
+  "responseModel": "swiss-ai/Apertus-v1.5-70B",
+  "usage": {
+    "prompt_tokens": 92,
+    "total_tokens": 101,
+    "completion_tokens": 9,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "multimodal_tokens": null
+    }
+  },
+  "systemFingerprint": "vllm-0.23.1rc1.dev1029+ga601a9d99-tp4-1381023c",
+  "providerResponseId": "chatcmpl-2118480d-1913-44d6-b6c7-19e2fe9e83df",
+  "fixtureOnly": false,
+  "expectedActionSuppliedToModel": false,
+  "studentOutput": {
+    "raw": "435 * v ** 2",
+    "tokenCapReached": false
+  },
+  "hash": "e3680f56f468b50a12fbb1c3b4d0bd9acd61f5417d6ab26e9873dc7246b139c2"
+}

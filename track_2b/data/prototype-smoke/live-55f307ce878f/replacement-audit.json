@@ -1,0 +1,86 @@
+{
+  "audit": {
+    "correct": true,
+    "correctChangedExpression": true,
+    "unchangedQuestionCopy": false,
+    "finalEquivalent": true,
+    "falseSteps": 0,
+    "capped": false,
+    "formatComplete": true,
+    "fullAudit": {
+      "graderVersion": "lain-zip-answer-and-equality-audit-v23-number-safe",
+      "finalStatus": "verified",
+      "writtenFinalExpression": "435 * v ** 2",
+      "completed": true,
+      "finalContentEquivalent": true,
+      "correctFinalAnswer": true,
+      "correctSimplifiedAnswer": true,
+      "correctNontrivialRewrite": true,
+      "equivalentButUnsimplified": false,
+      "unchangedQuestionCopy": false,
+      "matchesStoredApplicationSurface": false,
+      "finalVerification": {
+        "status": "verified",
+        "accepted": true,
+        "reusable": true,
+        "reason": "Exact polynomial proof",
+        "ruleKey": "d18f70b50f57d00b3312a278ed9aca7bc2d8e04b20d47344fa11f83625e93fa8",
+        "claimHash": "f350b0622c1b5102b3010eaee50772e3d7af98f77a89a490d37c24a38ad484f3",
+        "certificate": {
+          "kind": "exact-rational-polynomial-identity",
+          "quantifiers": {
+            "v": "independent real variable"
+          },
+          "scope": "real_polynomial",
+          "sourcePolynomial": [
+            {
+              "powers": {
+                "v": 2
+              },
+              "coefficient": "435"
+            }
+          ],
+          "targetPolynomial": [
+            {
+              "powers": {
+                "v": 2
+              },
+              "coefficient": "435"
+            }
+          ],
+          "residual": [],
+          "allInputsInScopeChecked": true,
+          "naturalLanguageProseCertified": false
+        }
+      },
+      "extraTaskVariables": [],
+      "conflictingFinalMarkers": false,
+      "derivationStatus": "no_steps",
+      "writtenEqualitySteps": [],
+      "verifiedEqualitySteps": 0,
+      "falseEqualitySteps": 0,
+      "unsupportedEqualitySteps": 0,
+      "allWrittenEqualitiesCorrect": false,
+      "mathematicalProseCertified": false,
+      "extractionComplete": true,
+      "equalityStepsOutsideTaskVariables": 0,
+      "uninterpretedLines": [],
+      "formatStatus": "single_expression",
+      "strictInterfaceCorrect": true,
+      "tokenCapReached": false,
+      "abstention": false,
+      "rawHash": "057cd958e382135fbec6dc78bcb5f9a3e9581f740ee95b3da7fb159fb91d0c3b",
+      "mathematicalResultRepaired": false,
+      "unwrittenIntermediateEqualitiesInserted": false
+    }
+  },
+  "studentFinal": "435 * v ** 2",
+  "accepted": true,
+  "reward": 1.0,
+  "studentRecordId": "api-3765c105ac4fa65f9d7a86db7d3cf90c8c47f9265262b083f8ea9079d04cac82-display",
+  "studentRecordHash": "e07d255587084681b505a2c991566113c466352db578ed87b8013558efd0e02b",
+  "teacherReplacementSupplied": false,
+  "hostWroteReplacement": false,
+  "rawOriginalRepaired": false,
+  "hash": "dc536c44da5e9bc51e9feb27306e24d1c3635aea21c47947c656c74eb09fddc5"
+}

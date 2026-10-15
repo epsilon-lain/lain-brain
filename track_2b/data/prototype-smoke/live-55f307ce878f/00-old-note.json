@@ -1,0 +1,23 @@
+{
+  "card": {
+    "id": "source-rule-c9504c2bd4a1d05f",
+    "family": "drop_variable",
+    "left": "435 * v * v",
+    "right": "435^2",
+    "variable": "v",
+    "provenance": {
+      "kind": "student_saved_zip",
+      "recordId": "reflection-call-1d5aaf9a83ae2b19e40b616f",
+      "recordHash": "9798321a49f2c72c95df0cad672b5fc54abdc80b3e8e79fdba094634b68bee69",
+      "verbatimExcerpt": "435 * v * v = 435^2"
+    },
+    "knownExactIdentity": false,
+    "split": "source_readback"
+  },
+  "version": 0,
+  "status": "active_unverified",
+  "universalClaimWithdrawn": false,
+  "history": [],
+  "correctnessAutomaticallyCertified": false,
+  "hash": "f8cef974cf6735b10635182e92014f06e10ddf7e25342ae7d81069181598385d"
+}

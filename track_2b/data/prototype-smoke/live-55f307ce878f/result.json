@@ -1,0 +1,460 @@
+{
+  "mode": "NEW LIVE API RUN",
+  "caseId": "prototype-435",
+  "model": "swiss-ai/Apertus-v1.5-70B",
+  "oldRule": "435 * v * v = 435^2",
+  "fixedInput": "0",
+  "properties": {
+    "left_sign": "ZERO",
+    "right_sign": "POSITIVE"
+  },
+  "groundedConflict": true,
+  "reflectionRaw": "{\n  \"action\": \"RETRACT\",\n  \"reason\": \"The rule fails for v = 0: Left side is 0, Right side is positive (435^2 ≠ 0). A single counterexample disproves the universal claim.\"\n}",
+  "action": "RETRACT",
+  "replacementRaw": "435 * v ** 2",
+  "replacementAccepted": true,
+  "oldNoteHash": "f8cef974cf6735b10635182e92014f06e10ddf7e25342ae7d81069181598385d",
+  "newNoteHash": "bff3edab58d84064f33d67ad406bde1830c5f40f7e136644065dd7a847c81749",
+  "followup": {
+    "no_note": {
+      "recordId": "api-e97a2f8a2744553d7c1589d723dca6630f6ab51eb5d73f72bc64117c7251bb64",
+      "raw": "We are asked to simplify the expression \\(2 \\times (435 \\times z \\times z)\\).\n\nFirst, let's break down the expression step by step.\n\nThe given expression is:\n\\[ 2 \\times (435 \\times z \\times z) \\]\n\nFirst, handle the multiplication inside the parentheses:\n\\[ 435 \\times z \\times z = 435 \\times z^2 \\]\n\nSo the expression becomes:\n\\[ 2 \\times (435 \\times z^2) \\]\n\nNow, multiply the constants:\n\\[ 2 \\times 435 \\times z^2 \\]\n\nMultiplying the constants:\n\\[ 2 \\times 435 = 870 \\]\n\nSo the expression simplifies to:\n\\[ 870 \\times z^2 \\]\n\nAlternatively, we can write it as:\n\\[ 870z^2 \\]\n\nBoth forms are equivalent. Since the problem asks to expand products over sums, combine coefficients, and represent repeated factors as powers, the final simplified form is:\n\n\\[ 870z^2 \\]",
+      "contentCorrect": false,
+      "audit": {
+        "correct": false,
+        "correctChangedExpression": false,
+        "unchangedQuestionCopy": false,
+        "finalEquivalent": true,
+        "falseSteps": 0,
+        "capped": false,
+        "formatComplete": false,
+        "fullAudit": {
+          "graderVersion": "lain-zip-answer-and-equality-audit-v23-number-safe",
+          "finalStatus": "verified",
+          "writtenFinalExpression": "870*z^2",
+          "completed": true,
+          "finalContentEquivalent": true,
+          "correctFinalAnswer": true,
+          "correctSimplifiedAnswer": true,
+          "correctNontrivialRewrite": true,
+          "equivalentButUnsimplified": false,
+          "unchangedQuestionCopy": false,
+          "matchesStoredApplicationSurface": false,
+          "finalVerification": {
+            "status": "verified",
+            "accepted": true,
+            "reusable": true,
+            "reason": "Exact polynomial proof",
+            "ruleKey": "821ecc5cc883fc5e84b146911983499bd2577798d47b8edda5e302383a578972",
+            "claimHash": "107cf0d08149bd14271c477a19d57496753142c49dbca3103dc8bda8984d6bce",
+            "certificate": {
+              "kind": "exact-rational-polynomial-identity",
+              "quantifiers": {
+                "z": "independent real variable"
+              },
+              "scope": "real_polynomial",
+              "sourcePolynomial": [
+                {
+                  "powers": {
+                    "z": 2
+                  },
+                  "coefficient": "870"
+                }
+              ],
+              "targetPolynomial": [
+                {
+                  "powers": {
+                    "z": 2
+                  },
+                  "coefficient": "870"
+                }
+              ],
+              "residual": [],
+              "allInputsInScopeChecked": true,
+              "naturalLanguageProseCertified": false
+            }
+          },
+          "extraTaskVariables": [],
+          "conflictingFinalMarkers": false,
+          "derivationStatus": "pending",
+          "writtenEqualitySteps": [],
+          "verifiedEqualitySteps": 0,
+          "falseEqualitySteps": 0,
+          "unsupportedEqualitySteps": 0,
+          "allWrittenEqualitiesCorrect": false,
+          "mathematicalProseCertified": false,
+          "extractionComplete": false,
+          "equalityStepsOutsideTaskVariables": 0,
+          "uninterpretedLines": [
+            {
+              "line": 1,
+              "raw": "We are asked to simplify the expression \\(2 \\times (435 \\times z \\times z)\\)."
+            },
+            {
+              "line": 3,
+              "raw": "First, let's break down the expression step by step."
+            },
+            {
+              "line": 5,
+              "raw": "The given expression is:"
+            },
+            {
+              "line": 8,
+              "raw": "First, handle the multiplication inside the parentheses:"
+            },
+            {
+              "line": 9,
+              "raw": "\\[ 435 \\times z \\times z = 435 \\times z^2 \\]"
+            },
+            {
+              "line": 11,
+              "raw": "So the expression becomes:"
+            },
+            {
+              "line": 14,
+              "raw": "Now, multiply the constants:"
+            },
+            {
+              "line": 17,
+              "raw": "Multiplying the constants:"
+            },
+            {
+              "line": 18,
+              "raw": "\\[ 2 \\times 435 = 870 \\]"
+            },
+            {
+              "line": 20,
+              "raw": "So the expression simplifies to:"
+            },
+            {
+              "line": 23,
+              "raw": "Alternatively, we can write it as:"
+            },
+            {
+              "line": 26,
+              "raw": "Both forms are equivalent. Since the problem asks to expand products over sums, combine coefficients, and represent repeated factors as powers, the final simplified form is:"
+            }
+          ],
+          "formatStatus": "prose_or_final_marker",
+          "strictInterfaceCorrect": false,
+          "tokenCapReached": false,
+          "abstention": false,
+          "rawHash": "19ec1088b6bb69712e829fc117af14224df0a017a63eb969649a3529a7c4447a",
+          "mathematicalResultRepaired": false,
+          "unwrittenIntermediateEqualitiesInserted": false
+        }
+      },
+      "expectedFormulaProvidedToModel": false
+    },
+    "old_note": {
+      "recordId": "api-b89128991c050064e8a92d2af27af54e37650329c99ecb24dc4d856cf4798257",
+      "raw": "2 * (435 * z * z) = 2 * 435^2 * z^2 = 2 * 189225 * z^2 = 378450 * z^2",
+      "contentCorrect": false,
+      "audit": {
+        "correct": false,
+        "correctChangedExpression": false,
+        "unchangedQuestionCopy": false,
+        "finalEquivalent": false,
+        "falseSteps": 1,
+        "capped": false,
+        "formatComplete": true,
+        "fullAudit": {
+          "graderVersion": "lain-zip-answer-and-equality-audit-v23-number-safe",
+          "finalStatus": "rejected",
+          "writtenFinalExpression": "378450 * z^2",
+          "completed": true,
+          "finalContentEquivalent": false,
+          "correctFinalAnswer": false,
+          "correctSimplifiedAnswer": false,
+          "correctNontrivialRewrite": false,
+          "equivalentButUnsimplified": false,
+          "unchangedQuestionCopy": false,
+          "matchesStoredApplicationSurface": false,
+          "finalVerification": {
+            "status": "rejected",
+            "accepted": false,
+            "reusable": false,
+            "reason": "Exact nonzero polynomial residual",
+            "certificate": {
+              "kind": "nonzero-rational-polynomial",
+              "residual": [
+                {
+                  "powers": {
+                    "z": 2
+                  },
+                  "coefficient": "-377580"
+                }
+              ],
+              "counterexample": {
+                "assignment": {
+                  "z": 1
+                },
+                "residual": "-377580"
+              },
+              "scope": "all independent real values of the named variables"
+            }
+          },
+          "extraTaskVariables": [],
+          "conflictingFinalMarkers": false,
+          "derivationStatus": "rejected",
+          "writtenEqualitySteps": [
+            {
+              "left": "2 * (435 * z * z)",
+              "right": "2 * 435^2 * z^2",
+              "verification": {
+                "status": "rejected",
+                "accepted": false,
+                "reusable": false,
+                "reason": "Exact nonzero polynomial residual",
+                "certificate": {
+                  "kind": "nonzero-rational-polynomial",
+                  "residual": [
+                    {
+                      "powers": {
+                        "z": 2
+                      },
+                      "coefficient": "-377580"
+                    }
+                  ],
+                  "counterexample": {
+                    "assignment": {
+                      "z": 1
+                    },
+                    "residual": "-377580"
+                  },
+                  "scope": "all independent real values of the named variables"
+                }
+              },
+              "sourceLine": null,
+              "extraTaskVariables": []
+            },
+            {
+              "left": "2 * 435^2 * z^2",
+              "right": "2 * 189225 * z^2",
+              "verification": {
+                "status": "verified",
+                "accepted": true,
+                "reusable": true,
+                "reason": "Exact polynomial proof",
+                "ruleKey": "11184f2e9685be9ab71cadd83885eaad826f1e896063d5d46c3b9adcdfc9ff2a",
+                "claimHash": "5c1cbd88f247d1151104056a3343d6f23cc0c280d4e89a7583baff288b0a9270",
+                "certificate": {
+                  "kind": "exact-rational-polynomial-identity",
+                  "quantifiers": {
+                    "z": "independent real variable"
+                  },
+                  "scope": "real_polynomial",
+                  "sourcePolynomial": [
+                    {
+                      "powers": {
+                        "z": 2
+                      },
+                      "coefficient": "378450"
+                    }
+                  ],
+                  "targetPolynomial": [
+                    {
+                      "powers": {
+                        "z": 2
+                      },
+                      "coefficient": "378450"
+                    }
+                  ],
+                  "residual": [],
+                  "allInputsInScopeChecked": true,
+                  "naturalLanguageProseCertified": false
+                }
+              },
+              "sourceLine": null,
+              "extraTaskVariables": []
+            },
+            {
+              "left": "2 * 189225 * z^2",
+              "right": "378450 * z^2",
+              "verification": {
+                "status": "verified",
+                "accepted": true,
+                "reusable": true,
+                "reason": "Exact polynomial proof",
+                "ruleKey": "d2f930b550e5dd4ce6dceb62a581cf1515851596bd7a9278ff773ed36b45d7b0",
+                "claimHash": "ba0a599a02f3fc9e6dbc3bc6b08ac5b3005036b467d8dc2ca564308a947c8957",
+                "certificate": {
+                  "kind": "exact-rational-polynomial-identity",
+                  "quantifiers": {
+                    "z": "independent real variable"
+                  },
+                  "scope": "real_polynomial",
+                  "sourcePolynomial": [
+                    {
+                      "powers": {
+                        "z": 2
+                      },
+                      "coefficient": "378450"
+                    }
+                  ],
+                  "targetPolynomial": [
+                    {
+                      "powers": {
+                        "z": 2
+                      },
+                      "coefficient": "378450"
+                    }
+                  ],
+                  "residual": [],
+                  "allInputsInScopeChecked": true,
+                  "naturalLanguageProseCertified": false
+                }
+              },
+              "sourceLine": null,
+              "extraTaskVariables": []
+            }
+          ],
+          "verifiedEqualitySteps": 2,
+          "falseEqualitySteps": 1,
+          "unsupportedEqualitySteps": 0,
+          "allWrittenEqualitiesCorrect": false,
+          "mathematicalProseCertified": false,
+          "extractionComplete": true,
+          "equalityStepsOutsideTaskVariables": 0,
+          "uninterpretedLines": [],
+          "formatStatus": "equality_chain",
+          "strictInterfaceCorrect": false,
+          "tokenCapReached": false,
+          "abstention": false,
+          "rawHash": "3d9f004c8c7611fa6f0a3e6e9623ecc5333a24da4852f3a981d3275d7b47a59d",
+          "mathematicalResultRepaired": false,
+          "unwrittenIntermediateEqualitiesInserted": false
+        }
+      },
+      "expectedFormulaProvidedToModel": false
+    },
+    "new_note": {
+      "recordId": "api-3bfcb12cb49048b1eabf481af37094a664fc31fa838343837f0142b05ef3092f",
+      "raw": "2 * (435 * z * z) = 870 * z ** 2",
+      "contentCorrect": true,
+      "audit": {
+        "correct": true,
+        "correctChangedExpression": true,
+        "unchangedQuestionCopy": false,
+        "finalEquivalent": true,
+        "falseSteps": 0,
+        "capped": false,
+        "formatComplete": true,
+        "fullAudit": {
+          "graderVersion": "lain-zip-answer-and-equality-audit-v23-number-safe",
+          "finalStatus": "verified",
+          "writtenFinalExpression": "870 * z ** 2",
+          "completed": true,
+          "finalContentEquivalent": true,
+          "correctFinalAnswer": true,
+          "correctSimplifiedAnswer": true,
+          "correctNontrivialRewrite": true,
+          "equivalentButUnsimplified": false,
+          "unchangedQuestionCopy": false,
+          "matchesStoredApplicationSurface": false,
+          "finalVerification": {
+            "status": "verified",
+            "accepted": true,
+            "reusable": true,
+            "reason": "Exact polynomial proof",
+            "ruleKey": "821ecc5cc883fc5e84b146911983499bd2577798d47b8edda5e302383a578972",
+            "claimHash": "2e321835f685d2745db90ba6afc2d1df022bce1560629c2649820692f33d8787",
+            "certificate": {
+              "kind": "exact-rational-polynomial-identity",
+              "quantifiers": {
+                "z": "independent real variable"
+              },
+              "scope": "real_polynomial",
+              "sourcePolynomial": [
+                {
+                  "powers": {
+                    "z": 2
+                  },
+                  "coefficient": "870"
+                }
+              ],
+              "targetPolynomial": [
+                {
+                  "powers": {
+                    "z": 2
+                  },
+                  "coefficient": "870"
+                }
+              ],
+              "residual": [],
+              "allInputsInScopeChecked": true,
+              "naturalLanguageProseCertified": false
+            }
+          },
+          "extraTaskVariables": [],
+          "conflictingFinalMarkers": false,
+          "derivationStatus": "verified",
+          "writtenEqualitySteps": [
+            {
+              "left": "2 * (435 * z * z)",
+              "right": "870 * z ** 2",
+              "verification": {
+                "status": "verified",
+                "accepted": true,
+                "reusable": true,
+                "reason": "Exact polynomial proof",
+                "ruleKey": "821ecc5cc883fc5e84b146911983499bd2577798d47b8edda5e302383a578972",
+                "claimHash": "2e321835f685d2745db90ba6afc2d1df022bce1560629c2649820692f33d8787",
+                "certificate": {
+                  "kind": "exact-rational-polynomial-identity",
+                  "quantifiers": {
+                    "z": "independent real variable"
+                  },
+                  "scope": "real_polynomial",
+                  "sourcePolynomial": [
+                    {
+                      "powers": {
+                        "z": 2
+                      },
+                      "coefficient": "870"
+                    }
+                  ],
+                  "targetPolynomial": [
+                    {
+                      "powers": {
+                        "z": 2
+                      },
+                      "coefficient": "870"
+                    }
+                  ],
+                  "residual": [],
+                  "allInputsInScopeChecked": true,
+                  "naturalLanguageProseCertified": false
+                }
+              },
+              "sourceLine": null,
+              "extraTaskVariables": []
+            }
+          ],
+          "verifiedEqualitySteps": 1,
+          "falseEqualitySteps": 0,
+          "unsupportedEqualitySteps": 0,
+          "allWrittenEqualitiesCorrect": true,
+          "mathematicalProseCertified": false,
+          "extractionComplete": true,
+          "equalityStepsOutsideTaskVariables": 0,
+          "uninterpretedLines": [],
+          "formatStatus": "equality_chain",
+          "strictInterfaceCorrect": false,
+          "tokenCapReached": false,
+          "abstention": false,
+          "rawHash": "25159acd6fdbe49ae1099aba95200a0ecc75c0c943f32a6e517c0d1f039f06c2",
+          "mathematicalResultRepaired": false,
+          "unwrittenIntermediateEqualitiesInserted": false
+        }
+      },
+      "expectedFormulaProvidedToModel": false
+    }
+  },
+  "actualAttemptedPOSTs": 7,
+  "savedResponses": 7,
+  "APIWeightUpdates": 0,
+  "runDirectory": "live-55f307ce878f",
+  "notAddedToFrozenReplication": true,
+  "hash": "232825ade2aab4c055e3c1ea564af4a8c5ec86eebf0993500d6b8c19d7171d1c"
+}

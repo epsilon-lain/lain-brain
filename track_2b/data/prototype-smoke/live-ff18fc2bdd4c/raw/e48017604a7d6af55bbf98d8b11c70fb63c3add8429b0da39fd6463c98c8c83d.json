@@ -1,0 +1,39 @@
+{
+  "recordId": "api-e48017604a7d6af55bbf98d8b11c70fb63c3add8429b0da39fd6463c98c8c83d",
+  "phase": "right_sign",
+  "caseCardId": "source-rule-923cd9265308017d",
+  "request": {
+    "model": "swiss-ai/Apertus-v1.5-70B",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Classify the sign of ONE expression. Choose ZERO, POSITIVE, or NEGATIVE. No saved rule is supplied. Return ONLY one of ZERO, POSITIVE, NEGATIVE."
+      },
+      {
+        "role": "user",
+        "content": "315 * (0)"
+      }
+    ],
+    "max_tokens": 1024,
+    "temperature": 0
+  },
+  "responseModel": "swiss-ai/Apertus-v1.5-70B",
+  "usage": {
+    "prompt_tokens": 70,
+    "total_tokens": 72,
+    "completion_tokens": 2,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "multimodal_tokens": null
+    }
+  },
+  "systemFingerprint": "vllm-0.23.1rc1.dev1029+ga601a9d99-tp4-1381023c",
+  "providerResponseId": "chatcmpl-62ef2306-7387-46d9-842e-aaad3d5ed702",
+  "fixtureOnly": false,
+  "expectedActionSuppliedToModel": false,
+  "studentOutput": {
+    "raw": "ZERO",
+    "tokenCapReached": false
+  },
+  "hash": "37dade25281a6a1dfc3d424c0141abaa731cfa379d0b9ff76c49783ee2715087"
+}

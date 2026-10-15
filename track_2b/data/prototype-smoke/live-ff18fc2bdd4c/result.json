@@ -1,0 +1,468 @@
+{
+  "mode": "NEW LIVE API RUN",
+  "caseId": "prototype-correct-315",
+  "model": "swiss-ai/Apertus-v1.5-70B",
+  "oldRule": "1 * (315 * v) = 315 * v",
+  "fixedInput": "0",
+  "properties": {
+    "left_sign": "ZERO",
+    "right_sign": "ZERO"
+  },
+  "groundedConflict": false,
+  "reflectionRaw": "{\n  \"action\": \"RETRACT\",\n  \"reason\": \"Verification at a single input (0) does not confirm an identity for all real numbers v. Further testing with different values of v is required to validate the rule.\"\n}",
+  "action": "RETRACT",
+  "replacementRaw": "315 * v",
+  "replacementAccepted": true,
+  "oldNoteHash": "a152b8e20bbf841f7528f0a57d227ce99c9709c6a72197cc282ab34b63a363ee",
+  "newNoteHash": "2939b21a14ab8ccc391426b69e084920ade0d35937d6a2ba63605d1d0e0593a4",
+  "followup": {
+    "no_note": {
+      "recordId": "api-152968d1244b9ee13d9dd52461cca3996dccef9cf140044630a85c83ec2f52a9",
+      "raw": "We are asked to simplify the expression: \\(2 \\times (1 \\times (315 \\times z))\\).\n\nLet's break it down step by step.\n\nFirst, look at the innermost parentheses: \\(315 \\times z\\).\n\nThen, we have \\(1 \\times (315 \\times z)\\). Since multiplication is associative and commutative, \\(1 \\times (315 \\times z) = 315 \\times z\\).\n\nThen, we have \\(2 \\times (1 \\times (315 \\times z))\\). Again, using associativity and commutativity of multiplication, this is \\(2 \\times (315 \\times z)\\).\n\nNow, multiply: \\(2 \\times 315 \\times z\\).\n\nMultiply the constants: \\(2 \\times 315 = 630\\).\n\nSo the expression simplifies to \\(630z\\).\n\nWe should represent repeated factors as powers if applicable, but here it's just a product of a constant and a variable, so \\(630z\\) is already simplified.\n\nFinal answer: \\(630z\\).",
+      "contentCorrect": false,
+      "audit": {
+        "correct": false,
+        "correctChangedExpression": false,
+        "unchangedQuestionCopy": false,
+        "finalEquivalent": true,
+        "falseSteps": 0,
+        "capped": false,
+        "formatComplete": false,
+        "fullAudit": {
+          "graderVersion": "lain-zip-answer-and-equality-audit-v23-number-safe",
+          "finalStatus": "verified",
+          "writtenFinalExpression": "630*z",
+          "completed": true,
+          "finalContentEquivalent": true,
+          "correctFinalAnswer": true,
+          "correctSimplifiedAnswer": true,
+          "correctNontrivialRewrite": true,
+          "equivalentButUnsimplified": false,
+          "unchangedQuestionCopy": false,
+          "matchesStoredApplicationSurface": false,
+          "finalVerification": {
+            "status": "verified",
+            "accepted": true,
+            "reusable": true,
+            "reason": "Exact polynomial proof",
+            "ruleKey": "e0d4b4cab90a3330c325671664fe5311eb5cb2ce426811c1e8b0c44180acdd41",
+            "claimHash": "166d4c38b3a5c3a10a75a4520ce57d4ab71b8620175b2f2f73e78ce87a7e3069",
+            "certificate": {
+              "kind": "exact-rational-polynomial-identity",
+              "quantifiers": {
+                "z": "independent real variable"
+              },
+              "scope": "real_polynomial",
+              "sourcePolynomial": [
+                {
+                  "powers": {
+                    "z": 1
+                  },
+                  "coefficient": "630"
+                }
+              ],
+              "targetPolynomial": [
+                {
+                  "powers": {
+                    "z": 1
+                  },
+                  "coefficient": "630"
+                }
+              ],
+              "residual": [],
+              "allInputsInScopeChecked": true,
+              "naturalLanguageProseCertified": false
+            }
+          },
+          "extraTaskVariables": [],
+          "conflictingFinalMarkers": false,
+          "derivationStatus": "pending",
+          "writtenEqualitySteps": [],
+          "verifiedEqualitySteps": 0,
+          "falseEqualitySteps": 0,
+          "unsupportedEqualitySteps": 0,
+          "allWrittenEqualitiesCorrect": false,
+          "mathematicalProseCertified": false,
+          "extractionComplete": false,
+          "equalityStepsOutsideTaskVariables": 0,
+          "uninterpretedLines": [
+            {
+              "line": 1,
+              "raw": "We are asked to simplify the expression: \\(2 \\times (1 \\times (315 \\times z))\\)."
+            },
+            {
+              "line": 3,
+              "raw": "Let's break it down step by step."
+            },
+            {
+              "line": 5,
+              "raw": "First, look at the innermost parentheses: \\(315 \\times z\\)."
+            },
+            {
+              "line": 7,
+              "raw": "Then, we have \\(1 \\times (315 \\times z)\\). Since multiplication is associative and commutative, \\(1 \\times (315 \\times z) = 315 \\times z\\)."
+            },
+            {
+              "line": 9,
+              "raw": "Then, we have \\(2 \\times (1 \\times (315 \\times z))\\). Again, using associativity and commutativity of multiplication, this is \\(2 \\times (315 \\times z)\\)."
+            },
+            {
+              "line": 11,
+              "raw": "Now, multiply: \\(2 \\times 315 \\times z\\)."
+            },
+            {
+              "line": 13,
+              "raw": "Multiply the constants: \\(2 \\times 315 = 630\\)."
+            },
+            {
+              "line": 15,
+              "raw": "So the expression simplifies to \\(630z\\)."
+            },
+            {
+              "line": 17,
+              "raw": "We should represent repeated factors as powers if applicable, but here it's just a product of a constant and a variable, so \\(630z\\) is already simplified."
+            }
+          ],
+          "formatStatus": "prose_or_final_marker",
+          "strictInterfaceCorrect": false,
+          "tokenCapReached": false,
+          "abstention": false,
+          "rawHash": "514638ddd74b9e0f3553dbbe61410f9783d1b6e93ac53d47bc54c808e7fe860a",
+          "mathematicalResultRepaired": false,
+          "unwrittenIntermediateEqualitiesInserted": false
+        }
+      },
+      "expectedFormulaProvidedToModel": false
+    },
+    "old_note": {
+      "recordId": "api-2a0f4e8b283ef0ed86fced40217a5eb7dda7aae9c141653a677dd01419fda95a",
+      "raw": "2 * (1 * (315 * z)) = 2 * (315 * z) = 630 * z",
+      "contentCorrect": true,
+      "audit": {
+        "correct": true,
+        "correctChangedExpression": true,
+        "unchangedQuestionCopy": false,
+        "finalEquivalent": true,
+        "falseSteps": 0,
+        "capped": false,
+        "formatComplete": true,
+        "fullAudit": {
+          "graderVersion": "lain-zip-answer-and-equality-audit-v23-number-safe",
+          "finalStatus": "verified",
+          "writtenFinalExpression": "630 * z",
+          "completed": true,
+          "finalContentEquivalent": true,
+          "correctFinalAnswer": true,
+          "correctSimplifiedAnswer": true,
+          "correctNontrivialRewrite": true,
+          "equivalentButUnsimplified": false,
+          "unchangedQuestionCopy": false,
+          "matchesStoredApplicationSurface": false,
+          "finalVerification": {
+            "status": "verified",
+            "accepted": true,
+            "reusable": true,
+            "reason": "Exact polynomial proof",
+            "ruleKey": "e0d4b4cab90a3330c325671664fe5311eb5cb2ce426811c1e8b0c44180acdd41",
+            "claimHash": "470f2c7e765053d09f226701d14c925600c6e35bbd6877080e691f7fa1f38af6",
+            "certificate": {
+              "kind": "exact-rational-polynomial-identity",
+              "quantifiers": {
+                "z": "independent real variable"
+              },
+              "scope": "real_polynomial",
+              "sourcePolynomial": [
+                {
+                  "powers": {
+                    "z": 1
+                  },
+                  "coefficient": "630"
+                }
+              ],
+              "targetPolynomial": [
+                {
+                  "powers": {
+                    "z": 1
+                  },
+                  "coefficient": "630"
+                }
+              ],
+              "residual": [],
+              "allInputsInScopeChecked": true,
+              "naturalLanguageProseCertified": false
+            }
+          },
+          "extraTaskVariables": [],
+          "conflictingFinalMarkers": false,
+          "derivationStatus": "verified",
+          "writtenEqualitySteps": [
+            {
+              "left": "2 * (1 * (315 * z))",
+              "right": "2 * (315 * z)",
+              "verification": {
+                "status": "verified",
+                "accepted": true,
+                "reusable": true,
+                "reason": "Exact polynomial proof",
+                "ruleKey": "f8dbd951624e99d6c6a9441a7359907c637ed8db84f7f963995e5340b210b46b",
+                "claimHash": "86b5a66fa564dffb7300f4f580f2106517e58ba02dd6b1a1f24df4c97c8f240e",
+                "certificate": {
+                  "kind": "exact-rational-polynomial-identity",
+                  "quantifiers": {
+                    "z": "independent real variable"
+                  },
+                  "scope": "real_polynomial",
+                  "sourcePolynomial": [
+                    {
+                      "powers": {
+                        "z": 1
+                      },
+                      "coefficient": "630"
+                    }
+                  ],
+                  "targetPolynomial": [
+                    {
+                      "powers": {
+                        "z": 1
+                      },
+                      "coefficient": "630"
+                    }
+                  ],
+                  "residual": [],
+                  "allInputsInScopeChecked": true,
+                  "naturalLanguageProseCertified": false
+                }
+              },
+              "sourceLine": null,
+              "extraTaskVariables": []
+            },
+            {
+              "left": "2 * (315 * z)",
+              "right": "630 * z",
+              "verification": {
+                "status": "verified",
+                "accepted": true,
+                "reusable": true,
+                "reason": "Exact polynomial proof",
+                "ruleKey": "e214a1fe27f374a5b75f7b8f6ae40f5b31040542ff75d4a1ea7b88505dde2e62",
+                "claimHash": "a40d98472f224f7d96db5f900d5c26dcb4eba2268d8067394fd8c66bbc8a7a0b",
+                "certificate": {
+                  "kind": "exact-rational-polynomial-identity",
+                  "quantifiers": {
+                    "z": "independent real variable"
+                  },
+                  "scope": "real_polynomial",
+                  "sourcePolynomial": [
+                    {
+                      "powers": {
+                        "z": 1
+                      },
+                      "coefficient": "630"
+                    }
+                  ],
+                  "targetPolynomial": [
+                    {
+                      "powers": {
+                        "z": 1
+                      },
+                      "coefficient": "630"
+                    }
+                  ],
+                  "residual": [],
+                  "allInputsInScopeChecked": true,
+                  "naturalLanguageProseCertified": false
+                }
+              },
+              "sourceLine": null,
+              "extraTaskVariables": []
+            }
+          ],
+          "verifiedEqualitySteps": 2,
+          "falseEqualitySteps": 0,
+          "unsupportedEqualitySteps": 0,
+          "allWrittenEqualitiesCorrect": true,
+          "mathematicalProseCertified": false,
+          "extractionComplete": true,
+          "equalityStepsOutsideTaskVariables": 0,
+          "uninterpretedLines": [],
+          "formatStatus": "equality_chain",
+          "strictInterfaceCorrect": false,
+          "tokenCapReached": false,
+          "abstention": false,
+          "rawHash": "e836983bd06c1e1c430c1cc28fa23268dbd1842855086b94e423ba5d5505c036",
+          "mathematicalResultRepaired": false,
+          "unwrittenIntermediateEqualitiesInserted": false
+        }
+      },
+      "expectedFormulaProvidedToModel": false
+    },
+    "new_note": {
+      "recordId": "api-6f2c0cbd7bcb7907655ce035ce6e1d99e567ed9df6fd0f2fd39739447991706d",
+      "raw": "2 * (1 * (315 * z)) = 2 * (315 * z) = 630 * z",
+      "contentCorrect": true,
+      "audit": {
+        "correct": true,
+        "correctChangedExpression": true,
+        "unchangedQuestionCopy": false,
+        "finalEquivalent": true,
+        "falseSteps": 0,
+        "capped": false,
+        "formatComplete": true,
+        "fullAudit": {
+          "graderVersion": "lain-zip-answer-and-equality-audit-v23-number-safe",
+          "finalStatus": "verified",
+          "writtenFinalExpression": "630 * z",
+          "completed": true,
+          "finalContentEquivalent": true,
+          "correctFinalAnswer": true,
+          "correctSimplifiedAnswer": true,
+          "correctNontrivialRewrite": true,
+          "equivalentButUnsimplified": false,
+          "unchangedQuestionCopy": false,
+          "matchesStoredApplicationSurface": false,
+          "finalVerification": {
+            "status": "verified",
+            "accepted": true,
+            "reusable": true,
+            "reason": "Exact polynomial proof",
+            "ruleKey": "e0d4b4cab90a3330c325671664fe5311eb5cb2ce426811c1e8b0c44180acdd41",
+            "claimHash": "470f2c7e765053d09f226701d14c925600c6e35bbd6877080e691f7fa1f38af6",
+            "certificate": {
+              "kind": "exact-rational-polynomial-identity",
+              "quantifiers": {
+                "z": "independent real variable"
+              },
+              "scope": "real_polynomial",
+              "sourcePolynomial": [
+                {
+                  "powers": {
+                    "z": 1
+                  },
+                  "coefficient": "630"
+                }
+              ],
+              "targetPolynomial": [
+                {
+                  "powers": {
+                    "z": 1
+                  },
+                  "coefficient": "630"
+                }
+              ],
+              "residual": [],
+              "allInputsInScopeChecked": true,
+              "naturalLanguageProseCertified": false
+            }
+          },
+          "extraTaskVariables": [],
+          "conflictingFinalMarkers": false,
+          "derivationStatus": "verified",
+          "writtenEqualitySteps": [
+            {
+              "left": "2 * (1 * (315 * z))",
+              "right": "2 * (315 * z)",
+              "verification": {
+                "status": "verified",
+                "accepted": true,
+                "reusable": true,
+                "reason": "Exact polynomial proof",
+                "ruleKey": "f8dbd951624e99d6c6a9441a7359907c637ed8db84f7f963995e5340b210b46b",
+                "claimHash": "86b5a66fa564dffb7300f4f580f2106517e58ba02dd6b1a1f24df4c97c8f240e",
+                "certificate": {
+                  "kind": "exact-rational-polynomial-identity",
+                  "quantifiers": {
+                    "z": "independent real variable"
+                  },
+                  "scope": "real_polynomial",
+                  "sourcePolynomial": [
+                    {
+                      "powers": {
+                        "z": 1
+                      },
+                      "coefficient": "630"
+                    }
+                  ],
+                  "targetPolynomial": [
+                    {
+                      "powers": {
+                        "z": 1
+                      },
+                      "coefficient": "630"
+                    }
+                  ],
+                  "residual": [],
+                  "allInputsInScopeChecked": true,
+                  "naturalLanguageProseCertified": false
+                }
+              },
+              "sourceLine": null,
+              "extraTaskVariables": []
+            },
+            {
+              "left": "2 * (315 * z)",
+              "right": "630 * z",
+              "verification": {
+                "status": "verified",
+                "accepted": true,
+                "reusable": true,
+                "reason": "Exact polynomial proof",
+                "ruleKey": "e214a1fe27f374a5b75f7b8f6ae40f5b31040542ff75d4a1ea7b88505dde2e62",
+                "claimHash": "a40d98472f224f7d96db5f900d5c26dcb4eba2268d8067394fd8c66bbc8a7a0b",
+                "certificate": {
+                  "kind": "exact-rational-polynomial-identity",
+                  "quantifiers": {
+                    "z": "independent real variable"
+                  },
+                  "scope": "real_polynomial",
+                  "sourcePolynomial": [
+                    {
+                      "powers": {
+                        "z": 1
+                      },
+                      "coefficient": "630"
+                    }
+                  ],
+                  "targetPolynomial": [
+                    {
+                      "powers": {
+                        "z": 1
+                      },
+                      "coefficient": "630"
+                    }
+                  ],
+                  "residual": [],
+                  "allInputsInScopeChecked": true,
+                  "naturalLanguageProseCertified": false
+                }
+              },
+              "sourceLine": null,
+              "extraTaskVariables": []
+            }
+          ],
+          "verifiedEqualitySteps": 2,
+          "falseEqualitySteps": 0,
+          "unsupportedEqualitySteps": 0,
+          "allWrittenEqualitiesCorrect": true,
+          "mathematicalProseCertified": false,
+          "extractionComplete": true,
+          "equalityStepsOutsideTaskVariables": 0,
+          "uninterpretedLines": [],
+          "formatStatus": "equality_chain",
+          "strictInterfaceCorrect": false,
+          "tokenCapReached": false,
+          "abstention": false,
+          "rawHash": "e836983bd06c1e1c430c1cc28fa23268dbd1842855086b94e423ba5d5505c036",
+          "mathematicalResultRepaired": false,
+          "unwrittenIntermediateEqualitiesInserted": false
+        }
+      },
+      "expectedFormulaProvidedToModel": false
+    }
+  },
+  "actualAttemptedPOSTs": 7,
+  "savedResponses": 7,
+  "APIWeightUpdates": 0,
+  "runDirectory": "live-ff18fc2bdd4c",
+  "notAddedToFrozenReplication": true,
+  "hash": "d8ffbd1376e088d7162da39bf88ee77b3951602efa9690ea53629180d91eb625"
+}

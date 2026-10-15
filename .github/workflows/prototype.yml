@@ -1,0 +1,23 @@
+name: Prototype and Docker checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: make test audit
+      - run: make smoke
+      - name: Start Docker application and check HTTP
+        run: |
+          docker run -d --name lain-zip -p 127.0.0.1:7860:7860 lain-zip-apertus:local
+          trap 'docker logs lain-zip; docker rm -f lain-zip' EXIT
+          for i in $(seq 1 20); do
+            if curl --fail http://127.0.0.1:7860/api/evidence -o /tmp/evidence.json; then break; fi
+            sleep 1
+          done
+          python -c 'import json; x=json.load(open("/tmp/evidence.json")); assert x["mode"]=="RECORDED EVIDENCE - NOT LIVE INFERENCE"; assert x["row"]["replacementAccepted"]'

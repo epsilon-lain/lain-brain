@@ -1,0 +1,23 @@
+{
+  "card": {
+    "id": "source-rule-923cd9265308017d",
+    "family": "correct_identity",
+    "left": "1 * (315 * v)",
+    "right": "315 * v",
+    "variable": "v",
+    "provenance": {
+      "kind": "student_saved_zip",
+      "recordId": "reflection-call-9f74faa10886768258f47170",
+      "recordHash": "1cb3d34d8027070a6a7199ee00aece9199ee7d5d056e8a2be745a4b54be424c2",
+      "verbatimExcerpt": "1 * (315 * v) = 315 * v"
+    },
+    "knownExactIdentity": true,
+    "split": "source_readback"
+  },
+  "version": 0,
+  "status": "active_unverified",
+  "universalClaimWithdrawn": false,
+  "history": [],
+  "correctnessAutomaticallyCertified": false,
+  "hash": "a152b8e20bbf841f7528f0a57d227ce99c9709c6a72197cc282ab34b63a363ee"
+}

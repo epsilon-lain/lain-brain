@@ -1,0 +1,146 @@
+{
+  "card": {
+    "id": "source-rule-c9504c2bd4a1d05f",
+    "family": "drop_variable",
+    "left": "435 * v * v",
+    "right": "435^2",
+    "variable": "v",
+    "provenance": {
+      "kind": "student_saved_zip",
+      "recordId": "reflection-call-1d5aaf9a83ae2b19e40b616f",
+      "recordHash": "9798321a49f2c72c95df0cad672b5fc54abdc80b3e8e79fdba094634b68bee69",
+      "verbatimExcerpt": "435 * v * v = 435^2"
+    },
+    "knownExactIdentity": false,
+    "split": "source_readback"
+  },
+  "version": 3,
+  "status": "withdrawn_as_universal",
+  "universalClaimWithdrawn": true,
+  "history": [
+    {
+      "decisionId": "api-2ff099975620b183e2a3fd5f9d01423dc049661c3f447940487f39020627e87c",
+      "action": "RETRACT",
+      "studentSelectedAction": true,
+      "oracleSelectedAction": false
+    },
+    {
+      "type": "student_written_reflection",
+      "recordId": "api-2ff099975620b183e2a3fd5f9d01423dc049661c3f447940487f39020627e87c",
+      "sourceRecordHash": "190cb178ae805e23c73cdd5f2a5940ef216bf055d8ae06c207c435e115cc8956",
+      "originalTextRepaired": false
+    },
+    {
+      "type": "student_proposal",
+      "accepted": true,
+      "recordId": "api-3765c105ac4fa65f9d7a86db7d3cf90c8c47f9265262b083f8ea9079d04cac82-display"
+    }
+  ],
+  "correctnessAutomaticallyCertified": false,
+  "parentMemoryHash": "59c0a29fd228f5674bfa9b8926442b4d1b510ea57949c4f907b64933e9799959",
+  "studentWrittenText": "{\n  \"action\": \"RETRACT\",\n  \"reason\": \"The rule fails for v = 0: Left side is 0, Right side is positive (435^2 ≠ 0). A single counterexample disproves the universal claim.\"\n}",
+  "studentWrittenTextRecordId": "api-2ff099975620b183e2a3fd5f9d01423dc049661c3f447940487f39020627e87c",
+  "studentWrittenTextHash": "2834c72f085251f7bfb78d281fe1aa3d23662499bba8b5ab577d1681fca1f7be",
+  "studentWrittenTextSemanticallyCertified": false,
+  "proposal": {
+    "raw": "435 * v ** 2",
+    "recordId": "api-3765c105ac4fa65f9d7a86db7d3cf90c8c47f9265262b083f8ea9079d04cac82-display",
+    "recordHash": "e07d255587084681b505a2c991566113c466352db578ed87b8013558efd0e02b",
+    "audit": {
+      "audit": {
+        "correct": true,
+        "correctChangedExpression": true,
+        "unchangedQuestionCopy": false,
+        "finalEquivalent": true,
+        "falseSteps": 0,
+        "capped": false,
+        "formatComplete": true,
+        "fullAudit": {
+          "graderVersion": "lain-zip-answer-and-equality-audit-v23-number-safe",
+          "finalStatus": "verified",
+          "writtenFinalExpression": "435 * v ** 2",
+          "completed": true,
+          "finalContentEquivalent": true,
+          "correctFinalAnswer": true,
+          "correctSimplifiedAnswer": true,
+          "correctNontrivialRewrite": true,
+          "equivalentButUnsimplified": false,
+          "unchangedQuestionCopy": false,
+          "matchesStoredApplicationSurface": false,
+          "finalVerification": {
+            "status": "verified",
+            "accepted": true,
+            "reusable": true,
+            "reason": "Exact polynomial proof",
+            "ruleKey": "d18f70b50f57d00b3312a278ed9aca7bc2d8e04b20d47344fa11f83625e93fa8",
+            "claimHash": "f350b0622c1b5102b3010eaee50772e3d7af98f77a89a490d37c24a38ad484f3",
+            "certificate": {
+              "kind": "exact-rational-polynomial-identity",
+              "quantifiers": {
+                "v": "independent real variable"
+              },
+              "scope": "real_polynomial",
+              "sourcePolynomial": [
+                {
+                  "powers": {
+                    "v": 2
+                  },
+                  "coefficient": "435"
+                }
+              ],
+              "targetPolynomial": [
+                {
+                  "powers": {
+                    "v": 2
+                  },
+                  "coefficient": "435"
+                }
+              ],
+              "residual": [],
+              "allInputsInScopeChecked": true,
+              "naturalLanguageProseCertified": false
+            }
+          },
+          "extraTaskVariables": [],
+          "conflictingFinalMarkers": false,
+          "derivationStatus": "no_steps",
+          "writtenEqualitySteps": [],
+          "verifiedEqualitySteps": 0,
+          "falseEqualitySteps": 0,
+          "unsupportedEqualitySteps": 0,
+          "allWrittenEqualitiesCorrect": false,
+          "mathematicalProseCertified": false,
+          "extractionComplete": true,
+          "equalityStepsOutsideTaskVariables": 0,
+          "uninterpretedLines": [],
+          "formatStatus": "single_expression",
+          "strictInterfaceCorrect": true,
+          "tokenCapReached": false,
+          "abstention": false,
+          "rawHash": "057cd958e382135fbec6dc78bcb5f9a3e9581f740ee95b3da7fb159fb91d0c3b",
+          "mathematicalResultRepaired": false,
+          "unwrittenIntermediateEqualitiesInserted": false
+        }
+      },
+      "studentFinal": "435 * v ** 2",
+      "accepted": true,
+      "reward": 1.0,
+      "studentRecordId": "api-3765c105ac4fa65f9d7a86db7d3cf90c8c47f9265262b083f8ea9079d04cac82-display",
+      "studentRecordHash": "e07d255587084681b505a2c991566113c466352db578ed87b8013558efd0e02b",
+      "teacherReplacementSupplied": false,
+      "hostWroteReplacement": false,
+      "rawOriginalRepaired": false
+    }
+  },
+  "replacementStatus": "active_verified_student_proposal",
+  "replacement": {
+    "left": "435 * v * v",
+    "right": "435 * v ** 2",
+    "variable": "v",
+    "author": "student",
+    "sourceRecordId": "api-3765c105ac4fa65f9d7a86db7d3cf90c8c47f9265262b083f8ea9079d04cac82-display",
+    "sourceRecordHash": "e07d255587084681b505a2c991566113c466352db578ed87b8013558efd0e02b",
+    "externallyPolynomialChecked": true
+  },
+  "hash": "bff3edab58d84064f33d67ad406bde1830c5f40f7e136644065dd7a847c81749"
+}

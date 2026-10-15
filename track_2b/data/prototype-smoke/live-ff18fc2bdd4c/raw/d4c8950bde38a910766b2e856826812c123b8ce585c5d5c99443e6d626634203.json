@@ -1,0 +1,39 @@
+{
+  "recordId": "api-d4c8950bde38a910766b2e856826812c123b8ce585c5d5c99443e6d626634203",
+  "phase": "independent_editor",
+  "caseCardId": "source-rule-923cd9265308017d",
+  "request": {
+    "model": "swiss-ai/Apertus-v1.5-70B",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Simplify the original expression, combining coefficients and representing repeated identical factors as powers. Preserve its value for every real input. Return ONE expression using * and **, without prose or an equality chain; if unsure write SKIP."
+      },
+      {
+        "role": "user",
+        "content": "Write your own replacement from the ORIGINAL expression: 1 * (315 * v). No replacement formula is supplied."
+      }
+    ],
+    "max_tokens": 1024,
+    "temperature": 0
+  },
+  "responseModel": "swiss-ai/Apertus-v1.5-70B",
+  "usage": {
+    "prompt_tokens": 93,
+    "total_tokens": 99,
+    "completion_tokens": 6,
+    "prompt_tokens_details": {
+      "cached_tokens": 64,
+      "multimodal_tokens": null
+    }
+  },
+  "systemFingerprint": "vllm-0.23.1rc1.dev1029+ga601a9d99-tp4-1381023c",
+  "providerResponseId": "chatcmpl-ffb26609-4bb1-45bd-b916-c611d463119b",
+  "fixtureOnly": false,
+  "expectedActionSuppliedToModel": false,
+  "studentOutput": {
+    "raw": "315 * v",
+    "tokenCapReached": false
+  },
+  "hash": "0891c66b04fa3c516664f7ad8ee761783fff23a38e8d13c48666c9abc08f701c"
+}

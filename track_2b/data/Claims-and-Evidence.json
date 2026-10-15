@@ -1,0 +1,49 @@
+{
+  "scope": "Pilot engineering and evaluation, not broad autonomous learning",
+  "claims": [
+    {
+      "claim": "3/4 strict closed loops; 4/4 withdrawals and replacements; 0/2 mistaken withdrawals",
+      "archive": "Lain-Zip-Frozen-Replication-Review-20261014.zip",
+      "entry": "summary.json",
+      "caveat": "5 rule units, 6 episodes; inherited/designed errors; one previously explored rule"
+    },
+    {
+      "claim": "Content correct counts 12/12 no-note, 10/12 old-note, 12/12 revised-note",
+      "archive": "Lain-Zip-Frozen-Replication-Review-20261014.zip",
+      "entry": "summary.json",
+      "caveat": "Two errors repeat one task; no content gain over no-memory baseline"
+    },
+    {
+      "claim": "128 controller updates; all held-out actions RETRACT; 0/8 correct and 8/8 SKIP",
+      "archive": "Lain-Zip-Memory-Learning-Final-Review-20261014.zip",
+      "entry": "primary/summary.json",
+      "caveat": "External controller only; no LLM weight training; cached action outcomes; one seed"
+    },
+    {
+      "claim": "Feedback-note exploration 0/6 versus 1/6 original formula-note comparison",
+      "archive": "Lain-Zip-Memory-Learning-Final-Review-20261014.zip",
+      "entry": "exploratory/result.json",
+      "caveat": "Exploratory prompt conditioning; unequal note length and extra calls; no parameter update"
+    }
+  ],
+  "archiveSHA256": {
+    "Lain-Zip-CSCS-Apertus-Review-20261014.zip": "c0f57af247b60c3d068a37727c6e46c6fd7022260b01dff337a7244991b4fc82",
+    "Lain-Zip-Frozen-Replication-Review-20261014.zip": "1909c23ff314a9365cc0764e5135d56e0c822bf9b07d38242160a8c980e4151d",
+    "Lain-Zip-Memory-Learning-Final-Review-20261014.zip": "07f4de2943838025bfbb4c65b7bb3b4f78fe4563434e504240a043575e3dbee0"
+  },
+  "referenceSourcesChecked": [
+    "https://hackapertus.devpost.com/",
+    "https://hackapertus.devpost.com/rules",
+    "https://docs.cscs.ch/services/inference/api/",
+    "https://arxiv.org/abs/2303.11366",
+    "https://arxiv.org/abs/2508.19828",
+    "https://arxiv.org/abs/2409.12917",
+    "https://github.com/HackApertus/project-template/blob/main/README.md",
+    "https://github.com/HackApertus/project-template/blob/main/track_2b/README.md"
+  ],
+  "officialFormFieldsAndVideoRequirementsVerified": true,
+  "newDossierPublished": false,
+  "videoRecorded": false,
+  "officialRepositoryRequirementsChecked": true,
+  "templateCompliantDockerRepositoryReady": false
+}

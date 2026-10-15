@@ -1,0 +1,80 @@
+{
+  "offlineUnitTestsPassed": 11,
+  "originalEvidenceAudit": "PASS: 245 responses, 576 sealed JSON records",
+  "pythonHTTPSmoke": "PASS: archive endpoint, UI, config status, private key absent from browser response",
+  "newLiveAPIRuns": {
+    "separatePrototypeSmokeNotFrozenReplication": true,
+    "actualResponses": 14,
+    "rows": [
+      {
+        "caseId": "prototype-435",
+        "sourceResultHash": "232825ade2aab4c055e3c1ea564af4a8c5ec86eebf0993500d6b8c19d7171d1c",
+        "action": "RETRACT",
+        "groundedConflict": true,
+        "replacementAccepted": true,
+        "falseWithdrawalOnCorrectOriginal": false,
+        "actualResponses": 7,
+        "APIModelWeightUpdates": 0,
+        "followup": {
+          "no_note": {
+            "finalExpressionCorrect": true,
+            "fullOutputAccepted": false,
+            "falseEqualitySteps": 0
+          },
+          "old_note": {
+            "finalExpressionCorrect": false,
+            "fullOutputAccepted": false,
+            "falseEqualitySteps": 1
+          },
+          "new_note": {
+            "finalExpressionCorrect": true,
+            "fullOutputAccepted": true,
+            "falseEqualitySteps": 0
+          }
+        }
+      },
+      {
+        "caseId": "prototype-correct-315",
+        "sourceResultHash": "d8ffbd1376e088d7162da39bf88ee77b3951602efa9690ea53629180d91eb625",
+        "action": "RETRACT",
+        "groundedConflict": false,
+        "replacementAccepted": true,
+        "falseWithdrawalOnCorrectOriginal": true,
+        "actualResponses": 7,
+        "APIModelWeightUpdates": 0,
+        "followup": {
+          "no_note": {
+            "finalExpressionCorrect": true,
+            "fullOutputAccepted": false,
+            "falseEqualitySteps": 0
+          },
+          "old_note": {
+            "finalExpressionCorrect": true,
+            "fullOutputAccepted": true,
+            "falseEqualitySteps": 0
+          },
+          "new_note": {
+            "finalExpressionCorrect": true,
+            "fullOutputAccepted": true,
+            "falseEqualitySteps": 0
+          }
+        }
+      }
+    ],
+    "falseWithdrawalOnCorrectControl": 1,
+    "scoringDisplayCorrection": "Original smoke contentCorrect field used full-output acceptance. This separate analysis reports final-expression correctness separately; original sealed results and all raw outputs are unchanged. Runtime labels were corrected without re-running or altering the records."
+  },
+  "DockerBinaryAvailableLocally": false,
+  "DockerExecutionPassed": false,
+  "GitHubDockerCI": "Not yet executed",
+  "studentWeightsAvailableHere": true,
+  "publication": {
+    "repository": "epsilon-lain/lain-brain",
+    "branch": "codex/hack-apertus-model-training-20261015",
+    "defaultBranchChanged": false
+  },
+  "prototypeEvidenceAudit": "PASS: 14 separate responses, 26 sealed records; false withdrawal retained",
+  "studentAdapterFilesAvailableHere": 7,
+  "reportPages": 6,
+  "baseModelInferenceReproducedHere": false
+}

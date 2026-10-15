@@ -1,0 +1,39 @@
+{
+  "recordId": "api-2a0f4e8b283ef0ed86fced40217a5eb7dda7aae9c141653a677dd01419fda95a",
+  "phase": "follow_old_note",
+  "caseCardId": "source-rule-923cd9265308017d",
+  "request": {
+    "model": "swiss-ai/Apertus-v1.5-70B",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Simplify the requested expression. Expand products over sums, combine coefficients and represent repeated factors as powers. A saved note is a candidate, not a guaranteed theorem. Return ONE expression with * and **; if unsure write SKIP."
+      },
+      {
+        "role": "user",
+        "content": "Retrieved saved ZIP (same variable binding):\n1 * (315 * z) = 315 * z\nExpression to collect: 2 * (1 * (315 * z)). All named variables are independent real numbers."
+      }
+    ],
+    "max_tokens": 1024,
+    "temperature": 0
+  },
+  "responseModel": "swiss-ai/Apertus-v1.5-70B",
+  "usage": {
+    "prompt_tokens": 118,
+    "total_tokens": 149,
+    "completion_tokens": 31,
+    "prompt_tokens_details": {
+      "cached_tokens": 64,
+      "multimodal_tokens": null
+    }
+  },
+  "systemFingerprint": "vllm-0.23.1rc1.dev1029+ga601a9d99-tp4-1381023c",
+  "providerResponseId": "chatcmpl-dc13b1d1-ff98-478a-ae06-bb8b16aef821",
+  "fixtureOnly": false,
+  "expectedActionSuppliedToModel": false,
+  "studentOutput": {
+    "raw": "2 * (1 * (315 * z)) = 2 * (315 * z) = 630 * z",
+    "tokenCapReached": false
+  },
+  "hash": "019e1a3f35cec4e47e7096d30057090e02df38518050df27fc80a461fa590531"
+}

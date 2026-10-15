@@ -1,0 +1,41 @@
+{
+  "card": {
+    "id": "source-rule-923cd9265308017d",
+    "family": "correct_identity",
+    "left": "1 * (315 * v)",
+    "right": "315 * v",
+    "variable": "v",
+    "provenance": {
+      "kind": "student_saved_zip",
+      "recordId": "reflection-call-9f74faa10886768258f47170",
+      "recordHash": "1cb3d34d8027070a6a7199ee00aece9199ee7d5d056e8a2be745a4b54be424c2",
+      "verbatimExcerpt": "1 * (315 * v) = 315 * v"
+    },
+    "knownExactIdentity": true,
+    "split": "source_readback"
+  },
+  "version": 2,
+  "status": "withdrawn_as_universal",
+  "universalClaimWithdrawn": true,
+  "history": [
+    {
+      "decisionId": "api-382be91c1e6caea4d9faf068bc71b235b225ea182f3e9506807bbc1fe2894859",
+      "action": "RETRACT",
+      "studentSelectedAction": true,
+      "oracleSelectedAction": false
+    },
+    {
+      "type": "student_written_reflection",
+      "recordId": "api-382be91c1e6caea4d9faf068bc71b235b225ea182f3e9506807bbc1fe2894859",
+      "sourceRecordHash": "ac626875909d5d14ec05d9f9f5436e5c609846d8d525daa5301d74725582e184",
+      "originalTextRepaired": false
+    }
+  ],
+  "correctnessAutomaticallyCertified": false,
+  "parentMemoryHash": "1ffe76519822148d46188d935efc6e0d5e738a9c44c3789fc597d20c1503dfaf",
+  "studentWrittenText": "{\n  \"action\": \"RETRACT\",\n  \"reason\": \"Verification at a single input (0) does not confirm an identity for all real numbers v. Further testing with different values of v is required to validate the rule.\"\n}",
+  "studentWrittenTextRecordId": "api-382be91c1e6caea4d9faf068bc71b235b225ea182f3e9506807bbc1fe2894859",
+  "studentWrittenTextHash": "0239ea1396fd1ac521c1a7476eca890c3b2a46d4d58f1bac9d19cbc9572d8f59",
+  "studentWrittenTextSemanticallyCertified": false,
+  "hash": "a9a288512f39ecff95fc018df99ddda009a4e754ebe365558a7d8f9af93bf239"
+}

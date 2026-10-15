@@ -1,0 +1,41 @@
+{
+  "card": {
+    "id": "source-rule-c9504c2bd4a1d05f",
+    "family": "drop_variable",
+    "left": "435 * v * v",
+    "right": "435^2",
+    "variable": "v",
+    "provenance": {
+      "kind": "student_saved_zip",
+      "recordId": "reflection-call-1d5aaf9a83ae2b19e40b616f",
+      "recordHash": "9798321a49f2c72c95df0cad672b5fc54abdc80b3e8e79fdba094634b68bee69",
+      "verbatimExcerpt": "435 * v * v = 435^2"
+    },
+    "knownExactIdentity": false,
+    "split": "source_readback"
+  },
+  "version": 2,
+  "status": "withdrawn_as_universal",
+  "universalClaimWithdrawn": true,
+  "history": [
+    {
+      "decisionId": "api-2ff099975620b183e2a3fd5f9d01423dc049661c3f447940487f39020627e87c",
+      "action": "RETRACT",
+      "studentSelectedAction": true,
+      "oracleSelectedAction": false
+    },
+    {
+      "type": "student_written_reflection",
+      "recordId": "api-2ff099975620b183e2a3fd5f9d01423dc049661c3f447940487f39020627e87c",
+      "sourceRecordHash": "190cb178ae805e23c73cdd5f2a5940ef216bf055d8ae06c207c435e115cc8956",
+      "originalTextRepaired": false
+    }
+  ],
+  "correctnessAutomaticallyCertified": false,
+  "parentMemoryHash": "4330dcf8428b5de2afd991a8f2fc8d7ac3359b537e3307ae8ffc42baa472bd34",
+  "studentWrittenText": "{\n  \"action\": \"RETRACT\",\n  \"reason\": \"The rule fails for v = 0: Left side is 0, Right side is positive (435^2 ≠ 0). A single counterexample disproves the universal claim.\"\n}",
+  "studentWrittenTextRecordId": "api-2ff099975620b183e2a3fd5f9d01423dc049661c3f447940487f39020627e87c",
+  "studentWrittenTextHash": "2834c72f085251f7bfb78d281fe1aa3d23662499bba8b5ab577d1681fca1f7be",
+  "studentWrittenTextSemanticallyCertified": false,
+  "hash": "59c0a29fd228f5674bfa9b8926442b4d1b510ea57949c4f907b64933e9799959"
+}

@@ -56,7 +56,7 @@ Frozen 70B replication: five rule units, six episodes; 4/4 wrong-rule withdrawal
 
 ## Validation status
 
-See `docs/Validation.json` for the exact local/CI status. Docker is not installed in the authoring environment. A Dockerfile and GitHub Actions smoke workflow are included; an actual hosted container result must be checked before claiming Docker validation passed. Python HTTP and live API execution are tested separately.
+The [GitHub Actions Docker check passed](https://github.com/epsilon-lain/lain-brain/actions/runs/38736814313): 11 tests, both evidence audits, container build, in-container audit and HTTP request to the running container. See `docs/Validation.json`. Base-model inference for the released local adapters was not rerun here.
 
 ## Publication
 

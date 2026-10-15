@@ -65,8 +65,21 @@
     "scoringDisplayCorrection": "Original smoke contentCorrect field used full-output acceptance. This separate analysis reports final-expression correctness separately; original sealed results and all raw outputs are unchanged. Runtime labels were corrected without re-running or altering the records."
   },
   "DockerBinaryAvailableLocally": false,
-  "DockerExecutionPassed": false,
-  "GitHubDockerCI": "Not yet executed",
+  "DockerExecutionPassed": true,
+  "GitHubDockerCI": {
+    "conclusion": "success",
+    "runId": 38736814313,
+    "commit": "b2e5dd3d04f39006820ba19b212b03a41a775a51",
+    "url": "https://github.com/epsilon-lain/lain-brain/actions/runs/38736814313",
+    "checks": [
+      "offline tests",
+      "245-response archive audit",
+      "14-response prototype audit",
+      "Docker image build",
+      "in-container evidence audit",
+      "HTTP endpoint on running container"
+    ]
+  },
   "studentWeightsAvailableHere": true,
   "publication": {
     "repository": "epsilon-lain/lain-brain",
@@ -76,5 +89,12 @@
   "prototypeEvidenceAudit": "PASS: 14 separate responses, 26 sealed records; false withdrawal retained",
   "studentAdapterFilesAvailableHere": 7,
   "reportPages": 6,
-  "baseModelInferenceReproducedHere": false
+  "baseModelInferenceReproducedHere": false,
+  "video": {
+    "durationSeconds": 114.021333,
+    "videoCodec": "h264",
+    "audioCodec": "aac",
+    "syntheticEnglishNarration": true,
+    "recordedEvidenceNotLive": true
+  }
 }

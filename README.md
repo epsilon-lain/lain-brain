@@ -730,3 +730,7 @@ Do not track:
 ## License
 
 Lain Brain is available under the [MIT License](LICENSE).
+
+## Hack Apertus 2026: model and training companion
+
+The public training implementation, local Apertus adapter model card, historical results and small checkpoint export instructions are in [experiments/zip/hack-apertus-2026](experiments/zip/hack-apertus-2026/README.md). This branch publishes source and methods first; actual custom checkpoint bytes are pending transfer from the original training Notebook. The API prototype uses frozen Apertus v1.5 8B/70B; the local custom adapters use Apertus v1.1 0.5B Instruct.

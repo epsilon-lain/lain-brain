@@ -1,0 +1,25 @@
+{
+  "date": "2026-10-15",
+  "originalTrainingFixtureChecks": {
+    "command": "cd training && python cf_checks.py",
+    "testsRun": 62,
+    "passed": 51,
+    "skipped": 11,
+    "failed": 0,
+    "skipReason": "Torch is unavailable in the publication environment; real tiny-model gradient checks require the original environment"
+  },
+  "syntaxCompilationPassed": true,
+  "loaderHelpPassed": true,
+  "exporterHelpPassed": true,
+  "actualBaseModelLoadedHere": false,
+  "actualCheckpointBytesAvailableHere": false,
+  "studentGenerationsDuringPublication": 0,
+  "trainingUpdatesDuringPublication": 0,
+  "hostedCIClaimed": false,
+  "checkpointPublicationStatus": "pending original Notebook export",
+  "exporterFixtureChecks": {
+    "passed": true,
+    "scope": "missing checkpoints; fixture safetensors headers; archive manifest and byte hashes; outside-root symlink; atomic output cleanup",
+    "actualStudentWeightsTested": false
+  }
+}

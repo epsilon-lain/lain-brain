@@ -1,0 +1,39 @@
+{
+  "status": "awaiting actual checkpoint bytes from original Notebook",
+  "baseModel": "swiss-ai/Apertus-v1.1-0.5B-Instruct",
+  "baseModelParameters": 438349352,
+  "adapterImplementation": "training/math_writer_adapter.py",
+  "rank": 8,
+  "alpha": 16,
+  "lastAttentionLayers": 4,
+  "projections": [
+    "q_proj",
+    "v_proj"
+  ],
+  "standardPEFTConversionPerformed": false,
+  "baseWeightsBundled": false,
+  "expectedOriginalBytesPerAdapter": 427440,
+  "checkpoints": [
+    {
+      "name": "mathematical-writer-v15",
+      "source": "zip-math-long-362b296b/committed/step-0192/writer.safetensors",
+      "reportedChangingUpdates": 192
+    },
+    {
+      "name": "scale-writer",
+      "source": "zip-scale-curve-309e8004/reward-on-scale-writer-final.safetensors",
+      "reportedChangingUpdates": 377
+    },
+    {
+      "name": "conditional-meta-v24",
+      "source": "zip-conditional-final-a1afc8a6/committed/step-0128/meta.safetensors",
+      "reportedChangingUpdates": 96
+    },
+    {
+      "name": "conditional-editor-v24",
+      "source": "zip-conditional-final-a1afc8a6/committed/step-0128/editor.safetensors",
+      "reportedChangingUpdates": 0,
+      "note": "Unchanged initial editor: zero eligible editor training episodes; not a trained repair model."
+    }
+  ]
+}

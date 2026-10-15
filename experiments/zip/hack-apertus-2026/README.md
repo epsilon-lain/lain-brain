@@ -44,7 +44,9 @@ The second command can resume/start the historical course. Use `--help` first to
 
 ## Transfer the small trained checkpoints
 
-In the original training Notebook, run the contents of `export_model_bundle.py`, or save the file and execute:
+If GitHub downloads are reset by the Notebook network, paste the entire [offline export cell](export_model_bundle_offline.py) directly into a Notebook cell. It needs no network connection.
+
+Otherwise, in the original training Notebook, run the contents of `export_model_bundle.py`, or save the file and execute:
 
 ```python
 %run export_model_bundle.py

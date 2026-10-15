@@ -71,6 +71,6 @@ Two new API runs generated 14 actual responses. The 435 case withdrew and admitt
 ## Report and video
 
 - [Six-page technical report](LainBrain_Report.pdf) and [Markdown source](technical_report.md).
-- [114-second narrated evidence walkthrough](docs/video/Lain-ZIP-Demo.mp4), [captions](docs/video/Lain-ZIP-Demo.srt), and [script](docs/video/SCRIPT.md). The English voice is synthetic; all displayed mathematical outputs come from recorded evidence.
+- [106-second narrated evidence walkthrough](docs/video/Lain-ZIP-Demo.mp4), [captions](docs/video/Lain-ZIP-Demo.srt), and [script](docs/video/SCRIPT.md). The English voice is synthetic; all displayed mathematical outputs come from recorded evidence.
 
 Local training: four eight-object selector batches favor the trained selector. A 192-update writer has a positive periodic route-mass aggregate but only +0.67 percentage points on four final managed-route objects. Six consecutive summary courses have mixed effects (+0.75 pp descriptive mean). These are limited pilot metrics, not a general learning claim; see the report for denominators and controls.

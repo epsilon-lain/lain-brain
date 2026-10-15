@@ -1,0 +1,54 @@
+{
+  "voice": "en-US-JennyNeural",
+  "voiceProvider": "Microsoft Edge online neural TTS via edge-tts",
+  "rate": "-8%",
+  "syntheticNarration": true,
+  "recordedEvidenceNotLive": true,
+  "actualPrototypeViews": 3,
+  "burnedInSentenceSubtitles": true,
+  "normalizationTargetLUFS": -16,
+  "truePeakTargetDBTP": -1.5,
+  "durationSeconds": 105.861333,
+  "scenes": [
+    {
+      "scene": 0,
+      "voiceSeconds": 11.208,
+      "sceneSeconds": 12.008
+    },
+    {
+      "scene": 1,
+      "voiceSeconds": 11.328,
+      "sceneSeconds": 12.128
+    },
+    {
+      "scene": 2,
+      "voiceSeconds": 11.784,
+      "sceneSeconds": 12.584
+    },
+    {
+      "scene": 3,
+      "voiceSeconds": 11.184,
+      "sceneSeconds": 11.984
+    },
+    {
+      "scene": 4,
+      "voiceSeconds": 13.752,
+      "sceneSeconds": 14.552
+    },
+    {
+      "scene": 5,
+      "voiceSeconds": 13.848,
+      "sceneSeconds": 14.648
+    },
+    {
+      "scene": 6,
+      "voiceSeconds": 12.72,
+      "sceneSeconds": 13.52
+    },
+    {
+      "scene": 7,
+      "voiceSeconds": 13.56,
+      "sceneSeconds": 14.36
+    }
+  ]
+}

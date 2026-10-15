@@ -2,7 +2,7 @@
 
 **Review branch:** `codex/hack-apertus-model-training-20261015` / **Track 2B** / **epsilon-lain**.
 
-A research prototype for checkable, revisable Apertus memory. [Run the prototype](track_2b/README-project.md), read the [six-page report](track_2b/LainBrain_Report.pdf), watch the [114-second demo](track_2b/docs/video/Lain-ZIP-Demo.mp4), or inspect the [seven adapters and training source](experiments/zip/hack-apertus-2026/).
+A research prototype for checkable, revisable Apertus memory. [Run the prototype](track_2b/README-project.md), read the [six-page report](track_2b/LainBrain_Report.pdf), watch the [106-second demo](track_2b/docs/video/Lain-ZIP-Demo.mp4), or inspect the [seven adapters and training source](experiments/zip/hack-apertus-2026/).
 
 ```bash
 make run        # Docker, localhost:7860; archive mode needs no key

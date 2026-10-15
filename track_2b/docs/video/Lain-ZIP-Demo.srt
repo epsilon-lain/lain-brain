@@ -1,31 +1,86 @@
 1
-00:00:00,000 --> 00:00:13,000
-This is Lain ZIP, a research prototype using Apertus. It asks a practical question: when an agent remembers an error, can it check and revise that memory?
+00:00:00,100 --> 00:00:04,520
+This is Lain Zip, a research prototype using Apertus.
 
 2
-00:00:13,000 --> 00:00:27,000
-Here is an actual archived error. At the fixed input v equals zero, separate Apertus calls identify zero on the left and a positive value on the right.
+00:00:04,470 --> 00:00:11,155
+It asks a practical question: when an agent remembers an error, can it check and revise
+that memory?
 
 3
-00:00:27,000 --> 00:00:40,000
-The model retracts the note and writes a replacement. An exact polynomial auditor checks the expression. We preserve the original and save the checked revision.
+00:00:12,108 --> 00:00:15,006
+Here is an actual archived error.
 
 4
-00:00:40,000 --> 00:00:55,000
-On the later task, the old note leads to a wrong answer. The revised note restores the correct answer. The no note baseline was already correct.
+00:00:14,956 --> 00:00:23,272
+At the fixed input v equals zero, separate Apertus calls identify zero on the left and a
+positive value on the right.
 
 5
-00:00:55,000 --> 00:01:11,000
-The frozen pilot completes three of four strict repair workflows. This is a narrow result. Two repaired errors repeat one task, and a newer test also shows a false withdrawal.
+00:00:24,236 --> 00:00:27,977
+The model retracts the note and writes a replacement.
 
 6
-00:01:11,000 --> 00:01:27,000
-Separate local training changes a small adapter. Periodic route success mass improves, but the final checkpoint advantage is small. These probabilities are not measured answer accuracy.
+00:00:27,927 --> 00:00:31,976
+An exact polynomial auditor checks the expression.
 
 7
-00:01:27,000 --> 00:01:42,000
-Four selector batches favor training, while written summaries have mixed effects. A separate controller learns only withdrawal. We report that failure alongside the progress.
+00:00:31,976 --> 00:00:35,848
+We preserve the original and save the checked revision.
 
 8
-00:01:42,000 --> 00:01:54,000
-The public submission includes a runnable prototype, raw evidence, training source and seven adapters. Inspect the records, reproduce the checks, and help test useful memory revision.
+00:00:36,820 --> 00:00:41,159
+On the later task, the old note leads to a wrong answer.
+
+9
+00:00:41,109 --> 00:00:44,519
+The revised note restores the correct answer.
+
+10
+00:00:44,519 --> 00:00:47,834
+The no note baseline was already correct.
+
+11
+00:00:48,804 --> 00:00:53,781
+The frozen pilot completes three of four strict repair workflows.
+
+12
+00:00:53,731 --> 00:00:56,122
+This is a narrow result.
+
+13
+00:00:56,122 --> 00:01:02,400
+Two repaired errors repeat one task, and a newer test also shows a false withdrawal.
+
+14
+00:01:03,356 --> 00:01:07,138
+Separate local training changes a small adapter.
+
+15
+00:01:07,088 --> 00:01:13,039
+Periodic route success mass improves, but the final checkpoint advantage is small.
+
+16
+00:01:13,039 --> 00:01:17,033
+These probabilities are not measured answer accuracy.
+
+17
+00:01:18,004 --> 00:01:23,538
+Four selector batches favor training, while written summaries have mixed effects.
+
+18
+00:01:23,488 --> 00:01:26,885
+A separate controller learns only withdrawal.
+
+19
+00:01:26,885 --> 00:01:30,567
+We report that failure alongside the progress.
+
+20
+00:01:31,524 --> 00:01:38,960
+The public submission includes a runnable prototype, raw evidence, training source and
+seven adapters.
+
+21
+00:01:38,910 --> 00:01:44,929
+Inspect the records, reproduce the checks, and help test useful memory revision.

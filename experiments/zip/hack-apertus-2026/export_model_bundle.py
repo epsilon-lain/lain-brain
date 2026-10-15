@@ -83,7 +83,11 @@ def source_checkpoint_references(value, root):
         path = Path(value)
         path = path if path.is_absolute() else root / path
         if path.is_file():
-            yield inside(root, path)
+            path = inside(root, path)
+            relative = path.relative_to(root)
+            if relative.parts[0] == 'models' or path.stat().st_size > 2 * 1024 * 1024:
+                return  # Base model references are metadata, not adapter export requests.
+            yield path
 
 
 def export(root, output):
@@ -94,6 +98,12 @@ def export(root, output):
     if missing:
         raise ValueError('Required original checkpoints are missing; no replacement generated:\n' + '\n'.join(missing))
     files = {inside(root, root / name) for name in SELECTED}
+    for name in [
+        'zip-contradiction-626f2c24/committed/step-0032/repair.safetensors',
+        'zip-reflection-reward-e1828281/committed/step-0064/reflection.safetensors',
+    ]:
+        if (root / name).is_file():
+            files.add(inside(root, root / name))
     metadata = {}
     for run in RUNS:
         for name in METADATA:
